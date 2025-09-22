@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -107,11 +107,6 @@ extern "C" {
 /* Evros */
 #ifndef TARGET_TYPE_WCN6450
 #define TARGET_TYPE_WCN6450 38
-#endif
-
-/* Pebble */
-#ifndef TARGET_TYPE_QCN6432
-#define TARGET_TYPE_QCN6432   39
 #endif
 
 #ifdef __cplusplus

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -45,8 +45,6 @@
 #define TWT_SETUP_WAKE_DURATION_MAX             0xFFFF
 #define TWT_SETUP_WAKE_INTVL_EXP_MAX            31
 #define TWT_MAX_NEXT_TWT_SIZE                   3
-#define TWT_DEL_DIALOG_REQ_MAX_RETRY            10
-#define TWT_TEARDOWN_IN_PS_DISABLE_WAIT_TIME    500
 
 static const struct nla_policy
 qca_wlan_vendor_twt_add_dialog_policy[QCA_WLAN_VENDOR_ATTR_TWT_SETUP_MAX + 1] = {
@@ -88,7 +86,6 @@ qca_wlan_vendor_twt_nudge_dialog_policy[QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_MAX + 1] 
 	[QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_WAKE_TIME] = {.type = NLA_U32 },
 	[QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_NEXT_TWT_SIZE] = {.type = NLA_U32 },
 	[QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_MAC_ADDR] = VENDOR_NLA_POLICY_MAC_ADDR,
-	[QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_SP_START_OFFSET] = {.type = NLA_S32},
 };
 
 static const struct nla_policy
@@ -462,18 +459,6 @@ osif_twt_ack_wait_response(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
-static void
-osif_send_twt_delete_cmd(struct wlan_objmgr_vdev *vdev,
-			 struct qdf_mac_addr *peer_mac, uint8_t dialog_id,
-			 bool is_ps_disabled)
-{
-	uint32_t twt_next_action = HOST_TWT_SEND_DELETE_CMD;
-
-	ucfg_twt_set_work_params(vdev, peer_mac, dialog_id, is_ps_disabled,
-				 twt_next_action);
-	qdf_sched_work(0, &vdev->twt_work);
-}
-
 static int
 osif_send_twt_setup_req(struct wlan_objmgr_vdev *vdev,
 			struct wlan_objmgr_psoc *psoc,
@@ -523,22 +508,8 @@ osif_send_twt_setup_req(struct wlan_objmgr_vdev *vdev,
 	if (ack_priv->status) {
 		osif_err("Received TWT ack error: %d. Reset twt command",
 			 ack_priv->status);
-
-		if (ucfg_twt_is_setup_done(psoc,
-					   &twt_params->peer_macaddr,
-					   twt_params->dialog_id)) {
-			/* If TWT setup is already done then this is
-			 * renegotiation failure scenario.
-			 * Terminate TWT session on renegotiation failure.
-			 */
-			osif_debug("setup_done set, renego failure");
-			osif_send_twt_delete_cmd(vdev,
-						 &twt_params->peer_macaddr,
-						 twt_params->dialog_id, false);
-		} else {
-			ucfg_twt_init_context(psoc, &twt_params->peer_macaddr,
-					      twt_params->dialog_id);
-		}
+		ucfg_twt_init_context(psoc, &twt_params->peer_macaddr,
+				      twt_params->dialog_id);
 
 		switch (ack_priv->status) {
 		case HOST_ADD_TWT_STATUS_INVALID_PARAM:
@@ -549,8 +520,6 @@ osif_send_twt_setup_req(struct wlan_objmgr_vdev *vdev,
 		case HOST_ADD_TWT_STATUS_ROAM_IN_PROGRESS:
 		case HOST_ADD_TWT_STATUS_CHAN_SW_IN_PROGRESS:
 		case HOST_ADD_TWT_STATUS_SCAN_IN_PROGRESS:
-		case HOST_ADD_TWT_STATUS_LINK_SWITCH_IN_PROGRESS:
-		case HOST_ADD_TWT_STATUS_UNSUPPORTED_MODE_MLMR:
 			ret = -EBUSY;
 			break;
 		case HOST_ADD_TWT_STATUS_TWT_NOT_ENABLED:
@@ -962,12 +931,9 @@ void osif_twt_teardown_in_ps_disable(struct wlan_objmgr_psoc *psoc,
 		osif_debug("vdev%d: Terminate existing TWT session %d due to ps disable",
 			  params.vdev_id, params.dialog_id);
 		ret = osif_send_sta_twt_teardown_req(vdev, psoc, &params);
-		if (ret) {
+		if (ret)
 			osif_debug("TWT teardown is failed on vdev: %d",
 				   vdev_id);
-			osif_send_twt_delete_cmd(vdev, mac_addr,
-						 params.dialog_id, true);
-		}
 	}
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_TWT_ID);
 }
@@ -990,7 +956,7 @@ int osif_twt_get_capabilities(struct wlan_objmgr_vdev *vdev)
 
 	if (!wlan_cm_is_vdev_connected(vdev)) {
 		osif_err_rl("Not associated!, vdev %d mode %d", vdev_id, mode);
-		return -EAGAIN;
+		return -EOPNOTSUPP;
 	}
 
 	if (wlan_cm_host_roam_in_progress(psoc, vdev_id))
@@ -1090,7 +1056,8 @@ int osif_twt_setup_req(struct wlan_objmgr_vdev *vdev,
 
 /**
  * osif_twt_handle_renego_failure() - Upon re-nego failure send TWT teardown
- * @psoc: Pointer to psoc object
+ *
+ * @adapter: Adapter pointer
  * @event: Pointer to Add dialog complete event structure
  *
  * Upon re-negotiation failure, this function constructs TWT teardown
@@ -1106,6 +1073,7 @@ osif_twt_handle_renego_failure(struct wlan_objmgr_psoc *psoc,
 	struct wlan_objmgr_pdev *pdev;
 	struct wlan_objmgr_vdev *vdev;
 	uint32_t vdev_id;
+	uint32_t twt_next_action = 0;
 
 	if (!event)
 		return;
@@ -1131,8 +1099,9 @@ osif_twt_handle_renego_failure(struct wlan_objmgr_psoc *psoc,
 		goto end;
 	}
 
-	osif_send_twt_delete_cmd(vdev, &event->params.peer_macaddr,
-				 event->params.dialog_id, false);
+	twt_next_action = HOST_TWT_SEND_DELETE_CMD;
+	ucfg_twt_set_work_params(vdev, &event->params, twt_next_action);
+	qdf_sched_work(0, &vdev->twt_work);
 
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_TWT_ID);
 
@@ -1305,17 +1274,9 @@ osif_twt_concurrency_update_on_mcc(struct wlan_objmgr_pdev *pdev,
 	QDF_STATUS status;
 	uint8_t pdev_id = wlan_objmgr_pdev_get_pdev_id(pdev);
 	uint32_t reason;
-	uint8_t vdev_id;
-	struct wlan_objmgr_psoc *psoc;
-
-	vdev_id = wlan_vdev_get_id(vdev);
-	psoc = wlan_pdev_get_psoc(pdev);
 
 	if (vdev->vdev_mlme.vdev_opmode == QDF_SAP_MODE &&
 	    vdev->vdev_mlme.mlme_state == WLAN_VDEV_S_UP) {
-		if (policy_mgr_is_vdev_ll_lt_sap(psoc, vdev_id))
-			return;
-
 		osif_debug("Concurrency exist on SAP vdev");
 		reason = HOST_TWT_DISABLE_REASON_CONCURRENCY_MCC;
 		status = osif_twt_send_responder_disable_cmd(twt_arg->psoc,
@@ -1385,8 +1346,9 @@ void osif_twt_concurrency_update_handler(struct wlan_objmgr_psoc *psoc,
 	sta_count = policy_mgr_mode_specific_connection_count(psoc,
 							      PM_STA_MODE,
 							      NULL);
-	sap_count = policy_mgr_get_sap_mode_count(psoc, NULL);
-
+	sap_count = policy_mgr_mode_specific_connection_count(psoc,
+							      PM_SAP_MODE,
+							      NULL);
 	twt_arg.psoc = psoc;
 
 	osif_debug("Total connection %d, sta_count %d, sap_count %d",
@@ -1462,8 +1424,8 @@ void osif_twt_concurrency_update_handler(struct wlan_objmgr_psoc *psoc,
 		}
 		break;
 	default:
-		osif_debug("Unexpected number of connections: %d",
-			   num_connections);
+		osif_err("Unexpected number of connections: %d",
+			 num_connections);
 		break;
 	}
 }
@@ -1589,7 +1551,6 @@ int osif_twt_nudge_req(struct wlan_objmgr_vdev *vdev,
 	int ret = 0, id;
 	uint32_t vdev_id;
 	struct  twt_nudge_dialog_cmd_param params = {0};
-	QDF_STATUS status;
 
 	psoc = wlan_vdev_get_psoc(vdev);
 	if (!psoc) {
@@ -1641,26 +1602,12 @@ int osif_twt_nudge_req(struct wlan_objmgr_vdev *vdev,
 	}
 	params.next_twt_size = nla_get_u32(tb[id]);
 
-	id = QCA_WLAN_VENDOR_ATTR_TWT_NUDGE_SP_START_OFFSET;
-	if (tb[id]) {
-		uint8_t peer_cap = 0;
-
-		status = ucfg_twt_get_peer_capabilities(psoc,
-							&params.peer_macaddr,
-							&peer_cap);
-		if (QDF_IS_STATUS_SUCCESS(status) &&
-		    (peer_cap & WLAN_TWT_CAPA_FLEXIBLE)) {
-			params.sp_start_offset = nla_get_s32(tb[id]);
-		}
-	}
-
 	osif_debug("twt_nudge: vdev_id %d dialog_id %d ", params.vdev_id,
 		   params.dialog_id);
 	osif_debug("twt_nudge: suspend_duration %d next_twt_size %d",
 		   params.suspend_duration, params.next_twt_size);
 	osif_debug("peer mac_addr " QDF_MAC_ADDR_FMT,
 		   QDF_MAC_ADDR_REF(params.peer_macaddr.bytes));
-	osif_debug("twt_nudge: sp_start_offset %d", params.sp_start_offset);
 
 	return osif_send_twt_nudge_req(vdev, psoc, &params);
 }
@@ -1936,12 +1883,12 @@ osif_twt_send_get_params_resp(struct wlan_objmgr_vdev *vdev,
 	if (QDF_IS_STATUS_ERROR(qdf_status))
 		goto fail;
 
-	if (wlan_cfg80211_vendor_cmd_reply(reply_skb))
+	if (cfg80211_vendor_cmd_reply(reply_skb))
 		qdf_status = QDF_STATUS_E_INVAL;
 
 	return qdf_status;
 fail:
-	wlan_cfg80211_vendor_free_skb(reply_skb);
+	kfree_skb(reply_skb);
 	return qdf_status;
 }
 
@@ -2342,7 +2289,7 @@ enum twt_traffic_ac osif_twt_convert_ac_value(enum qca_wlan_ac_type ac_value)
 
 /**
  * osif_twt_add_ac_config() - pdev TWT param send
- * @vdev: Pointer to vdev object
+ * @psoc: Pointer to psoc object
  * @twt_ac: TWT access category
  *
  * Return: QDF Status
@@ -2413,26 +2360,6 @@ int osif_twt_set_param(struct wlan_objmgr_vdev *vdev,
 	return ret;
 }
 
-static void osif_twt_teardown_req_retry(struct wlan_objmgr_vdev *vdev,
-					struct wlan_objmgr_psoc *psoc,
-					struct twt_del_dialog_param params)
-{
-	int retries = 1;
-	int ret;
-
-	while (retries < TWT_DEL_DIALOG_REQ_MAX_RETRY) {
-		qdf_sleep(TWT_TEARDOWN_IN_PS_DISABLE_WAIT_TIME);
-		osif_debug("Implicitly TWT teardown req retry count:%d", retries);
-		ret = osif_send_sta_twt_teardown_req(vdev, psoc, &params);
-		if (ret != -EBUSY)
-			break;
-		retries++;
-	}
-
-	if (retries >= TWT_DEL_DIALOG_REQ_MAX_RETRY)
-		osif_debug("TWT Del Dialog req max retries reached");
-}
-
 void __osif_twt_work_handler(struct wlan_objmgr_vdev *vdev)
 {
 	struct twt_del_dialog_param params = {0};
@@ -2440,7 +2367,6 @@ void __osif_twt_work_handler(struct wlan_objmgr_vdev *vdev)
 	struct wlan_objmgr_psoc *psoc;
 	uint8_t vdev_id;
 	uint32_t next_action;
-	int ret;
 
 	psoc = wlan_vdev_get_psoc(vdev);
 	if (!psoc) {
@@ -2452,7 +2378,7 @@ void __osif_twt_work_handler(struct wlan_objmgr_vdev *vdev)
 	ucfg_twt_get_work_params(vdev, &twt_work_params, &next_action);
 
 	if (next_action != HOST_TWT_SEND_DELETE_CMD) {
-		osif_debug("Do not send STA teardown req as TWT renegotiation or power save work is not scheduled");
+		osif_debug("Do not send STA teardown req as TWT renegotiation work is not scheduled");
 		return;
 	}
 
@@ -2460,15 +2386,7 @@ void __osif_twt_work_handler(struct wlan_objmgr_vdev *vdev)
 	params.dialog_id = twt_work_params.dialog_id;
 	params.vdev_id = vdev_id;
 
-	ret = osif_send_sta_twt_teardown_req(vdev, psoc, &params);
-
-	/*
-	 * In case of FW returns ack_event with status as scan_in_progress or
-	 * Channel switch in progress and TWT teardown happens due to power
-	 * save disable then host will retry the TWT teardown cmd.
-	 */
-	if (ret == -EBUSY && twt_work_params.is_ps_disabled)
-		osif_twt_teardown_req_retry(vdev, psoc, params);
+	osif_send_sta_twt_teardown_req(vdev, psoc, &params);
 }
 
 void osif_twt_work_handler(void *data)

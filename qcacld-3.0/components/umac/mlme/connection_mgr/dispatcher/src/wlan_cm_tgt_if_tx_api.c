@@ -29,6 +29,8 @@
 #include "wlan_cm_tgt_if_tx_api.h"
 #include "wlan_mlme_public_struct.h"
 #include "wma.h"
+#include "wlan_cm_roam_api.h"
+#include "target_if.h"
 
 static inline
 struct wlan_cm_roam_tx_ops *wlan_cm_roam_get_tx_ops_from_vdev(
@@ -304,39 +306,6 @@ QDF_STATUS wlan_cm_tgt_send_roam_full_scan_6ghz_on_disc(
 	return status;
 }
 
-#ifdef FEATURE_RX_LINKSPEED_ROAM_TRIGGER
-QDF_STATUS wlan_cm_tgt_send_roam_linkspeed_state(struct wlan_objmgr_psoc *psoc,
-						 struct roam_disable_cfg *req)
-{
-	QDF_STATUS status;
-	struct wlan_cm_roam_tx_ops *roam_tx_ops;
-	struct wlan_objmgr_vdev *vdev;
-
-	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, req->vdev_id,
-						    WLAN_MLME_NB_ID);
-	if (!vdev)
-		return QDF_STATUS_E_INVAL;
-
-	roam_tx_ops = wlan_cm_roam_get_tx_ops_from_vdev(vdev);
-	if (!roam_tx_ops || !roam_tx_ops->send_roam_linkspeed_state) {
-		mlme_err("vdev %d send_roam_linkspeed_state is NULL",
-			 req->vdev_id);
-		wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
-		return QDF_STATUS_E_INVAL;
-	}
-
-	status = roam_tx_ops->send_roam_linkspeed_state(vdev,
-							req->vdev_id, req->cfg);
-	if (QDF_IS_STATUS_ERROR(status))
-		mlme_debug("vdev %d fail to send roam linkspeed state",
-			   req->vdev_id);
-
-	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
-
-	return status;
-}
-#endif
-
 QDF_STATUS
 wlan_cm_tgt_send_roam_scan_offload_rssi_params(
 		struct wlan_objmgr_vdev *vdev,
@@ -361,41 +330,6 @@ wlan_cm_tgt_send_roam_scan_offload_rssi_params(
 	if (QDF_IS_STATUS_ERROR(status))
 		mlme_debug("vdev %d fail to send roam scan offload RSSI params",
 			   vdev_id);
-
-	return status;
-}
-#endif
-
-#ifdef WLAN_VENDOR_HANDOFF_CONTROL
-QDF_STATUS
-wlan_cm_tgt_send_roam_vendor_handoff_config(struct wlan_objmgr_psoc *psoc,
-					    struct vendor_handoff_cfg *req)
-{
-	QDF_STATUS status;
-	struct wlan_cm_roam_tx_ops *roam_tx_ops;
-	struct wlan_objmgr_vdev *vdev;
-
-	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, req->vdev_id,
-						    WLAN_MLME_NB_ID);
-	if (!vdev)
-		return QDF_STATUS_E_INVAL;
-
-	roam_tx_ops = wlan_cm_roam_get_tx_ops_from_vdev(vdev);
-	if (!roam_tx_ops || !roam_tx_ops->send_roam_vendor_handoff_config) {
-		mlme_err("vdev %d send_roam_vendor_handoff_config is NULL",
-			 req->vdev_id);
-		wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
-		return QDF_STATUS_E_INVAL;
-	}
-
-	status = roam_tx_ops->send_roam_vendor_handoff_config(vdev,
-							      req->vdev_id,
-							      req->param_id);
-	if (QDF_IS_STATUS_ERROR(status))
-		mlme_debug("vdev %d fail to send roam vendor handoff config",
-			   req->vdev_id);
-
-	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
 
 	return status;
 }
@@ -671,16 +605,15 @@ QDF_STATUS wlan_cm_tgt_send_roam_triggers(struct wlan_objmgr_psoc *psoc,
 
 	return status;
 }
-#endif
 
-#ifdef WLAN_FEATURE_11BE_MLO
-QDF_STATUS wlan_cm_tgt_send_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
-					    uint8_t vdev_id,
-					    struct wlan_roam_mlo_config *req)
+QDF_STATUS wlan_cm_tgt_send_idle_params(struct wlan_objmgr_psoc *psoc,
+					uint8_t vdev_id,
+					struct wlan_roam_idle_params *params)
 {
-	QDF_STATUS status;
 	struct wlan_cm_roam_tx_ops *roam_tx_ops;
 	struct wlan_objmgr_vdev *vdev;
+	struct wmi_unified *wmi_handle;
+	QDF_STATUS status;
 
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
 						    WLAN_MLME_NB_ID);
@@ -688,20 +621,28 @@ QDF_STATUS wlan_cm_tgt_send_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
 		return QDF_STATUS_E_INVAL;
 
 	roam_tx_ops = wlan_cm_roam_get_tx_ops_from_vdev(vdev);
-	if (!roam_tx_ops || !roam_tx_ops->send_roam_mlo_config) {
-		mlme_err("CM_RSO: vdev %d send_roam_mlo_config is NULL",
+	if (!roam_tx_ops || !roam_tx_ops->send_roam_idle_trigger) {
+		mlme_err("CM_RSO: vdev %d send_roam_idle_trigger is NULL",
 			 vdev_id);
-		wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
-		return QDF_STATUS_E_INVAL;
+		status = QDF_STATUS_E_INVAL;
+		goto release_ref;
 	}
 
-	status = roam_tx_ops->send_roam_mlo_config(vdev, req);
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		mlme_debug("Invalid WMI handle");
+		status = QDF_STATUS_E_INVAL;
+		goto release_ref;
+	}
+
+	status = roam_tx_ops->send_roam_idle_trigger(wmi_handle,
+						     ROAM_SCAN_OFFLOAD_UPDATE_CFG,
+						     params);
 	if (QDF_IS_STATUS_ERROR(status))
-		mlme_err("CM_RSO: vdev %d fail to send roam mlo config",
-			 vdev_id);
+		mlme_err("CM_RSO: vdev %d failed to send idle params", vdev_id);
 
+release_ref:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_NB_ID);
-
 	return status;
 }
 #endif

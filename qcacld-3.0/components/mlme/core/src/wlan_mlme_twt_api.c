@@ -463,10 +463,12 @@ uint8_t mlme_get_twt_peer_capabilities(struct wlan_objmgr_psoc *psoc,
 
 void mlme_set_twt_peer_capabilities(struct wlan_objmgr_psoc *psoc,
 				    struct qdf_mac_addr *peer_mac,
-				    uint8_t caps)
+				    tDot11fIEhe_cap *he_cap,
+				    tDot11fIEhe_op *he_op)
 {
 	struct wlan_objmgr_peer *peer;
 	struct peer_mlme_priv_obj *peer_priv;
+	uint8_t caps = 0;
 
 	peer = wlan_objmgr_get_peer_by_mac(psoc, peer_mac->bytes,
 					   WLAN_MLME_NB_ID);
@@ -484,6 +486,21 @@ void mlme_set_twt_peer_capabilities(struct wlan_objmgr_psoc *psoc,
 		return;
 	}
 
+	if (he_cap->twt_request)
+		caps |= WLAN_TWT_CAPA_REQUESTOR;
+
+	if (he_cap->twt_responder)
+		caps |= WLAN_TWT_CAPA_RESPONDER;
+
+	if (he_cap->broadcast_twt)
+		caps |= WLAN_TWT_CAPA_BROADCAST;
+
+	if (he_cap->flex_twt_sched)
+		caps |= WLAN_TWT_CAPA_FLEXIBLE;
+
+	if (he_op->twt_required)
+		caps |= WLAN_TWT_CAPA_REQUIRED;
+
 	peer_priv->twt_ctx.peer_capability = caps;
 	wlan_objmgr_peer_release_ref(peer, WLAN_MLME_NB_ID);
 }
@@ -499,7 +516,7 @@ bool mlme_is_twt_enabled(struct wlan_objmgr_psoc *psoc)
 	return mlme_obj->cfg.twt_cfg.is_twt_enabled;
 }
 
-#if defined(WLAN_FEATURE_11AX) && defined(WLAN_SUPPORT_TWT)
+#ifdef WLAN_FEATURE_11AX
 bool mlme_is_flexible_twt_enabled(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_mlme_psoc_ext_obj *mlme_obj;
@@ -853,16 +870,3 @@ bool mlme_is_24ghz_twt_enabled(struct wlan_objmgr_psoc *psoc)
 
 	return mlme_obj->cfg.twt_cfg.enable_twt_24ghz;
 }
-
-#if defined(WLAN_SUPPORT_TWT) && defined(WLAN_TWT_CONV_SUPPORTED)
-bool mlme_is_twt_disable_info_frame(struct wlan_objmgr_psoc *psoc)
-{
-	struct wlan_mlme_psoc_ext_obj *mlme_obj;
-
-	mlme_obj = mlme_get_psoc_ext_obj(psoc);
-	if (!mlme_obj)
-		return cfg_default(CFG_DISABLE_TWT_INFO_FRAME);
-
-	return mlme_obj->cfg.twt_cfg.disable_twt_info_frame;
-}
-#endif

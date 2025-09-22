@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -46,18 +46,20 @@
 #include "lim_utils.h"
 
 #include "wma_types.h"
+
+#ifdef WLAN_FEATURE_11BE_MLO
 #include "lim_mlo.h"
+#endif
 
 #include <target_if_vdev_mgr_tx_ops.h>
 #include <wlan_cmn_ieee80211.h>
 #include <wlan_mgmt_txrx_utils_api.h>
-#include <wlan_p2p_cfg_api.h>
 
-/* Fils Discovery Frame */
+/* Fils Dicovery Frame */
 /**
  * struct fd_action_header - FILS Discovery Action frame header
  * @action_header: WLAN Action frame header
- * @fd_frame_cntl: FILS Discovery Frame Control
+ * @fd_frame_cntl: FILS Disovery Frame Control
  * @timestamp:     Time stamp
  * @bcn_interval:  Beacon Interval
  * @elem:          variable len sub element fields
@@ -541,6 +543,11 @@ static QDF_STATUS lim_send_fils_discovery_template(struct mac_context *mac,
 		goto memfree;
 	}
 
+	pe_debug("Fils Discovery template created successfully %d", n_bytes);
+
+	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_DEBUG,
+			   fd_params->frm, n_bytes);
+
 	fd_params->tmpl_len = n_bytes;
 	fd_params->tmpl_len_aligned = roundup(fd_params->tmpl_len,
 					      sizeof(uint32_t));
@@ -550,6 +557,9 @@ static QDF_STATUS lim_send_fils_discovery_template(struct mac_context *mac,
 						 fd_params);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		pe_err("FAIL bytes %d retcode[%X]", n_bytes, status);
+	} else {
+		pe_debug("Fils Discovery tmpl msg posted to HAL of bytes %d",
+			 n_bytes);
 	}
 
 memfree:
@@ -565,6 +575,9 @@ QDF_STATUS sch_send_beacon_req(struct mac_context *mac, uint8_t *beaconPayload,
 	struct scheduler_msg msgQ = {0};
 	tpSendbeaconParams beaconParams = NULL;
 	QDF_STATUS retCode;
+
+	pe_debug("Indicating HAL to copy the beacon template [%d bytes] to memory, reason %d",
+		size, reason);
 
 	if (LIM_IS_AP_ROLE(pe_session) &&
 	   (mac->sch.beacon_changed)) {
@@ -705,7 +718,6 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 	tDot11fProbeResponse *prb_rsp_frm;
 	QDF_STATUS status;
 	uint16_t addn_ielen = 0;
-	uint16_t mlo_ie_len;
 
 	/* Check if probe response IE is present or not */
 	addnIEPresent = (pe_session->add_ie_params.probeRespDataLen != 0);
@@ -764,13 +776,10 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 	 * dot11f get packed payload size.
 	 */
 	prb_rsp_frm = &pe_session->probeRespFrame;
-	if (extcap_present) {
+	if (extcap_present)
 		lim_merge_extcap_struct(&prb_rsp_frm->ExtCap,
 					&extracted_extcap,
 					true);
-		populate_dot11f_bcn_prot_extcaps(mac, pe_session,
-						 &prb_rsp_frm->ExtCap);
-	}
 
 	nStatus = dot11f_get_packed_probe_response_size(mac,
 			&pe_session->probeRespFrame, &nPayload);
@@ -784,8 +793,7 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 			nStatus);
 	}
 
-	mlo_ie_len = lim_get_frame_mlo_ie_len(pe_session);
-	nBytes += nPayload + sizeof(tSirMacMgmtHdr) + mlo_ie_len;
+	nBytes += nPayload + sizeof(tSirMacMgmtHdr);
 
 	if (addnIEPresent) {
 		if ((nBytes + addn_ielen) <= SIR_MAX_PROBE_RESP_SIZE)
@@ -831,17 +839,6 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 			"robe Response (0x%08x)", nStatus);
 	}
 
-	if (mlo_ie_len) {
-		status = lim_fill_complete_mlo_ie(pe_session, mlo_ie_len,
-					 pFrame2Hal + sizeof(tSirMacMgmtHdr) +
-					      nPayload);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			pe_debug("assemble ml ie error");
-			mlo_ie_len = 0;
-		}
-		nPayload += mlo_ie_len;
-	}
-
 	if (addnIEPresent) {
 		qdf_mem_copy(&pFrame2Hal[nBytes - addn_ielen],
 			     &addIE[0], addn_ielen);
@@ -859,12 +856,6 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 		pprobeRespParams->probeRespTemplateLen = nBytes;
 		qdf_mem_copy(pprobeRespParams->ucProxyProbeReqValidIEBmap,
 			     IeBitmap, (sizeof(uint32_t) * 8));
-		if (pe_session->opmode == QDF_P2P_GO_MODE &&
-		    cfg_p2p_is_go_ignore_non_p2p_probe_req(mac->psoc)) {
-			pe_debug("GO ignore non-P2P probe req");
-			pprobeRespParams->go_ignore_non_p2p_probe_req = true;
-		}
-
 		msgQ.type = WMA_SEND_PROBE_RSP_TMPL;
 		msgQ.reserved = 0;
 		msgQ.bodyptr = pprobeRespParams;
@@ -874,6 +865,9 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 		if (QDF_STATUS_SUCCESS != retCode) {
 			pe_err("FAIL bytes %d retcode[%X]", nBytes, retCode);
 			qdf_mem_free(pprobeRespParams);
+		} else {
+			pe_debug("Probe response template msg posted to HAL of bytes %d",
+				nBytes);
 		}
 	}
 
