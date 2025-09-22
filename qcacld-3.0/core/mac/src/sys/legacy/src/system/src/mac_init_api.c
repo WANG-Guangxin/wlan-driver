@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -149,7 +150,7 @@ QDF_STATUS mac_open(struct wlan_objmgr_psoc *psoc, mac_handle_t *mac_handle,
 
 	status = pe_open(mac, cds_cfg);
 	if (QDF_IS_STATUS_ERROR(status)) {
-		pe_err("failed to open PE; status:%u", status);
+		QDF_DEBUG_PANIC("failed to open PE; status: %u", status);
 		goto release_psoc_ref;
 	}
 
@@ -187,9 +188,9 @@ QDF_STATUS mac_close(mac_handle_t mac_handle)
 	return QDF_STATUS_SUCCESS;
 }
 
-void mac_register_sesssion_open_close_cb(mac_handle_t mac_handle,
-					 csr_session_close_cb close_session,
-					 csr_roam_complete_cb callback)
+void mac_register_session_open_close_cb(mac_handle_t mac_handle,
+					csr_session_close_cb close_session,
+					csr_roam_complete_cb callback)
 {
 	struct mac_context *mac = MAC_CONTEXT(mac_handle);
 

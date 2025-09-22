@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -82,7 +83,7 @@ static void hdd_debugfs_mws_coex_info_cb(void *coex_info_data, void *context,
 
 	request = osif_request_get(context);
 	if (!request) {
-		hdd_err("obselete request");
+		hdd_err("obsolete request");
 		return;
 	}
 
@@ -156,7 +157,8 @@ static QDF_STATUS __hdd_debugfs_mws_coex_state_read(struct hdd_context *hdd_ctx,
 	cookie = osif_request_cookie(request);
 
 	status = sme_get_mws_coex_info(hdd_ctx->mac_handle,
-				       adapter->vdev_id, WMI_MWS_COEX_STATE,
+				       adapter->deflink->vdev_id,
+				       WMI_MWS_COEX_STATE,
 				       hdd_debugfs_mws_coex_info_cb, cookie);
 
 	if (QDF_IS_STATUS_ERROR(status)) {
@@ -252,7 +254,7 @@ static QDF_STATUS __hdd_debugfs_mws_coex_dpwb_read(struct hdd_context *hdd_ctx,
 	cookie = osif_request_cookie(request);
 
 	status = sme_get_mws_coex_info(hdd_ctx->mac_handle,
-				       adapter->vdev_id,
+				       adapter->deflink->vdev_id,
 				       WMI_MWS_COEX_DPWB_STATE,
 				       hdd_debugfs_mws_coex_info_cb, cookie);
 
@@ -353,7 +355,8 @@ static QDF_STATUS __hdd_debugfs_mws_tdm_state_read(struct hdd_context *hdd_ctx,
 	cookie = osif_request_cookie(request);
 
 	status = sme_get_mws_coex_info(hdd_ctx->mac_handle,
-				       adapter->vdev_id, WMI_MWS_COEX_TDM_STATE,
+				       adapter->deflink->vdev_id,
+				       WMI_MWS_COEX_TDM_STATE,
 				       hdd_debugfs_mws_coex_info_cb, cookie);
 
 	if (QDF_IS_STATUS_ERROR(status)) {
@@ -439,7 +442,7 @@ static QDF_STATUS __hdd_debugfs_mws_coex_idrx_read(struct hdd_context *hdd_ctx,
 	cookie = osif_request_cookie(request);
 
 	status = sme_get_mws_coex_info(hdd_ctx->mac_handle,
-				       adapter->vdev_id,
+				       adapter->deflink->vdev_id,
 				       WMI_MWS_COEX_IDRX_STATE,
 				       hdd_debugfs_mws_coex_info_cb, cookie);
 
@@ -543,7 +546,7 @@ static QDF_STATUS __hdd_debugfs_mws_antenna_sharing_read(struct hdd_context
 	cookie = osif_request_cookie(request);
 
 	status = sme_get_mws_coex_info(hdd_ctx->mac_handle,
-				       adapter->vdev_id,
+				       adapter->deflink->vdev_id,
 				       WMI_MWS_COEX_ANTENNA_SHARING_STATE,
 				       hdd_debugfs_mws_coex_info_cb, cookie);
 
@@ -663,6 +666,6 @@ void hdd_debugfs_mws_coex_info_init(struct hdd_context *hdd_ctx)
 void hdd_debugfs_mws_coex_info_deinit(struct hdd_context *hdd_ctx)
 {
 	/**
-	 * Coex info dosent have a directory it is removed as part of qdf remove
+	 * Coex info doesn't have a directory it is removed as part of qdf remove
 	 */
 }

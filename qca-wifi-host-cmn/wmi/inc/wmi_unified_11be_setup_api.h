@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,8 +15,8 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef _WMI_UNIFIED_11BE_API_H_
-#define _WMI_UNIFIED_11BE_API_H_
+#ifndef _WMI_UNIFIED_11BE_SETUP_API_H_
+#define _WMI_UNIFIED_11BE_SETUP_API_H_
 
 #include <wmi_unified_11be_param.h>
 
@@ -67,7 +68,7 @@ wmi_extract_mlo_setup_cmpl_event(wmi_unified_t wmi_handle,
  *  wmi_extract_mlo_teardown_cmpl_event() - Extract MLO teardown completion
  *  @wmi_handle: WMI handle for this pdev
  *  @buf: Event buffer
- *  @params: MLO teardown event params
+ *  @param: MLO teardown event params
  *
  *  Return: QDF_STATUS code
  */
@@ -76,4 +77,4 @@ wmi_extract_mlo_teardown_cmpl_event(wmi_unified_t wmi_handle,
 				    uint8_t *buf,
 				    struct wmi_mlo_teardown_cmpl_params *param);
 #endif /*WLAN_FEATURE_11BE_MLO*/
-#endif /*_WMI_UNIFIED_11BE_API_H_*/
+#endif /*_WMI_UNIFIED_11BE_SETUP_API_H_*/

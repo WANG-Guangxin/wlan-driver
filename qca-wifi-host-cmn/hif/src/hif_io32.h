@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,12 +33,17 @@
 #define MAX_UNWINDOWED_ADDRESS 0x80000
 #if defined(QCA_WIFI_QCA6390) || defined(QCA_WIFI_QCA6490) || \
 	defined(QCA_WIFI_QCN9000) || defined(QCA_WIFI_QCA6750) || \
+	defined(QCA_WIFI_QCN6432) || \
 	defined(QCA_WIFI_QCN9224) || defined(QCA_WIFI_KIWI)
 #define WINDOW_ENABLE_BIT 0x40000000
 #else
 #define WINDOW_ENABLE_BIT 0x80000000
 #endif
+#ifdef QCA_WIFI_PEACH
+#define WINDOW_REG_ADDRESS 0x3278
+#else
 #define WINDOW_REG_ADDRESS 0x310C
+#endif
 #define WINDOW_SHIFT 19
 #define WINDOW_VALUE_MASK 0x3F
 #define WINDOW_START MAX_UNWINDOWED_ADDRESS
@@ -251,7 +256,7 @@ static inline void hif_unlock_reg_access(struct hif_pci_softc *sc,
 }
 #endif
 
-/**
+/*
  * note1: WINDOW_RANGE_MASK = (1 << WINDOW_SHIFT) -1
  * note2: 1 << WINDOW_SHIFT = MAX_UNWINDOWED_ADDRESS
  * note3: WINDOW_VALUE_MASK = big enough that trying to write past that window
@@ -317,6 +322,11 @@ void hif_target_write_checked(struct hif_softc *scn, uint32_t offset,
 	hif_read32_mb(scn, scn->mem + (offset))
 #define A_TARGET_WRITE(scn, offset, value) \
 	hif_write32_mb(scn, (scn->mem) + (offset), value)
+#endif
+
+#ifdef FEATURE_HIF_DELAYED_REG_WRITE
+#define A_TARGET_DELAYED_REG_WRITE(scn, ctrl_addr, val) \
+	hif_delayed_reg_write(scn, ctrl_addr, val)
 #endif
 
 void hif_irq_enable(struct hif_softc *scn, int irq_id);

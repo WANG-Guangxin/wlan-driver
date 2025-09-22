@@ -3,7 +3,6 @@
 
 #include "pci_platform.h"
 #include "debug.h"
-#include <linux/pm.h>
 
 static struct cnss_msi_config msi_config = {
 	.total_vectors = 32,
@@ -62,67 +61,7 @@ int cnss_wlan_adsp_pc_enable(struct cnss_pci_data *pci_priv, bool control)
 
 int cnss_set_pci_link(struct cnss_pci_data *pci_priv, bool link_up)
 {
-	int ret = 0;
-	struct device *dev, *host_bridge_dev;
-	struct pci_dev *root_port;
-
-	if (!pci_priv) {
-		cnss_pr_err("pci_priv is null\n");
-		return -EINVAL;
-	}
-
-	root_port = pcie_find_root_port(pci_priv->pci_dev);
-	if (!root_port) {
-		cnss_pr_err("PCIe root port is null\n");
-		return -EINVAL;
-	}
-
-	host_bridge_dev = root_port->dev.parent;
-	if (!host_bridge_dev) {
-		cnss_pr_err("host_bridge_dev is null\n");
-		return -EINVAL;
-	}
-
-	dev = host_bridge_dev->parent;
-	if (!dev) {
-		cnss_pr_err("PCIe platform device is null\n");
-		return -EINVAL;
-	}
-
-	cnss_pr_info("%s PCI link, \n", link_up ? "Resuming" : "Suspending");
-
-	cnss_pr_info("PCIe PM: usage_count:%d, runtime_status:%d\n",
-		     atomic_read(&dev->power.usage_count),
-		     dev->power.runtime_status);
-
-	if (link_up) {
-		dev->power.ignore_children = false;
-		ret = pm_runtime_get_sync(dev);
-		cnss_pr_info("PCIe resume: ret:%d, usage_count:%d, runtime_status:%d\n",
-			     ret, atomic_read(&dev->power.usage_count),
-			     dev->power.runtime_status);
-
-		if (ret ||
-		    dev->power.runtime_status != RPM_ACTIVE) {
-			cnss_pr_info("Faile to resume PCIe link\n");
-			return ret;
-		}
-	} else {
-		dev->power.ignore_children = true;
-		ret = pm_runtime_put_sync(dev);
-		cnss_pr_info("PCIe suspend: ret:%d, usage_count:%d, runtime_status:%d\n",
-			     ret, atomic_read(&dev->power.usage_count),
-			     dev->power.runtime_status);
-
-		if (ret ||
-		    dev->power.runtime_status != RPM_SUSPENDED) {
-			dev->power.ignore_children = false;
-			cnss_pr_info("Faile to suspend PCIe link\n");
-			return ret;
-		}
-	}
-
-	return ret;
+	return 0;
 }
 
 int cnss_pci_prevent_l1(struct device *dev)
@@ -131,24 +70,10 @@ int cnss_pci_prevent_l1(struct device *dev)
 }
 EXPORT_SYMBOL(cnss_pci_prevent_l1);
 
-int __cnss_pci_prevent_l1(struct device *dev)
-{
-	return 0;
-}
-
 void cnss_pci_allow_l1(struct device *dev)
 {
 }
 EXPORT_SYMBOL(cnss_pci_allow_l1);
-
-void __cnss_pci_allow_l1(struct device *dev)
-{
-}
-
-int cnss_pci_fmd_enable(struct cnss_pci_data *pci_priv)
-{
-	return -EOPNOTSUPP;
-}
 
 int _cnss_pci_get_reg_dump(struct cnss_pci_data *pci_priv,
 			   u8 *buf, u32 len)
@@ -161,6 +86,34 @@ void cnss_pci_update_drv_supported(struct cnss_pci_data *pci_priv)
 	pci_priv->drv_supported = false;
 }
 
+int cnss_pci_dsp_link_control(struct cnss_pci_data *pci_priv,
+			      bool link_enable)
+{
+	return -EOPNOTSUPP;
+}
+
+int cnss_pci_set_dsp_link_status(struct cnss_pci_data *pci_priv,
+				 bool link_enable)
+{
+	return -EOPNOTSUPP;
+}
+
+int cnss_pci_get_dsp_link_status(struct cnss_pci_data *pci_priv)
+{
+	return -EOPNOTSUPP;
+}
+
+int cnss_pci_dsp_link_enable(struct cnss_pci_data *pci_priv)
+{
+	return -EOPNOTSUPP;
+}
+
+int cnss_pci_dsp_link_retrain(struct cnss_pci_data *pci_priv,
+			      u16 target_link_speed)
+{
+	return -EOPNOTSUPP;
+}
+
 int cnss_pci_get_msi_assignment(struct cnss_pci_data *pci_priv)
 {
 	pci_priv->msi_config = &msi_config;
@@ -168,39 +121,6 @@ int cnss_pci_get_msi_assignment(struct cnss_pci_data *pci_priv)
 	return 0;
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) && \
-    (LINUX_VERSION_CODE < KERNEL_VERSION(6, 9, 0))
-static int
-cnss_pci_smmu_dev_fault_handler(struct iommu_fault *fault,  void *data)
-{
-	struct cnss_pci_data *pci_priv = data;
-
-	cnss_fatal_err("SMMU fault happened with IOVA 0x%llx\n",
-		       fault->event.addr);
-
-	if (!pci_priv) {
-		cnss_pr_err("pci_priv is NULL\n");
-		return -ENODEV;
-	}
-
-	pci_priv->is_smmu_fault = true;
-	cnss_pci_update_status(pci_priv, CNSS_FW_DOWN);
-	cnss_force_fw_assert(&pci_priv->pci_dev->dev);
-
-	/* IOMMU driver requires -ENOSYS to print debug info. */
-	return -ENOSYS;
-}
-
-static
-void cnss_register_iommu_fault_handler(struct cnss_pci_data *pci_priv)
-{
-	struct pci_dev *pci_dev = pci_priv->pci_dev;
-
-	iommu_register_device_fault_handler(&pci_dev->dev,
-					    cnss_pci_smmu_dev_fault_handler,
-					    pci_priv);
-}
-#else
 static int cnss_pci_smmu_fault_handler(struct iommu_domain *domain,
 				       struct device *dev, unsigned long iova,
 				       int flags, void *handler_token)
@@ -222,76 +142,23 @@ static int cnss_pci_smmu_fault_handler(struct iommu_domain *domain,
 	return -ENOSYS;
 }
 
-static
-void cnss_register_iommu_fault_handler(struct cnss_pci_data *pci_priv)
-{
-	iommu_set_fault_handler(pci_priv->iommu_domain,
-				cnss_pci_smmu_fault_handler, pci_priv);
-}
-#endif
-
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
 int cnss_pci_get_iommu_addr(struct cnss_pci_data *pci_priv,
-			    struct device_node *iommu_group_node)
+			    struct device_node *of_node)
 {
-	struct pci_dev *pci_dev = pci_priv->pci_dev;
-	struct device_node *of_node;
-	const u32 *maps;
-	const u32 *end;
-	int size;
+	pci_priv->smmu_iova_start = 0xa0000000;
+	pci_priv->smmu_iova_len = 0x10000000;
 
-	of_node = of_find_node_by_name(pci_dev->dev.of_node,
-				       "cnss_pci0_iommu_region_partition");
-	if (!of_node)
-		return -EINVAL;
-
-	maps = of_get_property(of_node, "iommu-addresses", &size);
-	if (!maps) {
-		of_node_put(of_node);
-		return -EINVAL;
-	}
-
-	end = maps + size / sizeof(u32);
-
-	pci_priv->smmu_iova_start = 0;
-
-	while (maps < end) {
-		phys_addr_t iova;
-		size_t length;
-
-		/*
-		 * Skip the device phandle and if required later, we can
-		 * check if the device phandle matches with pci_dev->dev.of_node
-		 */
-		maps++;
-
-		maps = of_translate_dma_region(pci_dev->dev.of_node, maps,
-					       &iova, &length);
-
-		/*
-		 * Assuming a single contiguous DMA address range
-		 */
-		if (!pci_priv->smmu_iova_start)
-			pci_priv->smmu_iova_start = length;
-		else
-			pci_priv->smmu_iova_len =
-					iova - pci_priv->smmu_iova_start;
-	}
-
-	of_node_put(of_node);
-
-	return (pci_priv->smmu_iova_start && pci_priv->smmu_iova_len) ?
-		0 : -EINVAL;
+	return 0;
 }
 #else
 int cnss_pci_get_iommu_addr(struct cnss_pci_data *pci_priv,
-			    struct device_node *iommu_group_node)
+			    struct device_node *of_node)
 {
 	u32 addr_win[2];
 	int ret;
 
-	ret = of_property_read_u32_array(iommu_group_node,
-					 "qcom,iommu-dma-addr-pool",
+	ret = of_property_read_u32_array(of_node,  "qcom,iommu-dma-addr-pool",
 					 addr_win, ARRAY_SIZE(addr_win));
 
 	pci_priv->smmu_iova_start = addr_win[0];
@@ -322,7 +189,8 @@ int cnss_pci_init_smmu(struct cnss_pci_data *pci_priv)
 	if (!ret && !strcmp("fastmap", iommu_dma_type)) {
 		cnss_pr_dbg("Enabling SMMU S1 stage\n");
 		pci_priv->smmu_s1_enable = true;
-		cnss_register_iommu_fault_handler(pci_priv);
+		iommu_set_fault_handler(pci_priv->iommu_domain,
+					cnss_pci_smmu_fault_handler, pci_priv);
 		cnss_register_iommu_fault_handler_irq(pci_priv);
 	}
 

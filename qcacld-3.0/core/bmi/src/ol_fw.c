@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -50,8 +50,6 @@
 #ifdef FEATURE_SECURE_FIRMWARE
 static struct hash_fw fw_hash;
 #endif
-
-#define MAX_WAKELOCK_FOR_FW_DOWNLOAD 1000
 
 static uint32_t refclk_speed_to_hz[] = {
 	48000000,               /* SOC_REFCLK_48_MHZ */
@@ -142,7 +140,7 @@ end:
  *
  * The API return board filename based on the board_id and chip_id.
  * eg: input = "bdwlan30.bin", board_id = 0x01, board_file = "bdwlan30.b01"
- * Return: The buffer with the formated board filename.
+ * Return: The buffer with the formatted board filename.
  */
 static char *ol_board_id_to_filename(const char *old_name,
 				     uint16_t board_id)
@@ -520,6 +518,7 @@ static int
 ol_transfer_bin_file(struct ol_context *ol_ctx, enum ATH_BIN_FILE file,
 		     uint32_t address, bool compressed)
 {
+#define MAX_WAKELOCK_FOR_FW_DOWNLOAD 1000	//1s
 	int ret;
 
 	qdf_wake_lock_timeout_acquire(&ol_ctx->fw_dl_wakelock,
@@ -544,7 +543,7 @@ struct ramdump_info {
 	unsigned long size;
 };
 
-/**
+/*
  * if have platform driver support, reinit will be called by CNSS.
  * recovery flag will be cleaned and CRASHED indication will be sent
  * to user space by reinit function. If not support, clean recovery
@@ -730,7 +729,7 @@ void ol_target_failure(void *instance, QDF_STATUS status)
 	enum hif_target_status target_status = hif_get_target_status(scn);
 
 	if (hif_get_bus_type(scn) == QDF_BUS_TYPE_SNOC) {
-		BMI_ERR("SNOC doesn't suppor this code path!");
+		BMI_ERR("SNOC doesn't support this code path!");
 		return;
 	}
 
@@ -1048,7 +1047,7 @@ static QDF_STATUS ol_fw_populate_clk_settings(enum a_refclk_speed_t refclk,
 		clock_s->wlan_pll.outdiv = 0;
 		clock_s->pll_settling_time = 1024;
 		clock_s->refclk_hz = 0;
-		/* fallthrough */
+		fallthrough;
 	default:
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -1724,6 +1723,7 @@ void ol_dump_target_memory(struct hif_opaque_softc *scn, void *memory_block)
 		case 1:
 			address = AXI_LOCATION;
 			size = AXI_SIZE;
+			break;
 		default:
 			break;
 		}
@@ -1763,7 +1763,7 @@ ol_get_max_section_count(struct hif_opaque_softc *scn)
 
 /**
  * ol_set_ram_config_reg() - set target RAM configuration register
- * @sc: pointer of hif_softc context
+ * @scn: pointer of hif_softc context
  * @config: value to be written to the register
  *
  * This function will write the given value to target RAM configuration
@@ -1851,9 +1851,9 @@ ol_get_iram_len_and_pos(struct hif_opaque_softc *scn, uint32_t *pos,
 
 /**
  * ol_target_coredump() - API to collect target ramdump
- * @inst - private context
- * @memory_block - non-NULL reserved memory location
- * @block_len - size of the dump to collect
+ * @inst: private context
+ * @memory_block: non-NULL reserved memory location
+ * @block_len: size of the dump to collect
  *
  * Function to perform core dump for the target.
  *

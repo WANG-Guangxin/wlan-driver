@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -31,13 +31,14 @@
 
 #ifdef FORCE_WAKE
 /**
- * struct hif_pci_stats - Account for hif pci based statistics
+ * struct hif_ipci_stats - Account for hif pci based statistics
  * @mhi_force_wake_request_vote: vote for mhi
  * @mhi_force_wake_failure: mhi force wake failure
  * @mhi_force_wake_success: mhi force wake success
  * @soc_force_wake_register_write_success: write to soc wake
  * @soc_force_wake_failure: soc force wake failure
  * @soc_force_wake_success: soc force wake success
+ * @mhi_force_wake_release_failure: mhi force wake release failure
  * @mhi_force_wake_release_success: mhi force wake release success
  * @soc_force_wake_release_success: soc force wake release
  */
@@ -59,15 +60,16 @@ struct hif_ipci_stats {
 #define PCIE_SOC_PCIE_REG_PCIE_SCRATCH_0_SOC_PCIE_REG (0x01E04000 + 0x40)
 
 /* Timeout duration to validate UMAC wake status */
-#define FORCE_WAKE_DELAY_TIMEOUT_MS 500
+#define FORCE_WAKE_DELAY_TIMEOUT_MS 1000
 
 /* Validate UMAC status every 5ms */
 #define FORCE_WAKE_DELAY_MS 5
 #endif /* FORCE_WAKE */
 
-#ifdef FEATURE_HAL_DELAYED_REG_WRITE
+#if defined(FEATURE_HAL_DELAYED_REG_WRITE) || \
+	defined(FEATURE_HIF_DELAYED_REG_WRITE)
 #define EP_VOTE_POLL_TIME_US  50
-#define EP_VOTE_POLL_TIME_CNT 2
+#define EP_VOTE_POLL_TIME_CNT 3
 #ifdef HAL_CONFIG_SLUB_DEBUG_ON
 #define EP_WAKE_RESET_DELAY_TIMEOUT_MS 3
 #else
@@ -98,13 +100,11 @@ struct hif_ipci_softc {
 	qdf_spinlock_t register_access_lock;
 	qdf_spinlock_t irq_lock;
 	bool grp_irqs_disabled;
-#ifdef FEATURE_RUNTIME_PM
-	struct hif_runtime_pm_ctx rpm_ctx;
-#endif
 
 	void (*hif_ipci_get_soc_info)(struct hif_ipci_softc *sc,
 				      struct device *dev);
-#ifdef FEATURE_HAL_DELAYED_REG_WRITE
+#if defined(FEATURE_HAL_DELAYED_REG_WRITE) || \
+	defined(FEATURE_HIF_DELAYED_REG_WRITE)
 	uint32_t ep_awake_reset_fail;
 	uint32_t prevent_l1_fail;
 	uint32_t ep_awake_set_fail;
@@ -133,7 +133,7 @@ int hif_configure_irq(struct hif_softc *sc);
 #ifdef FORCE_WAKE
 /**
  * hif_print_ipci_stats() - Display HIF IPCI stats
- * @ipci_scn - HIF ipci handle
+ * @ipci_scn: HIF ipci handle
  *
  * Return: None
  */

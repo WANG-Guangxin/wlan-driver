@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -31,7 +32,7 @@
 #include <lim_ser_des_utils.h>
 
 /*-------------------------------------------------------------------------
-   Function declarations and documenation
+   Function declarations and documentation
    ------------------------------------------------------------------------*/
 void lim_ft_open(struct mac_context *mac, struct pe_session *pe_session);
 void lim_ft_cleanup(struct mac_context *mac, struct pe_session *pe_session);
@@ -136,11 +137,12 @@ static inline bool lim_process_ft_pre_auth_req(
 #endif
 
 #if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
-void lim_fill_ft_session(struct mac_context *mac,
-		struct bss_description *pbssDescription,
-		struct pe_session *ft_session,
-		struct pe_session *pe_session,
-		enum wlan_phymode bss_phymode);
+QDF_STATUS
+lim_fill_ft_session(struct mac_context *mac,
+		    struct bss_description *pbssDescription,
+		    struct pe_session *ft_session,
+		    struct pe_session *pe_session,
+		    enum wlan_phymode bss_phymode);
 
 /**
  * lim_ft_prepare_add_bss_req() - Create Add Bss Req to the new AP
@@ -160,12 +162,15 @@ void lim_ft_prepare_add_bss_req(struct mac_context *mac,
 QDF_STATUS lim_send_preauth_scan_offload(struct mac_context *mac_ctx,
 		struct pe_session *session_entry, tSirFTPreAuthReq *ft_preauth_req);
 #else
-static inline void lim_fill_ft_session(struct mac_context *mac,
-		struct bss_description *pbssDescription,
-		struct pe_session *ft_session,
-		struct pe_session *pe_session,
-		enum wlan_phymode bss_phymode)
-{}
+static inline QDF_STATUS
+lim_fill_ft_session(struct mac_context *mac
+		    struct bss_description *pbssDescription,
+		    struct pe_session *ft_session,
+		    struct pe_session *pe_session,
+		    enum wlan_phymode bss_phymode)
+{
+	return QDF_STATUS_SUCCESS;
+}
 static inline void lim_ft_prepare_add_bss_req(struct mac_context *mac,
 		struct pe_session *ft_session,
 		struct bss_description *bssDescription)

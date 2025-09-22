@@ -11,11 +11,6 @@ endif
 
 ifeq ($(ENABLE_WLAN_PLATFORM_DLKM), true)
 
-ENABLE_ICNSS2 := true
-ifeq ($(call is-board-platform-in-list, gen4), true)
-ENABLE_ICNSS2 := false
-endif
-
 # LOCAL_PATH is a relative path to root build directory.
 LOCAL_PATH := $(call my-dir)
 LOCAL_MODULE_DDK_BUILD := true
@@ -26,10 +21,7 @@ LOCAL_MODULE_KO_DIRS += cnss_utils/wlan_firmware_service.ko
 LOCAL_MODULE_KO_DIRS += cnss_genl/cnss_nl.ko
 LOCAL_MODULE_KO_DIRS += cnss_prealloc/cnss_prealloc.ko
 LOCAL_MODULE_KO_DIRS += cnss_utils/cnss_utils.ko
-
-ifeq ($(ENABLE_ICNSS2), true)
 LOCAL_MODULE_KO_DIRS += icnss2/icnss2.ko
-endif
 
 BOARD_COMMON_DIR ?= device/qcom/common
 DLKM_DIR := $(TOP)/$(BOARD_COMMON_DIR)/dlkm
@@ -132,7 +124,6 @@ LOCAL_MODULE_DEBUG_ENABLE := true
 LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
 ################################ icnss2 ################################
-ifeq ($(ENABLE_ICNSS2), true)
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES           := $(CNSS_SRC_FILES)
 LOCAL_MODULE              := icnss2.ko
@@ -141,5 +132,4 @@ LOCAL_MODULE_TAGS         := optional
 LOCAL_MODULE_DEBUG_ENABLE := true
 LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
-endif #ENABLE_ICNSS2
 endif #ENABLE_WLAN_PLATFORM_DLKM

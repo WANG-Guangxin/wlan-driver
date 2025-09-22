@@ -43,7 +43,8 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 	struct ch_params ch_params;
 	qdf_freq_t sec_freq;
 
-	state = wlan_reg_get_channel_state_for_freq(pdev, freq);
+	state = wlan_reg_get_channel_state_for_pwrmode(pdev, freq,
+						       REG_CURRENT_PWR_MODE);
 	if (state == CHANNEL_STATE_INVALID)
 		return flags;
 	if (state == CHANNEL_STATE_DFS) {
@@ -61,11 +62,14 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 		flags |= IEEE80211_CHAN_2GHZ;
 	} else
 		flags |= IEEE80211_CHAN_5GHZ;
+	qdf_mem_zero(&ch_params, sizeof(ch_params));
 
 	switch (bandwidth) {
 	case CH_WIDTH_80P80MHZ:
-		if (wlan_reg_get_5g_bonded_channel_state_for_freq(pdev, freq,
-								  bandwidth) !=
+		ch_params.ch_width = bandwidth;
+		if (wlan_reg_get_5g_bonded_channel_state_for_pwrmode(
+					pdev, freq,
+					&ch_params, REG_CURRENT_PWR_MODE) !=
 		    CHANNEL_STATE_INVALID) {
 			if (is_vht_enabled)
 				flags |= IEEE80211_CHAN_VHT80_80;
@@ -73,8 +77,10 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 		bandwidth = CH_WIDTH_160MHZ;
 		fallthrough;
 	case CH_WIDTH_160MHZ:
-		if (wlan_reg_get_5g_bonded_channel_state_for_freq(pdev, freq,
-								  bandwidth) !=
+		ch_params.ch_width = bandwidth;
+		if (wlan_reg_get_5g_bonded_channel_state_for_pwrmode(
+					pdev, freq,
+					&ch_params, REG_CURRENT_PWR_MODE) !=
 		    CHANNEL_STATE_INVALID) {
 			if (is_vht_enabled)
 				flags |= IEEE80211_CHAN_VHT160;
@@ -82,8 +88,10 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 		bandwidth = CH_WIDTH_80MHZ;
 		fallthrough;
 	case CH_WIDTH_80MHZ:
-		if (wlan_reg_get_5g_bonded_channel_state_for_freq(pdev, freq,
-								  bandwidth) !=
+		ch_params.ch_width = bandwidth;
+		if (wlan_reg_get_5g_bonded_channel_state_for_pwrmode(
+					pdev, freq,
+					&ch_params, REG_CURRENT_PWR_MODE) !=
 		    CHANNEL_STATE_INVALID) {
 			if (is_vht_enabled)
 				flags |= IEEE80211_CHAN_VHT80;
@@ -93,7 +101,9 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 	case CH_WIDTH_40MHZ:
 		qdf_mem_zero(&ch_params, sizeof(ch_params));
 		ch_params.ch_width = bandwidth;
-		wlan_reg_set_channel_params_for_freq(pdev, freq, 0, &ch_params);
+		wlan_reg_set_channel_params_for_pwrmode(pdev, freq, 0,
+							&ch_params,
+							REG_CURRENT_PWR_MODE);
 
 		if (ch_params.sec_ch_offset == LOW_PRIMARY_CH)
 			sec_freq = freq + 20;
@@ -102,9 +112,10 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 		else
 			sec_freq = 0;
 
-		if (wlan_reg_get_bonded_channel_state_for_freq(pdev, freq,
-							       bandwidth,
-							       sec_freq) !=
+		if (wlan_reg_get_bonded_channel_state_for_pwrmode(
+							pdev, freq,
+							bandwidth, sec_freq,
+							REG_CURRENT_PWR_MODE) !=
 		    CHANNEL_STATE_INVALID) {
 			if (ch_params.sec_ch_offset == LOW_PRIMARY_CH) {
 				flags |= IEEE80211_CHAN_HT40PLUS;
@@ -127,18 +138,20 @@ uint32_t cds_get_vendor_reg_flags(struct wlan_objmgr_pdev *pdev,
 		bandwidth = CH_WIDTH_10MHZ;
 		fallthrough;
 	case CH_WIDTH_10MHZ:
-		if (wlan_reg_get_bonded_channel_state_for_freq(pdev, freq,
-							       bandwidth,
-							       0) !=
+		if (wlan_reg_get_bonded_channel_state_for_pwrmode(
+							pdev, freq,
+							bandwidth, 0,
+							REG_CURRENT_PWR_MODE) !=
 		     CHANNEL_STATE_INVALID &&
 		     sub_20_channel_width == WLAN_SUB_20_CH_WIDTH_10)
 			flags |= IEEE80211_CHAN_HALF;
 		bandwidth = CH_WIDTH_5MHZ;
 		fallthrough;
 	case CH_WIDTH_5MHZ:
-		if (wlan_reg_get_bonded_channel_state_for_freq(pdev, freq,
-							       bandwidth,
-							       0) !=
+		if (wlan_reg_get_bonded_channel_state_for_pwrmode(
+							pdev, freq,
+							bandwidth, 0,
+							REG_CURRENT_PWR_MODE) !=
 		    CHANNEL_STATE_INVALID &&
 		    sub_20_channel_width == WLAN_SUB_20_CH_WIDTH_5)
 			flags |= IEEE80211_CHAN_QUARTER;

@@ -34,6 +34,8 @@
 #define P2P_MAC_MGMT_ACTION                     0xD
 #define P2P_PUBLIC_ACTION_VENDOR_SPECIFIC       0x9
 #define P2P_NOA_ATTR                            0xC
+#define WNM_ACTION_FRAME                        0xA
+#define RRM_ACTION_FRAME                        0x5
 
 #define P2P_MAX_NOA_ATTR_LEN                    31
 #define P2P_IE_HEADER_LEN                       6
@@ -111,6 +113,9 @@ enum p2p_frame_sub_type {
  * @P2P_PUBLIC_ACTION_GAS_INIT_RSP:  gas initial response
  * @P2P_PUBLIC_ACTION_GAS_COMB_REQ:  gas comeback request
  * @P2P_PUBLIC_ACTION_GAS_COMB_RSP:  gas comeback response
+ * @P2P_PUBLIC_ACTION_WNM_BTM_REQ:   bss transition management request
+ * @P2P_PUBLIC_ACTION_RRM_BEACON_REQ:rrm beacon request
+ * @P2P_PUBLIC_ACTION_RRM_NEIGHBOR_RSP:rrm neighbor response
  * @P2P_PUBLIC_ACTION_NOT_SUPPORT:   not support p2p public action frame
  */
 enum p2p_public_action_type {
@@ -127,6 +132,9 @@ enum p2p_public_action_type {
 	P2P_PUBLIC_ACTION_GAS_INIT_RSP,
 	P2P_PUBLIC_ACTION_GAS_COMB_REQ,
 	P2P_PUBLIC_ACTION_GAS_COMB_RSP,
+	P2P_PUBLIC_ACTION_WNM_BTM_REQ,
+	P2P_PUBLIC_ACTION_RRM_BEACON_REQ,
+	P2P_PUBLIC_ACTION_RRM_NEIGHBOR_RSP,
 	P2P_PUBLIC_ACTION_NOT_SUPPORT,
 };
 
@@ -163,9 +171,11 @@ struct p2p_frame_info {
  * @off_chan:       Is this off channel tx
  * @no_cck:         Required cck or not
  * @no_ack:         Required ack or not
+ * @rand_mac_tx:    Use random MAC address
  * @duration:       Duration for the RoC
  * @tx_timer:       RoC timer
  * @frame_info:     Frame type information
+ * @nbuf:           Network buffer
  */
 struct tx_action_context {
 	qdf_list_node_t node;
@@ -360,7 +370,7 @@ struct tx_action_context *p2p_find_tx_ctx_by_nbuf(
 #define P2P_80211_FRM_SA_OFFSET 10
 
 /**
- * p2p_del_random_mac() - del mac fitler from given vdev rand mac list
+ * p2p_del_random_mac() - del mac filter from given vdev rand mac list
  * @soc: soc object
  * @vdev_id: vdev id
  * @rnd_cookie: random mac mgmt tx cookie

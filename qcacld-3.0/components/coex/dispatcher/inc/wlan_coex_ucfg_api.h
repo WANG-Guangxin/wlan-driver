@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,11 +25,23 @@
 #include "qdf_status.h"
 #include <wlan_objmgr_vdev_obj.h>
 #include <wlan_objmgr_psoc_obj.h>
-#include "qca_vendor.h"
+#include "wlan_coex_public_structs.h"
 
-#define WLAN_COEX_BTC_CHAIN_MODE_SHARED QCA_BTC_CHAIN_SHARED
-#define WLAN_COEX_BTC_CHAIN_MODE_SEPARATED QCA_BTC_CHAIN_SEPARATED
-#define WLAN_COEX_BTC_CHAIN_MODE_UNSETTLED 0xFF
+/**
+ * enum coex_btc_chain_mode - btc chain mode definitions
+ * @WLAN_COEX_BTC_CHAIN_MODE_SHARED: chains of BT and WLAN 2.4 GHz are shared.
+ * @WLAN_COEX_BTC_CHAIN_MODE_FDD: chains of BT and WLAN 2.4 GHz are
+ * separated, FDD mode.
+ * @WLAN_COEX_BTC_CHAIN_MODE_HYBRID: chains of BT and WLAN 2.4 GHz are
+ * separated, hybrid mode.
+ * @WLAN_COEX_BTC_CHAIN_MODE_UNSETTLED: chain mode is not set.
+ */
+enum coex_btc_chain_mode {
+	WLAN_COEX_BTC_CHAIN_MODE_SHARED = 0,
+	WLAN_COEX_BTC_CHAIN_MODE_FDD,
+	WLAN_COEX_BTC_CHAIN_MODE_HYBRID,
+	WLAN_COEX_BTC_CHAIN_MODE_UNSETTLED = 0xFF,
+};
 
 /**
  * enum coex_config_type - coex config type definitions
@@ -72,7 +85,8 @@ ucfg_coex_register_cfg_updated_handler(struct wlan_objmgr_psoc *psoc,
  * Return : status of operation
  */
 QDF_STATUS
-ucfg_coex_psoc_set_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t val);
+ucfg_coex_psoc_set_btc_chain_mode(struct wlan_objmgr_psoc *psoc,
+				  enum coex_btc_chain_mode val);
 
 /**
  * ucfg_coex_psoc_get_btc_chain_mode() - API to get BT coex chain mode from psoc
@@ -82,7 +96,8 @@ ucfg_coex_psoc_set_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t val);
  * Return : status of operation
  */
 QDF_STATUS
-ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t *val);
+ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc,
+				  enum coex_btc_chain_mode *val);
 
 /**
  * ucfg_coex_send_btc_chain_mode() - API to send BT coex config to target if
@@ -92,7 +107,31 @@ ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t *val);
  * Return: status of operation
  */
 QDF_STATUS
-ucfg_coex_send_btc_chain_mode(struct wlan_objmgr_vdev *vdev, uint8_t mode);
+ucfg_coex_send_btc_chain_mode(struct wlan_objmgr_vdev *vdev,
+			      enum coex_btc_chain_mode mode);
+
+/**
+ * ucfg_coex_send_multi_config() - API to send coex multiple config to target
+ * @vdev: pointer to vdev object
+ * @param: pointer to coex multiple config parameters
+ *
+ * Return: status of operation
+ */
+QDF_STATUS
+ucfg_coex_send_multi_config(struct wlan_objmgr_vdev *vdev,
+			    struct coex_multi_config *param);
+
+/**
+ * ucfg_coex_send_logging_config() - API to send BT coex logging config to
+ * target if
+ * @psoc: pointer to psoc object
+ * @apps_args: pointer to argument
+ *
+ * Return : status of operation
+ */
+QDF_STATUS
+ucfg_coex_send_logging_config(struct wlan_objmgr_psoc *psoc,
+			      uint32_t *apps_args);
 #else
 static inline QDF_STATUS
 ucfg_coex_register_cfg_updated_handler(struct wlan_objmgr_psoc *psoc,
@@ -103,7 +142,8 @@ ucfg_coex_register_cfg_updated_handler(struct wlan_objmgr_psoc *psoc,
 }
 
 static inline QDF_STATUS
-ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t *val)
+ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc,
+				  enum coex_btc_chain_mode *val)
 {
 	if (val)
 		*val = WLAN_COEX_BTC_CHAIN_MODE_UNSETTLED;
@@ -112,9 +152,47 @@ ucfg_coex_psoc_get_btc_chain_mode(struct wlan_objmgr_psoc *psoc, uint8_t *val)
 }
 
 static inline QDF_STATUS
-ucfg_coex_send_btc_chain_mode(struct wlan_objmgr_vdev *vdev, uint8_t mode)
+ucfg_coex_send_btc_chain_mode(struct wlan_objmgr_vdev *vdev,
+			      enum coex_btc_chain_mode mode)
 {
 	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+ucfg_coex_send_multi_config(struct wlan_objmgr_vdev *vdev,
+			    struct coex_multi_config *param)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+ucfg_coex_send_logging_config(struct wlan_objmgr_psoc *psoc,
+			      uint32_t *apps_args)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
+#ifdef WLAN_FEATURE_DBAM_CONFIG
+/**
+ * ucfg_coex_send_dbam_config() - API to send dbam config to target if
+ * @vdev: pointer to vdev object
+ * @param: DBAM config mode params
+ * @clbk: dbam config response callback
+ * @context: request manager context
+ *
+ * Return: QDF_STATUS_SUCCESS on success
+ */
+QDF_STATUS
+ucfg_coex_send_dbam_config(struct wlan_objmgr_vdev *vdev,
+			   struct coex_dbam_config_params *param,
+			   void (*clbk)(void *ctx,
+			   enum coex_dbam_comp_status *rsp),
+			   void *context);
+#else
+static inline QDF_STATUS
+ucfg_coex_send_dbam_config(void)
+{
+	return QDF_STATUS_E_NOSUPPORT;
 }
 #endif
 #endif

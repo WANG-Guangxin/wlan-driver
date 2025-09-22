@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -594,6 +594,8 @@ struct host_shadow_regs_s {
  *
  * @d_CE_DEBUG_SEL_MASK: Bits indicating Copy Engine FSM Debug Status
  *
+ * @d_HOST_CMEM_ADDRESS: Base address of CMEM
+ *
  * @d_CE_SRC_BATCH_TIMER_THRESH_MASK: SRC ring timer threshold for interrupt
  *
  * @d_CE_SRC_BATCH_COUNTER_THRESH_MASK: SRC ring counter threshold for
@@ -688,6 +690,8 @@ struct ce_reg_def {
 	uint32_t d_HOST_IE_REG2_CE_LSB;
 	uint32_t d_HOST_IE_REG3_CE_LSB;
 	uint32_t d_HOST_CE_ADDRESS;
+	uint32_t d_HOST_CMEM_ADDRESS;
+	uint32_t d_PMM_SCRATCH_BASE;
 	uint32_t d_CE_SRC_BATCH_TIMER_THRESH_MASK;
 	uint32_t d_CE_SRC_BATCH_COUNTER_THRESH_MASK;
 	uint32_t d_CE_SRC_BATCH_TIMER_THRESH_LSB;

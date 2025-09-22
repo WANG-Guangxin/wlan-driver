@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -72,10 +73,10 @@ QDF_STATUS
 wmi_unified_vdev_set_gtx_cfg_cmd(wmi_unified_t wmi_handle, uint32_t if_id,
 				 struct wmi_gtx_config *gtx_info);
 
-#if defined(WLAN_FEATURE_ROAM_OFFLOAD) && defined(FEATURE_BLACKLIST_MGR)
+#if defined(WLAN_FEATURE_ROAM_OFFLOAD) && defined(FEATURE_DENYLIST_MGR)
 /**
  * wmi_unified_send_reject_ap_list() - send the reject ap list maintained by
- * BLM to FW for roaming cases.
+ * DLM to FW for roaming cases.
  * @wmi_handle: wmi handle
  * @reject_params: This contains the reject ap list, and the num of BSSIDs.
  *
@@ -144,8 +145,8 @@ wmi_unified_wlm_latency_level_cmd(wmi_unified_t wmi_handle,
 
 /**
  * wmi_unified_process_set_ie_info_cmd() - Function to send IE info to firmware
- * @wmi_handle:    Pointer to WMi handle
- * @ie_data:       Pointer for ie data
+ * @wmi_handle:    Pointer to WMI handle
+ * @ie_info:       Pointer for IE information
  *
  * This function sends IE information to firmware
  *
@@ -196,6 +197,7 @@ QDF_STATUS wmi_unified_update_fw_tdls_state_cmd(wmi_unified_t wmi_handle,
  * wmi_unified_update_tdls_peer_state_cmd() - update TDLS peer state
  * @wmi_handle: wmi handle
  * @peer_state: TDLS peer state params
+ * @ch_mhz: peer channel list
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
  */
@@ -258,9 +260,9 @@ QDF_STATUS wmi_unified_extract_sar_limit_event(wmi_unified_t wmi_handle,
 QDF_STATUS wmi_unified_extract_sar2_result_event(void *handle,
 						 uint8_t *event, uint32_t len);
 
-/*
+/**
  * wmi_unified_set_del_pmkid_cache() - set delete PMKID
- * @wmi_handle: wma handle
+ * @wmi_handle: wmi handle
  * @pmksa: pointer to pmk cache entry
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
@@ -286,7 +288,7 @@ QDF_STATUS wmi_unified_del_ts_cmd(wmi_unified_t wmi_handle, uint8_t vdev_id,
  * @aggr_qos_rsp_msg: combined struct for all ADD_TS requests.
  *
  * A function to handle WMI_AGGR_QOS_REQ. This will send out
- * ADD_TS requestes to firmware in loop for all the ACs with
+ * ADD_TS requests to firmware in loop for all the ACs with
  * active flow.
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
@@ -397,7 +399,7 @@ QDF_STATUS wmi_unified_pdev_set_dual_mac_config_cmd(
 /**
  * wmi_unified_send_adapt_dwelltime_params_cmd() - send wmi cmd of
  * adaptive dwelltime configuration params
- * @wma_handle:  wma handler
+ * @wmi_handle:  wmi handler
  * @wmi_param: pointer to dwelltime_params
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF failure reason code for failure
@@ -409,7 +411,7 @@ QDF_STATUS wmi_unified_send_adapt_dwelltime_params_cmd(
 /**
  * wmi_unified_send_dbs_scan_sel_params_cmd() - send wmi cmd of
  * DBS scan selection configuration params
- * @wma_handle:  wma handler
+ * @wmi_handle:  wmi handler
  * @wmi_param: pointer to wmi_dbs_scan_sel_params
  *
  * Return: QDF_STATUS_SUCCESS on success and QDF failure reason code for failure

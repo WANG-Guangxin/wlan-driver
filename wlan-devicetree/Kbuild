@@ -1,7 +1,3 @@
-ifeq ($(CONFIG_ARCH_X1P42100),y)
-dtbo-y += x1p42100-kiwi-cnss.dtbo
-endif
-
 ifeq ($(CONFIG_ARCH_CANOE),y)
 dtbo-y += canoe-kiwi-cnss.dtbo
 dtbo-y += canoe-peach-cnss.dtbo
@@ -41,8 +37,6 @@ ifeq ($(CONFIG_ARCH_RAVELIN),y)
 dtbo-y += ravelin-idp-adrastea.dtbo
 dtbo-y += ravelin-qrd-adrastea.dtbo
 dtbo-y += ravelin-atp-adrastea.dtbo
-dtbo-y += ravelin-qca6490-cnss.dtbo
-dtbo-y += ravelin-qca6750-icnss.dtbo
 endif
 
 ifeq ($(CONFIG_ARCH_PARROT),y)
@@ -59,6 +53,7 @@ endif
 ifeq ($(CONFIG_ARCH_VOLCANO),y)
 dtbo-y += volcano-qca6750.dtbo
 dtbo-y += volcano6i-peach-cnss.dtbo
+dtbo-y += volcano-wcn6450.dtbo
 endif
 
 ifeq ($(CONFIG_ARCH_TUNA),y)
@@ -89,7 +84,6 @@ endif
 
 ifeq ($(CONFIG_ARCH_QTI_VM),y)
 dtbo-y += sa8797p-gunyah-vm-cnss.dtbo
-dtbo-y += monaco-vm-cnss.dtbo
 endif
 
 ifeq ($(CONFIG_ARCH_YUPIK),y)

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -90,6 +90,7 @@ static const struct proc_ops pktlog_fops = {
 	.proc_open = pktlog_open,
 	.proc_release = pktlog_release,
 	.proc_read = pktlog_read,
+	.proc_lseek = default_llseek,
 };
 #else
 static struct file_operations pktlog_fops = {
@@ -209,7 +210,6 @@ qdf_sysctl_decl(ath_sysctl_pktlog_enable, ctl, write, filp, buffer, lenp, ppos)
 	int ret, enable;
 	ol_ath_generic_softc_handle scn;
 	struct pktlog_dev_t *pl_dev;
-	struct ctl_table tmp = *ctl;
 
 	mutex_lock(&proc_mutex);
 	scn = (ol_ath_generic_softc_handle) ctl->extra1;
@@ -230,11 +230,11 @@ qdf_sysctl_decl(ath_sysctl_pktlog_enable, ctl, write, filp, buffer, lenp, ppos)
 		return -ENODEV;
 	}
 
-	tmp.data = &enable;
-	tmp.maxlen = sizeof(enable);
+	ctl->data = &enable;
+	ctl->maxlen = sizeof(enable);
 
 	if (write) {
-		ret = QDF_SYSCTL_PROC_DOINTVEC(&tmp, write, filp, buffer,
+		ret = QDF_SYSCTL_PROC_DOINTVEC(ctl, write, filp, buffer,
 					       lenp, ppos);
 		if (ret == 0) {
 			ret = pl_dev->pl_funcs->pktlog_enable(
@@ -246,7 +246,7 @@ qdf_sysctl_decl(ath_sysctl_pktlog_enable, ctl, write, filp, buffer, lenp, ppos)
 				  "Line:%d %s:proc_dointvec failed reason %d",
 				   __LINE__, __func__, ret);
 	} else {
-		ret = QDF_SYSCTL_PROC_DOINTVEC(&tmp, write, filp, buffer,
+		ret = QDF_SYSCTL_PROC_DOINTVEC(ctl, write, filp, buffer,
 					       lenp, ppos);
 		if (ret)
 			QDF_TRACE(QDF_MODULE_ID_SYS, QDF_TRACE_LEVEL_DEBUG,
@@ -254,6 +254,8 @@ qdf_sysctl_decl(ath_sysctl_pktlog_enable, ctl, write, filp, buffer, lenp, ppos)
 				   __LINE__, __func__, ret);
 	}
 
+	ctl->data = NULL;
+	ctl->maxlen = 0;
 	mutex_unlock(&proc_mutex);
 
 	return ret;
@@ -271,7 +273,6 @@ qdf_sysctl_decl(ath_sysctl_pktlog_size, ctl, write, filp, buffer, lenp, ppos)
 	int ret, size;
 	ol_ath_generic_softc_handle scn;
 	struct pktlog_dev_t *pl_dev;
-	struct ctl_table tmp = *ctl;
 
 	mutex_lock(&proc_mutex);
 	scn = (ol_ath_generic_softc_handle) ctl->extra1;
@@ -292,21 +293,23 @@ qdf_sysctl_decl(ath_sysctl_pktlog_size, ctl, write, filp, buffer, lenp, ppos)
 		return -ENODEV;
 	}
 
-	tmp.data = &size;
-	tmp.maxlen = sizeof(size);
+	ctl->data = &size;
+	ctl->maxlen = sizeof(size);
 
 	if (write) {
-		ret = QDF_SYSCTL_PROC_DOINTVEC(&tmp, write, filp, buffer,
+		ret = QDF_SYSCTL_PROC_DOINTVEC(ctl, write, filp, buffer,
 					       lenp, ppos);
 		if (ret == 0)
 			ret = pl_dev->pl_funcs->pktlog_setsize(
 					(struct hif_opaque_softc *)scn, size);
 	} else {
 		size = get_pktlog_bufsize(pl_dev);
-		ret = QDF_SYSCTL_PROC_DOINTVEC(&tmp, write, filp, buffer,
+		ret = QDF_SYSCTL_PROC_DOINTVEC(ctl, write, filp, buffer,
 					       lenp, ppos);
 	}
 
+	ctl->data = NULL;
+	ctl->maxlen = 0;
 	mutex_unlock(&proc_mutex);
 
 	return ret;

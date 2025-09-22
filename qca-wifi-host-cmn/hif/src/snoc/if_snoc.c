@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -20,7 +20,7 @@
 /**
  * DOC: if_snoc.c
  *
- * c file for snoc specif implementations.
+ * c file for snoc specific implementations.
  */
 
 #include "hif.h"
@@ -40,11 +40,10 @@
 #include "target_type.h"
 
 /**
- * hif_disable_isr(): disable isr
+ * hif_snoc_disable_isr(): disable isr
+ * @scn: struct hif_softc
  *
  * This function disables isr and kills tasklets
- *
- * @hif_ctx: struct hif_softc
  *
  * Return: void
  */
@@ -58,7 +57,7 @@ void hif_snoc_disable_isr(struct hif_softc *scn)
 }
 
 /**
- * hif_dump_registers(): dump bus debug registers
+ * hif_snoc_dump_registers(): dump bus debug registers
  * @hif_ctx: struct hif_opaque_softc
  *
  * This function dumps hif bus debug registers
@@ -99,6 +98,7 @@ void hif_snoc_clear_stats(struct hif_softc *hif_ctx)
 
 /**
  * hif_snoc_close(): hif_bus_close
+ * @scn: pointer to the hif context.
  *
  * Return: n/a
  */
@@ -108,11 +108,11 @@ void hif_snoc_close(struct hif_softc *scn)
 }
 
 /**
- * hif_bus_open(): hif_bus_open
+ * hif_snoc_open(): hif_bus_open
  * @hif_ctx: hif context
  * @bus_type: bus type
  *
- * Return: n/a
+ * Return: QDF_STATUS
  */
 QDF_STATUS hif_snoc_open(struct hif_softc *hif_ctx, enum qdf_bus_type bus_type)
 {
@@ -121,11 +121,12 @@ QDF_STATUS hif_snoc_open(struct hif_softc *hif_ctx, enum qdf_bus_type bus_type)
 
 /**
  * hif_snoc_get_soc_info() - populates scn with hw info
+ * @scn: pointer to the hif context.
  *
  * fills in the virtual and physical base address as well as
  * soc version info.
  *
- * return 0 or QDF_STATUS_E_FAILURE
+ * Return: QDF_STATUS_SUCCESS or QDF_STATUS_E_FAILURE
  */
 static QDF_STATUS hif_snoc_get_soc_info(struct hif_softc *scn)
 {
@@ -150,7 +151,7 @@ static QDF_STATUS hif_snoc_get_soc_info(struct hif_softc *scn)
 }
 
 /**
- * hif_bus_configure() - configure the snoc bus
+ * hif_snoc_bus_configure() - configure the snoc bus
  * @scn: pointer to the hif context.
  *
  * return: 0 for success. nonzero for failure.
@@ -251,7 +252,8 @@ static int hif_set_dma_coherent_mask(qdf_device_t osdev)
 #endif
 
 /**
- * hif_enable_bus(): hif_enable_bus
+ * hif_snoc_enable_bus(): hif_enable_bus
+ * @ol_sc: HIF context
  * @dev: dev
  * @bdev: bus dev
  * @bid: bus id
@@ -299,7 +301,7 @@ QDF_STATUS hif_snoc_enable_bus(struct hif_softc *ol_sc,
 	hif_register_tbl_attach(ol_sc, hif_type);
 	hif_target_register_tbl_attach(ol_sc, target_type);
 
-	/* the bus should remain on durring suspend for snoc */
+	/* the bus should remain on during suspend for snoc */
 	hif_vote_link_up(GET_HIF_OPAQUE_HDL(ol_sc));
 
 	hif_debug("X - hif_type = 0x%x, target_type = 0x%x",
@@ -309,11 +311,10 @@ QDF_STATUS hif_snoc_enable_bus(struct hif_softc *ol_sc,
 }
 
 /**
- * hif_disable_bus(): hif_disable_bus
+ * hif_snoc_disable_bus(): hif_disable_bus
+ * @scn: HIF context
  *
  * This function disables the bus
- *
- * @bdev: bus dev
  *
  * Return: none
  */
@@ -329,11 +330,10 @@ void hif_snoc_disable_bus(struct hif_softc *scn)
 }
 
 /**
- * hif_nointrs(): disable IRQ
+ * hif_snoc_nointrs(): disable IRQ
+ * @scn: struct hif_softc
  *
  * This function stops interrupt(s)
- *
- * @scn: struct hif_softc
  *
  * Return: none
  */
@@ -346,7 +346,7 @@ void hif_snoc_nointrs(struct hif_softc *scn)
 }
 
 /**
- * ce_irq_enable() - enable copy engine IRQ
+ * hif_snoc_irq_enable() - enable copy engine IRQ
  * @scn: struct hif_softc
  * @ce_id: ce_id
  *
@@ -359,7 +359,7 @@ void hif_snoc_irq_enable(struct hif_softc *scn,
 }
 
 /**
- * ce_irq_disable() - disable copy engine IRQ
+ * hif_snoc_irq_disable() - disable copy engine IRQ
  * @scn: struct hif_softc
  * @ce_id: ce_id
  *
@@ -370,9 +370,10 @@ void hif_snoc_irq_disable(struct hif_softc *scn, int ce_id)
 	ce_disable_irq_in_individual_register(scn, ce_id);
 }
 
-/*
+/**
  * hif_snoc_setup_wakeup_sources() - enable/disable irq wake on correct irqs
- * @hif_softc: hif context
+ * @scn: hif context
+ * @enable: true to enable
  *
  * Firmware will send a wakeup request to the HTC_CTRL_RSVD_SVC when waking up
  * the host driver. Ensure that the copy complete interrupt from this copy
@@ -421,7 +422,7 @@ int hif_snoc_bus_suspend(struct hif_softc *scn)
  * @scn: hif context
  *
  * Clear wakeup interrupt configuration.
- * Reenable ce interrupts
+ * Re-enable ce interrupts
  *
  * Return: 0 on success
  */
@@ -438,7 +439,7 @@ int hif_snoc_bus_resume(struct hif_softc *scn)
  * @scn: hif context
  *
  * Ensure that if we received the wakeup message before the irq
- * was disabled that the message is pocessed before suspending.
+ * was disabled that the message is processed before suspending.
  *
  * Return: -EBUSY if we fail to flush the tasklets.
  */
@@ -484,20 +485,20 @@ bool hif_snoc_needs_bmi(struct hif_softc *scn)
 #ifdef FEATURE_ENABLE_CE_DP_IRQ_AFFINE
 static void hif_snoc_ce_dp_irq_set_affinity_hint(struct hif_softc *scn)
 {
-	struct CE_state *ce_state;
-	qdf_cpu_mask ce_cpu_mask;
-	unsigned int cpus;
-	int ce_id;
 	int ret, irq;
+	unsigned int cpus;
+	struct CE_state *ce_state;
+	int ce_id;
+	qdf_cpu_mask ce_cpu_mask, updated_mask;
+	int perf_cpu_cluster = hif_get_perf_cluster_bitmap();
+	int package_id;
 
 	qdf_cpumask_clear(&ce_cpu_mask);
 
 	qdf_for_each_online_cpu(cpus) {
-		if (qdf_topology_physical_package_id(cpus) ==
-			CPU_CLUSTER_TYPE_PERF) {
-			qdf_cpumask_set_cpu(cpus,
-					    &ce_cpu_mask);
-		}
+		package_id = qdf_topology_physical_package_id(cpus);
+		if (package_id >= 0 && BIT(package_id) & perf_cpu_cluster)
+			qdf_cpumask_set_cpu(cpus, &ce_cpu_mask);
 	}
 
 	if (qdf_cpumask_empty(&ce_cpu_mask)) {
@@ -510,14 +511,16 @@ static void hif_snoc_ce_dp_irq_set_affinity_hint(struct hif_softc *scn)
 		if (!ce_state || !ce_state->htt_rx_data)
 			continue;
 
+		qdf_cpumask_copy(&updated_mask, &ce_cpu_mask);
 		irq = pld_get_irq(scn->qdf_dev->dev, ce_id);
-		ret = hif_irq_set_affinity_hint(irq, &ce_cpu_mask);
+		ret = hif_affinity_mgr_set_ce_irq_affinity(scn, irq, ce_id,
+							   &updated_mask);
 		if (ret)
-			hif_err_rl("Set affinity %*pbl fails for CE DP IRQ %d",
-				   qdf_cpumask_pr_args(&ce_cpu_mask), irq);
+			hif_err_rl("Set affinity %*pbl fails for CE IRQ %d",
+				   qdf_cpumask_pr_args(&updated_mask), irq);
 		else
-			hif_debug_rl("Set affinity %*pbl for CE DP IRQ: %d",
-				     qdf_cpumask_pr_args(&ce_cpu_mask), irq);
+			hif_debug_rl("Set affinity %*pbl for CE IRQ: %d",
+				     qdf_cpumask_pr_args(&updated_mask), irq);
 	}
 }
 

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -70,12 +71,40 @@ wlan_psoc_get_mgmt_rx_reo_txops(struct wlan_objmgr_psoc *psoc)
 }
 
 /**
+ * tgt_mgmt_rx_reo_get_num_active_hw_links() - Get number of active MLO HW
+ * links
+ * @psoc: Pointer to psoc object
+ * @num_active_hw_links: pointer to number of active MLO HW links
+ *
+ * Get number of active MLO HW links from the MLO global shared memory arena.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_mgmt_rx_reo_get_num_active_hw_links(struct wlan_objmgr_psoc *psoc,
+					int8_t *num_active_hw_links);
+
+/**
+ * tgt_mgmt_rx_reo_get_valid_hw_link_bitmap() - Get valid MLO HW link bitmap
+ * @psoc: Pointer to psoc object
+ * @valid_hw_link_bitmap: Pointer to valid MLO HW link bitmap
+ *
+ * Get valid MLO HW link bitmap from the MLO global shared memory arena.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_mgmt_rx_reo_get_valid_hw_link_bitmap(struct wlan_objmgr_psoc *psoc,
+					 uint16_t *valid_hw_link_bitmap);
+
+/**
  * tgt_mgmt_rx_reo_read_snapshot() - Read management rx-reorder snapshot
  * @pdev: Pointer to pdev object
- * @address: Snapshot address
+ * @snapshot_info: Snapshot info
  * @id: Snapshot ID
  * @value: Pointer to the snapshot value where the snapshot
  * should be written
+ * @raw_snapshot: Raw snapshot data
  *
  * Read management rx-reorder snapshots from target.
  *
@@ -84,9 +113,11 @@ wlan_psoc_get_mgmt_rx_reo_txops(struct wlan_objmgr_psoc *psoc)
 QDF_STATUS
 tgt_mgmt_rx_reo_read_snapshot(
 			struct wlan_objmgr_pdev *pdev,
-			struct mgmt_rx_reo_snapshot *address,
+			struct mgmt_rx_reo_snapshot_info *snapshot_info,
 			enum mgmt_rx_reo_shared_snapshot_id id,
-			struct mgmt_rx_reo_snapshot_params *value);
+			struct mgmt_rx_reo_snapshot_params *value,
+			struct mgmt_rx_reo_shared_snapshot (*raw_snapshot)
+			[MGMT_RX_REO_SNAPSHOT_B2B_READ_SWAR_RETRY_LIMIT]);
 
 /**
  * tgt_mgmt_rx_reo_fw_consumed_event_handler() - MGMT Rx REO FW consumed
@@ -111,20 +142,19 @@ QDF_STATUS tgt_mgmt_rx_reo_filter_config(struct wlan_objmgr_pdev *pdev,
 					 struct mgmt_rx_reo_filter *filter);
 
 /**
- * tgt_mgmt_rx_reo_get_snapshot_address() - Get management rx-reorder
- * snapshot address(virtual address) in host memory
+ * tgt_mgmt_rx_reo_get_snapshot_info() - Get information regarding management
+ * rx-reorder snapshot
  * @pdev: Pointer to pdev object
  * @id: Snapshot ID
- * @snapshot_address: Pointer to snapshot address where the address
- * needs to be written
+ * @snapshot_info: Pointer to snapshot info
  *
  * Return: QDF_STATUS
  */
 QDF_STATUS
-tgt_mgmt_rx_reo_get_snapshot_address(
-			struct wlan_objmgr_pdev *pdev,
-			enum mgmt_rx_reo_shared_snapshot_id id,
-			struct mgmt_rx_reo_snapshot **address);
+tgt_mgmt_rx_reo_get_snapshot_info
+			(struct wlan_objmgr_pdev *pdev,
+			 enum mgmt_rx_reo_shared_snapshot_id id,
+			 struct mgmt_rx_reo_snapshot_info *snapshot_info);
 
 /**
  * tgt_mgmt_rx_reo_frame_handler() - REO handler for management Rx frames.
@@ -151,6 +181,26 @@ QDF_STATUS tgt_mgmt_rx_reo_frame_handler(
 QDF_STATUS
 tgt_mgmt_rx_reo_host_drop_handler(struct wlan_objmgr_pdev *pdev,
 				  struct mgmt_rx_reo_params *params);
+
+/**
+ * tgt_mgmt_rx_reo_release_frames() - Release management frames which are ready
+ * for delivery
+ * @psoc: Pointer to psoc object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_mgmt_rx_reo_release_frames(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * tgt_mgmt_rx_reo_schedule_delivery() - Helper API to schedule the delivery of
+ * a management frame.
+ * @psoc: Pointer to psoc object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_mgmt_rx_reo_schedule_delivery(struct wlan_objmgr_psoc *psoc);
 #else
 /**
  * tgt_mgmt_rx_reo_frame_handler() - REO handler for management Rx frames.

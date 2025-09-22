@@ -209,7 +209,6 @@
 			 " {class: wlan_pdc, ss: rf, res: S4D0.v, upval: 1860}",
 			 " {class: wlan_pdc, ss: rf, res: S4D0.v, dwnval: 1820}",
 			 " {class: wlan_pdc, ss: rf, res: S2D0.m, enable: 0}",
-			 " {class: wlan_pdc, ss: rf, res: S2D0.v, enable: 0}",
 			 " {class: wlan_pdc, ss: rf, res: L16B0.m, enable: 0}",
 			 " {class: wlan_pdc, ss: rf, res: B1B0.m, enable: 0}",
 			 " {class: wlan_pdc, ss: rf, res: S1L0.m, enable: 1}",

@@ -17,7 +17,6 @@
 #define QMI_WLFW_INI_FILE_DOWNLOAD_RESP_V01 0x0056
 #define QMI_WLFW_CAL_REPORT_REQ_V01 0x0026
 #define QMI_WLFW_M3_INFO_RESP_V01 0x003C
-#define QMI_WLFW_XO_TRIM_IND_V01 0x0064
 #define QMI_WLFW_CAL_REPORT_RESP_V01 0x0026
 #define QMI_WLFW_PCIE_LINK_CTRL_RESP_V01 0x0059
 #define QMI_WLFW_MISC_REQ_V01 0x0063
@@ -466,8 +465,6 @@ enum wlfw_gpio_output_value_type_v01 {
 enum wlfw_misc_req_enum_v01 {
 	WLFW_MISC_REQ_ENUM_MIN_VAL_V01 = INT_MIN,
 	WLFW_REQ_BT_DUMP_V01 = 0,
-	WLFW_REQ_XO_TRIM_SUCCESS_V01 = 1,
-	WLFW_REQ_XO_TRIM_FAIL_V01 = 2,
 	WLFW_MISC_REQ_ENUM_MAX_VAL_V01 = INT_MAX,
 };
 
@@ -742,10 +739,8 @@ struct wlfw_ind_register_req_msg_v01 {
 	u8 async_data_enable;
 	u8 dump_ddr_region_enable_valid;
 	u8 dump_ddr_region_enable;
-	u8 xo_trim_enable_valid;
-	u8 xo_trim_enable;
 };
-#define WLFW_IND_REGISTER_REQ_MSG_V01_MAX_MSG_LEN 102
+#define WLFW_IND_REGISTER_REQ_MSG_V01_MAX_MSG_LEN 98
 extern struct qmi_elem_info wlfw_ind_register_req_msg_v01_ei[];
 
 struct wlfw_ind_register_resp_msg_v01 {
@@ -1821,11 +1816,5 @@ struct wlfw_misc_resp_msg_v01 {
 };
 #define WLFW_MISC_RESP_MSG_V01_MAX_MSG_LEN 7
 extern struct qmi_elem_info wlfw_misc_resp_msg_v01_ei[];
-
-struct wlfw_xo_trim_ind_msg_v01 {
-	u8 trim_val;
-};
-#define WLFW_XO_TRIM_IND_MSG_V01_MAX_MSG_LEN 4
-extern struct qmi_elem_info wlfw_xo_trim_ind_msg_v01_ei[];
 
 #endif

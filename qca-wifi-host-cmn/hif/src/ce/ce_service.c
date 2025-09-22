@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -87,7 +87,8 @@ void hif_ce_war_enable(void)
  * Note: For MCL, #if defined (HIF_CONFIG_SLUB_DEBUG_ON) needs to be checked
  * for defined here
  */
-#if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF)
+#if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) ||\
+	defined(RECORD_DP_CE_EVTS)
 
 #define CE_DEBUG_PRINT_BUF_SIZE(x) (((x) * 3) - 1)
 #define CE_DEBUG_DATA_PER_ROW 16
@@ -215,25 +216,25 @@ void hif_record_latest_evt(struct ce_desc_hist *ce_hist,
 			idx = 1;
 		latest_evts[idx].irq_entry_ts = time;
 		latest_evts[idx].cpu_id = qdf_get_cpu();
-		return;
+		break;
 	case HIF_CE_TASKLET_ENTRY:
 		if (latest_evts[idx].bh_entry_ts >
 		    latest_evts[idx + 1].bh_entry_ts)
 			idx = 1;
 		latest_evts[idx].bh_entry_ts = time;
-		return;
+		break;
 	case HIF_CE_TASKLET_RESCHEDULE:
 		if (latest_evts[idx].bh_resched_ts >
 		    latest_evts[idx + 1].bh_resched_ts)
 			idx = 1;
 		latest_evts[idx].bh_resched_ts = time;
-		return;
+		break;
 	case HIF_CE_TASKLET_EXIT:
 		if (latest_evts[idx].bh_exit_ts >
 		    latest_evts[idx + 1].bh_exit_ts)
 			idx = 1;
 		latest_evts[idx].bh_exit_ts = time;
-		return;
+		break;
 	case HIF_TX_DESC_COMPLETION:
 	case HIF_CE_DEST_STATUS_RING_REAP:
 		if (latest_evts[idx].bh_work_ts >
@@ -242,12 +243,40 @@ void hif_record_latest_evt(struct ce_desc_hist *ce_hist,
 		latest_evts[idx].bh_work_ts = time;
 		latest_evts[idx].ring_hp = hp;
 		latest_evts[idx].ring_tp = tp;
-		return;
+		break;
 	default:
-		return;
+		break;
 	}
 }
 
+#ifdef RECORD_DP_CE_EVTS
+/**
+ * is_evt_hist_allowed() - check if event history is allowed basis on
+ * the event mask allowed for that ce id.
+ * @ce_hist: ce history member
+ * @ce_id: ce id on which event is occurring on
+ * @type: event type
+ * Return: true if event is allowed else false.
+ */
+static inline bool
+is_evt_hist_allowed(struct ce_desc_hist *ce_hist, int ce_id,
+		    enum hif_ce_event_type type)
+{
+	uint64_t evt_mask = ce_hist->evt_mask[ce_id];
+
+	if (evt_mask & (1ULL << type))
+		return true;
+	else
+		return false;
+}
+#else
+static inline bool
+is_evt_hist_allowed(struct ce_desc_hist *ce_hist, int ce_id,
+		    enum hif_ce_event_type type)
+{
+	return true;
+}
+#endif /* RECORD_DP_CE_EVTS */
 /**
  * hif_record_ce_desc_event() - record ce descriptor events
  * @scn: hif_softc
@@ -256,6 +285,7 @@ void hif_record_latest_evt(struct ce_desc_hist *ce_hist,
  * @descriptor: pointer to the descriptor posted/completed
  * @memory: virtual address of buffer related to the descriptor
  * @index: index that the descriptor was/will be at.
+ * @len:
  */
 void hif_record_ce_desc_event(struct hif_softc *scn, int ce_id,
 				enum hif_ce_event_type type,
@@ -274,10 +304,7 @@ void hif_record_ce_desc_event(struct hif_softc *scn, int ce_id,
 	else
 		return;
 
-	if (ce_id >= CE_COUNT_MAX)
-		return;
-
-	if (!ce_hist->enable[ce_id])
+	if (!ce_hist->enable[ce_id] && is_evt_hist_allowed(ce_hist, ce_id, type))
 		return;
 
 	if (!hist_ev)
@@ -314,6 +341,7 @@ qdf_export_symbol(hif_record_ce_desc_event);
 
 /**
  * ce_init_ce_desc_event_log() - initialize the ce event log
+ * @scn: HIF context
  * @ce_id: copy engine id for which we are initializing the log
  * @size: size of array to dedicate
  *
@@ -328,6 +356,7 @@ void ce_init_ce_desc_event_log(struct hif_softc *scn, int ce_id, int size)
 
 /**
  * ce_deinit_ce_desc_event_log() - deinitialize the ce event log
+ * @scn: HIF context
  * @ce_id: copy engine id for which we are deinitializing the log
  *
  */
@@ -338,7 +367,7 @@ inline void ce_deinit_ce_desc_event_log(struct hif_softc *scn, int ce_id)
 	qdf_mutex_destroy(&ce_hist->ce_dbg_datamem_lock[ce_id]);
 }
 
-#else /* (HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) */
+#else
 void hif_record_ce_desc_event(struct hif_softc *scn,
 		int ce_id, enum hif_ce_event_type type,
 		union ce_desc *descriptor, void *memory,
@@ -355,8 +384,7 @@ inline void ce_init_ce_desc_event_log(struct hif_softc *scn, int ce_id,
 void ce_deinit_ce_desc_event_log(struct hif_softc *scn, int ce_id)
 {
 }
-#endif /*defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) */
-
+#endif
 #ifdef NAPI_YIELD_BUDGET_BASED
 bool hif_ce_service_should_yield(struct hif_softc *scn,
 				 struct CE_state *ce_state)
@@ -364,8 +392,8 @@ bool hif_ce_service_should_yield(struct hif_softc *scn,
 	bool yield =  hif_max_num_receives_reached(scn, ce_state->receive_count);
 
 	/* Setting receive_count to MAX_NUM_OF_RECEIVES when this count goes
-	 * beyond MAX_NUM_OF_RECEIVES for NAPI backet calulation issue. This
-	 * can happen in fast path handling as processing is happenning in
+	 * beyond MAX_NUM_OF_RECEIVES for NAPI backet calculation issue. This
+	 * can happen in fast path handling as processing is happening in
 	 * batches.
 	 */
 	if (yield)
@@ -394,8 +422,8 @@ bool hif_ce_service_should_yield(struct hif_softc *scn,
 					(scn, ce_state->receive_count);
 
 	/* Setting receive_count to MAX_NUM_OF_RECEIVES when this count goes
-	 * beyond MAX_NUM_OF_RECEIVES for NAPI backet calulation issue. This
-	 * can happen in fast path handling as processing is happenning in
+	 * beyond MAX_NUM_OF_RECEIVES for NAPI backet calculation issue. This
+	 * can happen in fast path handling as processing is happening in
 	 * batches.
 	 */
 	if (rxpkt_thresh_reached)
@@ -415,6 +443,39 @@ bool hif_ce_service_should_yield(struct hif_softc *scn,
 }
 qdf_export_symbol(hif_ce_service_should_yield);
 #endif
+
+void ce_flush_tx_ring_write_idx(struct CE_handle *ce_tx_hdl, bool force_flush)
+{
+	struct CE_state *ce_state = (struct CE_state *)ce_tx_hdl;
+	struct CE_ring_state *src_ring = ce_state->src_ring;
+	struct hif_softc *scn = ce_state->scn;
+
+	if (force_flush)
+		ce_ring_set_event(src_ring, CE_RING_FLUSH_EVENT);
+
+	if (ce_ring_get_clear_event(src_ring, CE_RING_FLUSH_EVENT)) {
+		qdf_spin_lock_bh(&ce_state->ce_index_lock);
+		CE_SRC_RING_WRITE_IDX_SET(scn, ce_state->ctrl_addr,
+					  src_ring->write_index);
+		qdf_spin_unlock_bh(&ce_state->ce_index_lock);
+
+		src_ring->last_flush_ts = qdf_get_log_timestamp();
+		hif_debug("flushed");
+	}
+}
+
+/* Make sure this wrapper is called under ce_index_lock */
+void ce_tx_ring_write_idx_update_wrapper(struct CE_handle *ce_tx_hdl,
+					 int coalesce)
+{
+	struct CE_state *ce_state = (struct CE_state *)ce_tx_hdl;
+	struct CE_ring_state *src_ring = ce_state->src_ring;
+	struct hif_softc *scn = ce_state->scn;
+
+	if (!coalesce)
+		CE_SRC_RING_WRITE_IDX_SET(scn, ce_state->ctrl_addr,
+					  src_ring->write_index);
+}
 
 /*
  * Guts of ce_send, used by both ce_send and ce_sendlist_send.
@@ -751,7 +812,7 @@ QDF_STATUS ce_send_single(struct CE_handle *ce_tx_hdl, qdf_nbuf_t msdu,
 
 /**
  * ce_recv_buf_enqueue() - enqueue a recv buffer into a copy engine
- * @coyeng: copy engine handle
+ * @copyeng: copy engine handle
  * @per_recv_context: virtual address of the nbuf
  * @buffer: physical address of the nbuf
  *
@@ -923,7 +984,7 @@ ce_completed_send_next(struct CE_handle *copyeng,
  * does receive and reaping of completed descriptor ,
  * This function only handles reaping of Tx complete descriptor.
  * The Function is called from threshold reap  poll routine
- * hif_send_complete_check so should not countain receive functionality
+ * hif_send_complete_check so should not contain receive functionality
  * within it .
  */
 
@@ -1165,7 +1226,7 @@ more_watermarks:
 	 * more copy completions happened while the misc interrupts were being
 	 * handled.
 	 */
-	if (!ce_srng_based(scn)) {
+	if (!ce_srng_based(scn) && !CE_state->msi_supported) {
 		if (TARGET_REGISTER_ACCESS_ALLOWED(scn)) {
 			CE_ENGINE_INT_STATUS_CLEAR(scn, ctrl_addr,
 					   CE_WATERMARK_MASK |
@@ -1192,7 +1253,8 @@ more_watermarks:
 		    more_comp_cnt++ < CE_TXRX_COMP_CHECK_THRESHOLD) {
 			goto more_completions;
 		} else {
-			if (!ce_srng_based(scn)) {
+			if (!ce_srng_based(scn) &&
+			    !CE_state->batch_intr_supported) {
 				hif_err_rl(
 					"Potential infinite loop detected during Rx processing id:%u nentries_mask:0x%x sw read_idx:0x%x hw read_idx:0x%x",
 					CE_state->id,
@@ -1211,7 +1273,8 @@ more_watermarks:
 		    more_snd_comp_cnt++ < CE_TXRX_COMP_CHECK_THRESHOLD) {
 			goto more_completions;
 		} else {
-			if (!ce_srng_based(scn)) {
+			if (!ce_srng_based(scn) &&
+			    !CE_state->batch_intr_supported) {
 				hif_err_rl(
 					"Potential infinite loop detected during send completion id:%u mask:0x%x sw read_idx:0x%x hw_index:0x%x write_index: 0x%x hw read_idx:0x%x",
 					CE_state->id,
@@ -1301,7 +1364,7 @@ qdf_export_symbol(ce_per_engine_service);
 /*
  * Handler for per-engine interrupts on ALL active CEs.
  * This is used in cases where the system is sharing a
- * single interrput for all CEs
+ * single interrupt for all CEs
  */
 
 void ce_per_engine_service_any(int irq, struct hif_softc *scn)
@@ -1395,7 +1458,8 @@ void ce_enable_any_copy_compl_intr_nolock(struct hif_softc *scn)
  * ce_send_cb_register(): register completion handler
  * @copyeng: CE_state representing the ce we are adding the behavior to
  * @fn_ptr: callback that the ce should use when processing tx completions
- * @disable_interrupts: if the interupts should be enabled or not.
+ * @ce_send_context: context to pass back in the callback
+ * @disable_interrupts: if the interrupts should be enabled or not.
  *
  * Caller should guarantee that no transactions are in progress before
  * switching the callback function.
@@ -1435,7 +1499,8 @@ qdf_export_symbol(ce_send_cb_register);
  * ce_recv_cb_register(): register completion handler
  * @copyeng: CE_state representing the ce we are adding the behavior to
  * @fn_ptr: callback that the ce should use when processing rx completions
- * @disable_interrupts: if the interupts should be enabled or not.
+ * @CE_recv_context: context to pass back in the callback
+ * @disable_interrupts: if the interrupts should be enabled or not.
  *
  * Registers the send context before the fn pointer so that if the cb is valid
  * the context should be valid.
@@ -1473,6 +1538,7 @@ qdf_export_symbol(ce_recv_cb_register);
  * ce_watermark_cb_register(): register completion handler
  * @copyeng: CE_state representing the ce we are adding the behavior to
  * @fn_ptr: callback that the ce should use when processing watermark events
+ * @CE_wm_context: context to pass back in the callback
  *
  * Caller should guarantee that no watermark events are being processed before
  * switching the callback function.
@@ -1492,6 +1558,53 @@ ce_watermark_cb_register(struct CE_handle *copyeng,
 	if (fn_ptr)
 		CE_state->misc_cbs = 1;
 }
+
+#ifdef CUSTOM_CB_SCHEDULER_SUPPORT
+void
+ce_register_custom_cb(struct CE_handle *copyeng, void (*custom_cb)(void *),
+		      void *custom_cb_context)
+{
+	struct CE_state *CE_state = (struct CE_state *)copyeng;
+
+	CE_state->custom_cb = custom_cb;
+	CE_state->custom_cb_context = custom_cb_context;
+	qdf_atomic_init(&CE_state->custom_cb_pending);
+}
+
+void
+ce_unregister_custom_cb(struct CE_handle *copyeng)
+{
+	struct CE_state *CE_state = (struct CE_state *)copyeng;
+
+	qdf_assert_always(!qdf_atomic_read(&CE_state->custom_cb_pending));
+	CE_state->custom_cb = NULL;
+	CE_state->custom_cb_context = NULL;
+}
+
+void
+ce_enable_custom_cb(struct CE_handle *copyeng)
+{
+	struct CE_state *CE_state = (struct CE_state *)copyeng;
+	int32_t custom_cb_pending;
+
+	qdf_assert_always(CE_state->custom_cb);
+	qdf_assert_always(CE_state->custom_cb_context);
+
+	custom_cb_pending = qdf_atomic_inc_return(&CE_state->custom_cb_pending);
+	qdf_assert_always(custom_cb_pending >= 1);
+}
+
+void
+ce_disable_custom_cb(struct CE_handle *copyeng)
+{
+	struct CE_state *CE_state = (struct CE_state *)copyeng;
+
+	qdf_assert_always(CE_state->custom_cb);
+	qdf_assert_always(CE_state->custom_cb_context);
+
+	qdf_atomic_dec_if_positive(&CE_state->custom_cb_pending);
+}
+#endif /* CUSTOM_CB_SCHEDULER_SUPPORT */
 
 bool ce_get_rx_pending(struct hif_softc *scn)
 {
@@ -1557,7 +1670,7 @@ static qdf_dma_addr_t ce_ipa_get_wr_index_addr(struct CE_state *CE_state)
  * Micro controller needs
  *  - Copy engine source descriptor base address
  *  - Copy engine source descriptor size
- *  - PCI BAR address to access copy engine regiser
+ *  - PCI BAR address to access copy engine register
  *
  * Return: None
  */
@@ -1649,7 +1762,8 @@ static uint32_t hif_dump_desc_data_buf(uint8_t *buf, ssize_t pos,
  * Note: For MCL, #if defined (HIF_CONFIG_SLUB_DEBUG_ON) needs to be checked
  * for defined here
  */
-#if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF)
+#if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) ||\
+	defined(RECORD_DP_CE_EVTS)
 static const char *ce_event_type_to_str(enum hif_ce_event_type type)
 {
 	switch (type) {
@@ -1710,9 +1824,8 @@ static const char *ce_event_type_to_str(enum hif_ce_event_type type)
 
 /**
  * hif_dump_desc_event() - record ce descriptor events
+ * @scn: HIF context
  * @buf: Buffer to which to be copied
- * @ce_id: which ce is the event occurring on
- * @index: index that the descriptor was/will be at.
  */
 ssize_t hif_dump_desc_event(struct hif_softc *scn, char *buf)
 {
@@ -1816,7 +1929,9 @@ ssize_t hif_input_desc_trace_buf_index(struct hif_softc *scn,
 	return size;
 }
 
-#endif /*defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) */
+#endif /* defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) ||
+	* defined(RECORD_DP_CE_EVTS)
+	*/
 
 #ifdef HIF_CE_DEBUG_DATA_BUF
 /*
@@ -2079,7 +2194,14 @@ static uint8_t *hif_log_dest_ce_dump(struct CE_ring_state *dest_ring,
 }
 
 /**
- * hif_log_ce_dump() - Copy all the CE DEST ring to buf
+ * hif_log_dump_ce() - Copy all the CE DEST ring to buf
+ * @scn:
+ * @buf_cur:
+ * @buf_init:
+ * @buf_sz:
+ * @ce:
+ * @skb_sz:
+ *
  * Calls the respective function to dump all the CE SRC/DEST ring descriptors
  * and buffers pointed by them in to the given buf
  */

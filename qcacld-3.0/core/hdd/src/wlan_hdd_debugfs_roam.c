@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -103,7 +104,7 @@ end:
  * @hdd_ctx: hdd context
  * @adapter: pointer to adapter
  *
- * Return: Pointer to struct wmi_roam_scan_stats_res which conatins response
+ * Return: Pointer to struct wmi_roam_scan_stats_res which contains response
  * from firmware
  */
 static struct
@@ -139,7 +140,7 @@ wmi_roam_scan_stats_res *hdd_get_roam_scan_stats(struct hdd_context *hdd_ctx,
 
 	status = sme_get_roam_scan_stats(hdd_ctx->mac_handle,
 					 hdd_roam_scan_stats_cb,
-					 context, adapter->vdev_id);
+					 context, adapter->deflink->vdev_id);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		hdd_err("roam scan stats request failed");
 		goto cleanup;
@@ -205,7 +206,7 @@ static char *hdd_roam_scan_trigger_to_str(uint32_t roam_scan_trigger)
 	case WMI_ROAM_TRIGGER_REASON_BTM:
 		return "BTM TRIGGER";
 	case WMI_ROAM_TRIGGER_REASON_UNIT_TEST:
-		return "TEST COMMMAND";
+		return "TEST COMMAND";
 	default:
 		return "UNKNOWN REASON";
 	}
@@ -213,10 +214,10 @@ static char *hdd_roam_scan_trigger_to_str(uint32_t roam_scan_trigger)
 }
 
 /**
- * hdd_roam_scan_trigger_value_to_str() - Get trigger value string for
+ * hdd_roam_scan_trigger_value() - Get trigger value string for
  * enum WMI_ROAM_TRIGGER_REASON_ID
  * @roam_scan_trigger: roam scan trigger ID
- * @bool: output pointer to hold whether to print trigger value
+ * @print: output pointer to hold whether to print trigger value
  *
  * Return: Meaningful string from trigger value
  */
@@ -243,7 +244,7 @@ static char *hdd_roam_scan_trigger_value(uint32_t roam_scan_trigger,
 }
 
 /**
- * hdd_client_id_to_str() - Helper func to get meaninful string from client id
+ * hdd_client_id_to_str() - Helper func to get meaningful string from client id
  * @client_id: Id of the client which triggered roam scan in firmware
  *
  * Return: Meaningful string from enum WMI_SCAN_CLIENT_ID
@@ -371,7 +372,7 @@ hdd_roam_scan_chan(struct wmi_roam_scan_stats_params *scan,
  * @hdd_ctx: hdd context
  * @adapter: pointer to adapter
  * @buf: buffer to hold the stats
- * @len: maximum available length in response buffer
+ * @buf_avail_len: maximum available length in response buffer
  *
  * Return: Size of formatted roam scan response stats
  */
@@ -472,16 +473,16 @@ wlan_hdd_update_roam_stats(struct hdd_context *hdd_ctx,
 			ret = scnprintf(buf + length,
 					buf_avail_len - length,
 					"\nSTA roamed from "
-					QDF_FULL_MAC_FMT " to "
-					QDF_FULL_MAC_FMT "\n",
-					QDF_FULL_MAC_REF(scan->old_bssid),
-					QDF_FULL_MAC_REF(scan->new_bssid));
+					QDF_MAC_ADDR_FMT " to "
+					QDF_MAC_ADDR_FMT "\n",
+					QDF_MAC_ADDR_REF(scan->old_bssid),
+					QDF_MAC_ADDR_REF(scan->new_bssid));
 		} else {
 			ret = scnprintf(buf + length,
 					buf_avail_len - length,
-					"\nSTA is connected to " QDF_FULL_MAC_FMT
+					"\nSTA is connected to " QDF_MAC_ADDR_FMT
 					" before and after scan, not roamed\n",
-					QDF_FULL_MAC_REF(scan->old_bssid));
+					QDF_MAC_ADDR_REF(scan->old_bssid));
 		}
 		if (ret <= 0)
 			goto free_mem;
@@ -522,8 +523,8 @@ wlan_hdd_update_roam_stats(struct hdd_context *hdd_ctx,
 
 			ret = scnprintf(buf + length,
 					buf_avail_len - length,
-					QDF_FULL_MAC_FMT " %4u  %3u   %3u\n",
-					QDF_FULL_MAC_REF(bssid),
+					QDF_MAC_ADDR_FMT " %4u  %3u   %3u\n",
+					QDF_MAC_ADDR_REF(bssid),
 					scan->cand[rci].freq,
 					scan->cand[rci].score,
 					scan->cand[rci].rssi);

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,15 +18,16 @@
 #include "qdf_module.h"
 #include "dp_types.h"
 #include "hal_rx_flow.h"
+#include "qdf_ssr_driver_dump.h"
 
 /**
  * hal_rx_flow_get_cmem_fse() - Get FSE from CMEM
  * @hal_soc_hdl: HAL SOC handle
  * @fse_offset: CMEM FSE offset
- * @fse: referece where FSE will be copied
+ * @fse: reference where FSE will be copied
  * @len: length of FSE
  *
- * Return: If read is succesfull or not
+ * Return: If read is successful or not
  */
 static void
 hal_rx_flow_get_cmem_fse(hal_soc_handle_t hal_soc_hdl, uint32_t fse_offset,
@@ -136,14 +137,6 @@ void hal_rx_dump_cmem_fse(hal_soc_handle_t hal_soc_hdl, uint32_t fse_offset,
 }
 #endif
 
-/**
- * hal_rx_flow_setup_fse() - Setup a flow search entry in HW FST
- * @fst: Pointer to the Rx Flow Search Table
- * @table_offset: offset into the table where the flow is to be setup
- * @flow: Flow Parameters
- *
- * Return: Success/Failure
- */
 void *
 hal_rx_flow_setup_fse(hal_soc_handle_t hal_soc_hdl,
 		      struct hal_rx_fst *fst, uint32_t table_offset,
@@ -161,15 +154,6 @@ hal_rx_flow_setup_fse(hal_soc_handle_t hal_soc_hdl,
 }
 qdf_export_symbol(hal_rx_flow_setup_fse);
 
-/**
- * hal_rx_flow_setup_cmem_fse() - Setup a flow search entry in HW CMEM FST
- * @hal_soc_hdl: HAL SOC handle
- * @cmem_ba: CMEM base address
- * @table_offset: offset into the table where the flow is to be setup
- * @flow: Flow Parameters
- *
- * Return: Success/Failure
- */
 uint32_t
 hal_rx_flow_setup_cmem_fse(hal_soc_handle_t hal_soc_hdl, uint32_t cmem_ba,
 			   uint32_t table_offset, struct hal_rx_flow *flow)
@@ -186,13 +170,6 @@ hal_rx_flow_setup_cmem_fse(hal_soc_handle_t hal_soc_hdl, uint32_t cmem_ba,
 }
 qdf_export_symbol(hal_rx_flow_setup_cmem_fse);
 
-/**
- * hal_rx_flow_get_cmem_fse_timestamp() - Get timestamp field from CMEM FSE
- * @hal_soc_hdl: HAL SOC handle
- * @fse_offset: CMEM FSE offset
- *
- * Return: Timestamp
- */
 uint32_t hal_rx_flow_get_cmem_fse_timestamp(hal_soc_handle_t hal_soc_hdl,
 					    uint32_t fse_offset)
 {
@@ -207,25 +184,20 @@ uint32_t hal_rx_flow_get_cmem_fse_timestamp(hal_soc_handle_t hal_soc_hdl,
 }
 qdf_export_symbol(hal_rx_flow_get_cmem_fse_timestamp);
 
-/**
- * hal_rx_flow_delete_entry() - Delete a flow from the Rx Flow Search Table
- * @fst: Pointer to the Rx Flow Search Table
- * @hal_rx_fse: Pointer to the Rx Flow that is to be deleted from the FST
- *
- * Return: Success/Failure
- */
 QDF_STATUS
-hal_rx_flow_delete_entry(struct hal_rx_fst *fst, void *hal_rx_fse)
+hal_rx_flow_delete_entry(hal_soc_handle_t hal_soc_hdl,
+			 struct hal_rx_fst *fst, void *hal_rx_fse)
 {
-	uint8_t *fse = (uint8_t *)hal_rx_fse;
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
 
-	if (!HAL_GET_FLD(fse, HAL_RX_FLOW_SEARCH_ENTRY, VALID))
-		return QDF_STATUS_E_NOENT;
+	if (hal_soc->ops->hal_rx_flow_delete_entry) {
+		return hal_soc->ops->hal_rx_flow_delete_entry((uint8_t *)fst,
+							   hal_rx_fse);
+	}
 
-	HAL_CLR_FLD(fse, HAL_RX_FLOW_SEARCH_ENTRY, VALID);
-
-	return QDF_STATUS_SUCCESS;
+	return QDF_STATUS_E_NOSUPPORT;
 }
+
 qdf_export_symbol(hal_rx_flow_delete_entry);
 
 #ifndef WLAN_SUPPORT_RX_FISA
@@ -241,7 +213,7 @@ static void hal_rx_fst_key_configure(struct hal_rx_fst *fst)
 
 	qdf_mem_copy(key_bytes, fst->key, HAL_FST_HASH_KEY_SIZE_BYTES);
 
-	/**
+	/*
 	 * The Toeplitz algorithm as per the Microsoft spec works in a
 	 * “big-endian” manner, using the MSBs of the key to hash the
 	 * initial bytes of the input going on to use up the lower order bits
@@ -272,84 +244,54 @@ static inline void *hal_rx_fst_get_base(struct hal_rx_fst *fst)
 
 /**
  * hal_rx_fst_get_fse_size() - Retrieve the size of each entry(flow) in Rx FST
+ * @hal_soc_hdl: HAL SOC handle
  *
  * Return: size of each entry/flow in Rx FST
  */
-static inline uint32_t hal_rx_fst_get_fse_size(void)
+static inline uint32_t
+hal_rx_fst_get_fse_size(hal_soc_handle_t hal_soc_hdl)
 {
-	return HAL_RX_FST_ENTRY_SIZE;
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
+
+	if (hal_soc->ops->hal_rx_fst_get_fse_size)
+		return hal_soc->ops->hal_rx_fst_get_fse_size();
+
+	return 0;
 }
 
 /**
- * hal_rx_flow_get_tuple_info() - Retrieve the 5-tuple flow info for an entry
- * @hal_fse: Pointer to the Flow in Rx FST
+ * hal_rx_flow_get_tuple_info() - Get a flow search entry in HW FST
+ * @hal_soc_hdl: HAL SOC handle
+ * @fst: Pointer to the Rx Flow Search Table
+ * @hal_hash: HAL 5 tuple hash
  * @tuple_info: 5-tuple info of the flow returned to the caller
  *
  * Return: Success/Failure
  */
-QDF_STATUS hal_rx_flow_get_tuple_info(void *hal_fse,
-				      struct hal_flow_tuple_info *tuple_info)
+void *
+hal_rx_flow_get_tuple_info(hal_soc_handle_t hal_soc_hdl,
+			   struct hal_rx_fst *fst,
+			   uint32_t hal_hash,
+			   struct hal_flow_tuple_info *tuple_info)
 {
-	if (!hal_fse || !tuple_info)
-		return QDF_STATUS_E_INVAL;
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
 
-	if (!HAL_GET_FLD(hal_fse, HAL_RX_FLOW_SEARCH_ENTRY, VALID))
-		return QDF_STATUS_E_NOENT;
+	if (hal_soc->ops->hal_rx_flow_get_tuple_info)
+		return hal_soc->ops->hal_rx_flow_get_tuple_info(
+						(uint8_t *)fst,
+						hal_hash,
+						(uint8_t *)tuple_info);
 
-	tuple_info->src_ip_127_96 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      SRC_IP_127_96));
-	tuple_info->src_ip_95_64 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      SRC_IP_95_64));
-	tuple_info->src_ip_63_32 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      SRC_IP_63_32));
-	tuple_info->src_ip_31_0 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      SRC_IP_31_0));
-	tuple_info->dest_ip_127_96 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      DEST_IP_127_96));
-	tuple_info->dest_ip_95_64 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      DEST_IP_95_64));
-	tuple_info->dest_ip_63_32 =
-				qdf_ntohl(HAL_GET_FLD(hal_fse,
-						      HAL_RX_FLOW_SEARCH_ENTRY,
-						      DEST_IP_63_32));
-	tuple_info->dest_ip_31_0 =
-			qdf_ntohl(HAL_GET_FLD(hal_fse,
-					      HAL_RX_FLOW_SEARCH_ENTRY,
-					      DEST_IP_31_0));
-	tuple_info->dest_port = HAL_GET_FLD(hal_fse,
-					    HAL_RX_FLOW_SEARCH_ENTRY,
-					    DEST_PORT);
-	tuple_info->src_port = HAL_GET_FLD(hal_fse,
-					   HAL_RX_FLOW_SEARCH_ENTRY,
-					   SRC_PORT);
-	tuple_info->l4_protocol = HAL_GET_FLD(hal_fse,
-					      HAL_RX_FLOW_SEARCH_ENTRY,
-					      L4_PROTOCOL);
-
-	return QDF_STATUS_SUCCESS;
+	return NULL;
 }
 
 #ifndef WLAN_SUPPORT_RX_FISA
 /**
  * hal_flow_toeplitz_create_cache() - Calculate hashes for each possible
- * byte value with the key taken as is
- *
+ *                                    byte value with the key taken as is
  * @fst: FST Handle
- * @key: Hash Key
  *
- * Return: Success/Failure
+ * Return: None
  */
 static void hal_flow_toeplitz_create_cache(struct hal_rx_fst *fst)
 {
@@ -410,27 +352,19 @@ static void hal_flow_toeplitz_create_cache(struct hal_rx_fst *fst)
 }
 #endif
 
-/**
- * hal_rx_fst_attach() - Initialize Rx flow search table in HW FST
- *
- * @qdf_dev: QDF device handle
- * @hal_fst_base_paddr: Pointer to the physical base address of the Rx FST
- * @max_entries: Max number of flows allowed in the FST
- * @max_search: Number of collisions allowed in the hash-based FST
- * @hash_key: Toeplitz key used for the hash FST
- *
- * Return:
- */
 struct hal_rx_fst *
-hal_rx_fst_attach(qdf_device_t qdf_dev,
+hal_rx_fst_attach(hal_soc_handle_t hal_soc_hdl,
+		  qdf_device_t qdf_dev,
 		  uint64_t *hal_fst_base_paddr, uint16_t max_entries,
-		  uint16_t max_search, uint8_t *hash_key)
+		  uint16_t max_search, uint8_t *hash_key,
+		  uint64_t fst_cmem_base)
 {
 	struct hal_rx_fst *fst = qdf_mem_malloc(sizeof(struct hal_rx_fst));
+	uint32_t fst_entry_size;
 
 	if (!fst) {
 		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
-			  FL("hal fst allocation failed,"));
+			  FL("hal fst allocation failed"));
 		return NULL;
 	}
 
@@ -441,67 +375,78 @@ hal_rx_fst_attach(qdf_device_t qdf_dev,
 	fst->max_entries = max_entries;
 	fst->hash_mask = max_entries - 1;
 
+	fst_entry_size = hal_rx_fst_get_fse_size(hal_soc_hdl);
+	fst->fst_entry_size = fst_entry_size;
+
 	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_DEBUG,
 		  "HAL FST allocation %pK %d * %d\n", fst,
-		  fst->max_entries, HAL_RX_FST_ENTRY_SIZE);
+		  fst->max_entries, fst_entry_size);
+	qdf_ssr_driver_dump_register_region("hal_rx_fst", fst, sizeof(*fst));
 
-	fst->base_vaddr = (uint8_t *)qdf_mem_alloc_consistent(qdf_dev,
-				qdf_dev->dev,
-				(fst->max_entries * HAL_RX_FST_ENTRY_SIZE),
-				&fst->base_paddr);
+	if (fst_cmem_base == 0) {
+		/* FST is in DDR */
+		fst->base_vaddr = (uint8_t *)qdf_mem_alloc_consistent(qdf_dev,
+				    qdf_dev->dev,
+				    (fst->max_entries * fst_entry_size),
+				    &fst->base_paddr);
+
+		if (!fst->base_vaddr) {
+			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				  FL("hal fst->base_vaddr allocation failed"));
+			qdf_mem_free(fst);
+			return NULL;
+		}
+		qdf_ssr_driver_dump_register_region("dp_fisa_hw_fse_table",
+						    fst->base_vaddr,
+						    (fst->max_entries *
+						     fst_entry_size));
+
+		*hal_fst_base_paddr = (uint64_t)fst->base_paddr;
+	} else {
+		*hal_fst_base_paddr = fst_cmem_base;
+		goto out;
+	}
 
 	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_INFO,
 		  "hal_rx_fst base address 0x%pK", (void *)fst->base_paddr);
-	if (!fst->base_vaddr) {
-		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
-			  FL("hal fst->base_vaddr allocation failed"));
-		qdf_mem_free(fst);
-		return NULL;
-	}
+
 	QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_ANY, QDF_TRACE_LEVEL_DEBUG,
 			   (void *)fst->key, HAL_FST_HASH_KEY_SIZE_BYTES);
 
 	qdf_mem_set((uint8_t *)fst->base_vaddr,
-		    (fst->max_entries * HAL_RX_FST_ENTRY_SIZE), 0);
+		    (fst->max_entries * fst_entry_size), 0);
 
+out:
 	hal_rx_fst_key_configure(fst);
 	hal_flow_toeplitz_create_cache(fst);
-	*hal_fst_base_paddr = (uint64_t)fst->base_paddr;
+
 	return fst;
 }
 qdf_export_symbol(hal_rx_fst_attach);
 
-/**
- * hal_rx_fst_detach() - De-init the Rx flow search table from HW
- *
- * @rx_fst: Pointer to the Rx FST
- * @qdf_dev: QDF device handle
- *
- * Return:
- */
-void hal_rx_fst_detach(struct hal_rx_fst *rx_fst,
-		       qdf_device_t qdf_dev)
+void hal_rx_fst_detach(hal_soc_handle_t hal_soc_hdl, struct hal_rx_fst *rx_fst,
+		       qdf_device_t qdf_dev, uint64_t fst_cmem_base)
 {
+
 	if (!rx_fst || !qdf_dev)
 		return;
 
-	qdf_mem_free_consistent(qdf_dev, qdf_dev->dev,
-				rx_fst->max_entries * HAL_RX_FST_ENTRY_SIZE,
-				rx_fst->base_vaddr, rx_fst->base_paddr, 0);
+	qdf_ssr_driver_dump_unregister_region("hal_rx_fst");
+
+	if (fst_cmem_base == 0 && rx_fst->base_vaddr) {
+		qdf_ssr_driver_dump_unregister_region("dp_fisa_hw_fse_table");
+		qdf_mem_free_consistent(qdf_dev, qdf_dev->dev,
+					rx_fst->max_entries *
+					rx_fst->fst_entry_size,
+					rx_fst->base_vaddr, rx_fst->base_paddr,
+					0);
+	}
 
 	qdf_mem_free(rx_fst);
 }
 qdf_export_symbol(hal_rx_fst_detach);
 
 #ifndef WLAN_SUPPORT_RX_FISA
-/**
- * hal_flow_toeplitz_hash() - Calculate Toeplitz hash by using the cached key
- *
- * @hal_fst: FST Handle
- * @flow: Flow Parameters
- *
- * Return: Success/Failure
- */
 uint32_t
 hal_flow_toeplitz_hash(void *hal_fst, struct hal_rx_flow *flow)
 {
@@ -550,14 +495,6 @@ hal_flow_toeplitz_hash(void *hal_fst, struct hal_rx_flow *flow)
 #endif
 qdf_export_symbol(hal_flow_toeplitz_hash);
 
-/**
- * hal_rx_get_hal_hash() - Retrieve hash index of a flow in the FST table
- *
- * @hal_fst: HAL Rx FST Handle
- * @flow_hash: Flow hash computed from flow tuple
- *
- * Return: hash index truncated to the size of the hash table
- */
 uint32_t hal_rx_get_hal_hash(struct hal_rx_fst *hal_fst, uint32_t flow_hash)
 {
 	uint32_t trunc_hash = flow_hash;
@@ -569,32 +506,22 @@ uint32_t hal_rx_get_hal_hash(struct hal_rx_fst *hal_fst, uint32_t flow_hash)
 }
 qdf_export_symbol(hal_rx_get_hal_hash);
 
-/**
- * hal_rx_insert_flow_entry() - Add a flow into the FST table
- *
- * @hal_fst: HAL Rx FST Handle
- * @flow_hash: Flow hash computed from flow tuple
- * @flow_tuple_info: Flow tuple used to compute the hash
- * @flow_index: Hash index of the flow in the table when inserted successfully
- *
- * Return: Success if flow is inserted into the table, error otherwise
- */
 QDF_STATUS
-hal_rx_insert_flow_entry(struct hal_rx_fst *fst, uint32_t flow_hash,
+hal_rx_insert_flow_entry(hal_soc_handle_t hal_soc,
+			 struct hal_rx_fst *fst, uint32_t flow_hash,
 			 void *flow_tuple_info, uint32_t *flow_idx)
 {
 	int i;
 	void *hal_fse = NULL;
 	uint32_t hal_hash = 0;
 	struct hal_flow_tuple_info hal_tuple_info = { 0 };
-	QDF_STATUS status;
 
 	for (i = 0; i < fst->max_skid_length; i++) {
 		hal_hash = hal_rx_get_hal_hash(fst, (flow_hash + i));
-		hal_fse = (uint8_t *)fst->base_vaddr +
-			(hal_hash * HAL_RX_FST_ENTRY_SIZE);
-		status = hal_rx_flow_get_tuple_info(hal_fse, &hal_tuple_info);
-		if (status == QDF_STATUS_E_NOENT)
+
+		hal_fse = hal_rx_flow_get_tuple_info(hal_soc, fst, hal_hash,
+						     &hal_tuple_info);
+		if (!hal_fse)
 			break;
 
 		/* Find the matching flow entry in HW FST */
@@ -618,32 +545,22 @@ hal_rx_insert_flow_entry(struct hal_rx_fst *fst, uint32_t flow_hash,
 }
 qdf_export_symbol(hal_rx_insert_flow_entry);
 
-/**
- * hal_rx_find_flow_from_tuple() - Find a flow in the FST table
- *
- * @fst: HAL Rx FST Handle
- * @flow_hash: Flow hash computed from flow tuple
- * @flow_tuple_info: Flow tuple used to compute the hash
- * @flow_index: Hash index of the flow in the table when found
- *
- * Return: Success if matching flow is found in the table, error otherwise
- */
 QDF_STATUS
-hal_rx_find_flow_from_tuple(struct hal_rx_fst *fst, uint32_t flow_hash,
+hal_rx_find_flow_from_tuple(hal_soc_handle_t hal_soc_hdl,
+			    struct hal_rx_fst *fst, uint32_t flow_hash,
 			    void *flow_tuple_info, uint32_t *flow_idx)
 {
 	int i;
 	void *hal_fse = NULL;
 	uint32_t hal_hash = 0;
 	struct hal_flow_tuple_info hal_tuple_info = { 0 };
-	QDF_STATUS status;
 
 	for (i = 0; i < fst->max_skid_length; i++) {
 		hal_hash = hal_rx_get_hal_hash(fst, (flow_hash + i));
-		hal_fse = (uint8_t *)fst->base_vaddr +
-			(hal_hash * HAL_RX_FST_ENTRY_SIZE);
-		status = hal_rx_flow_get_tuple_info(hal_fse, &hal_tuple_info);
-		if (status != QDF_STATUS_SUCCESS)
+
+		hal_fse = hal_rx_flow_get_tuple_info(hal_soc_hdl, fst, hal_hash,
+						     &hal_tuple_info);
+		if (!hal_fse)
 			continue;
 
 		/* Find the matching flow entry in HW FST */

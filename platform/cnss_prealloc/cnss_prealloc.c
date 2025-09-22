@@ -21,25 +21,6 @@
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("CNSS prealloc driver");
 
-#ifdef CONFIG_CNSS2_DEBUG
-#define CNSS_ASSERT(_condition) do {					\
-		if (!(_condition)) {					\
-			pr_err("ASSERT at line %d\n",			\
-			       __LINE__);				\
-			BUG();						\
-		}							\
-	} while (0)
-#else
-#define CNSS_ASSERT(_condition) do {					\
-		if (!(_condition)) {					\
-			pr_err("ASSERT at line %d\n",			\
-			       __LINE__);				\
-			WARN_ON(1);					\
-		}							\
-	} while (0)
-#endif
-
-
 /* cnss preallocation scheme is a memory pool that always tries to keep a
  * list of free memory for use in emergencies. It is implemented on kernel
  * features: memorypool and kmem cache.
@@ -87,7 +68,6 @@ static struct cnss_pool cnss_pools_default[] = {
 	{32 * 1024, 22, "cnss-pool-32k", NULL, NULL, NULL},
 	{64 * 1024, 38, "cnss-pool-64k", NULL, NULL, NULL},
 	{128 * 1024, 10, "cnss-pool-128k", NULL, NULL, NULL},
-	{256 * 1024, 2, "cnss-pool-256k", NULL, NULL, NULL},
 };
 
 static struct cnss_pool cnss_pools_adrastea[] = {
@@ -106,19 +86,9 @@ static struct cnss_pool cnss_pools_wcn6750[] = {
 	{128 * 1024, 4, "cnss-pool-128k", NULL, NULL, NULL},
 };
 
-static struct cnss_pool cnss_pools_wcn7750[] = {
-	{8 * 1024, 16, "cnss-pool-8k", NULL, NULL},
-	{16 * 1024, 16, "cnss-pool-16k", NULL, NULL},
-	{32 * 1024, 22, "cnss-pool-32k", NULL, NULL},
-	{64 * 1024, 38, "cnss-pool-64k", NULL, NULL},
-	{128 * 1024, 10, "cnss-pool-128k", NULL, NULL},
-	{256 * 1024, 2, "cnss-pool-256k", NULL, NULL},
-};
-
 struct cnss_pool *cnss_pools;
 unsigned int cnss_prealloc_pool_size = ARRAY_SIZE(cnss_pools_default);
 spinlock_t pool_table_lock;
-bool mempool_initialization_done;
 
 /**
  * cnss_pool_alloc_threshold() - Allocation threshold
@@ -189,7 +159,6 @@ static int cnss_pool_init(void)
 			cnss_pools[i].size);
 	}
 
-	mempool_initialization_done = true;
 	spin_lock_init(&pool_table_lock);
 
 	return 0;
@@ -219,7 +188,6 @@ static void cnss_pool_deinit(void)
 		kfree(cnss_pools[i].pool_ptrs);
 		cnss_pools[i].pool_ptrs = NULL;
 	}
-	mempool_initialization_done = false;
 }
 
 static void cnss_assign_prealloc_pool(unsigned long device_id)
@@ -235,17 +203,12 @@ static void cnss_assign_prealloc_pool(unsigned long device_id)
 		cnss_pools = cnss_pools_wcn6750;
 		cnss_prealloc_pool_size = ARRAY_SIZE(cnss_pools_wcn6750);
 		break;
-	case WCN7750_DEVICE_ID:
-		cnss_pools = cnss_pools_wcn7750;
-		cnss_prealloc_pool_size = ARRAY_SIZE(cnss_pools_wcn7750);
-		break;
 	case WCN6450_DEVICE_ID:
 	case QCA6390_DEVICE_ID:
 	case QCA6490_DEVICE_ID:
 	case MANGO_DEVICE_ID:
 	case PEACH_DEVICE_ID:
 	case KIWI_DEVICE_ID:
-	case FIG_DEVICE_ID:
 	default:
 		cnss_pools = cnss_pools_default;
 		cnss_prealloc_pool_size = ARRAY_SIZE(cnss_pools_default);
@@ -282,8 +245,7 @@ void wcnss_check_pool_lists(void)
 				pr_err("%p not freed in %s pool at index %zu\n",
 					pool[ptr_idx], cnss_pools[i].name,
 					ptr_idx);
-				CNSS_ASSERT(0);
-
+				WARN_ON(1);
 			}
 		}
 	}
@@ -363,7 +325,7 @@ void *wcnss_prealloc_get(size_t size)
 	int i;
 	int ret = 0;
 
-	if (!cnss_pools || !mempool_initialization_done)
+	if (!cnss_pools)
 		return mem;
 
 	if (in_interrupt() || !preemptible() || rcu_preempt_depth())
@@ -424,7 +386,7 @@ int wcnss_prealloc_put(void *mem)
 	int ret;
 	unsigned long irq_flags;
 
-	if (!mem || !cnss_pools || !mempool_initialization_done)
+	if (!mem || !cnss_pools)
 		return 0;
 
 	for (i = 0; i < cnss_prealloc_pool_size; i++) {
@@ -494,7 +456,7 @@ int wcnss_prealloc_put(void *mem)
 	int ret;
 	unsigned long irq_flags;
 
-	if (!mem || !cnss_pools || !mempool_initialization_done)
+	if (!mem || !cnss_pools)
 		return 0;
 
 	i = cnss_pool_get_index(mem);

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -18,9 +18,10 @@
  */
 
 /**
- * @file htt_t2h.c
- * @brief Provide functions to process target->host HTT messages.
- * @details
+ *  DOC: htt_t2h.c
+ *
+ *  brief Provide functions to process target->host HTT messages.
+ *  details
  *  This file contains functions related to target->host HTT messages.
  *  There are two categories of functions:
  *  1.  A function that receives a HTT message from HTC, and dispatches it
@@ -225,7 +226,9 @@ static void htt_t2h_lp_msg_handler(void *context, qdf_nbuf_t htt_t2h_msg,
 	switch (msg_type) {
 	case HTT_T2H_MSG_TYPE_VERSION_CONF:
 	{
-		htc_pm_runtime_put(pdev->htc_pdev);
+		if (htc_dec_return_htt_runtime_cnt(pdev->htc_pdev) >= 0)
+			htc_pm_runtime_put(pdev->htc_pdev);
+
 		pdev->tgt_ver.major = HTT_VER_CONF_MAJOR_GET(*msg_word);
 		pdev->tgt_ver.minor = HTT_VER_CONF_MINOR_GET(*msg_word);
 		QDF_TRACE(QDF_MODULE_ID_HTT, QDF_TRACE_LEVEL_INFO_LOW,
@@ -703,7 +706,7 @@ static void htt_t2h_lp_msg_handler(void *context, qdf_nbuf_t htt_t2h_msg,
 		default:
 		{
 			qdf_print("unhandled error type %d",
-				  HTT_RX_OFLD_PKT_ERR_MSG_SUB_TYPE_GET(*msg_word));
+			  HTT_RX_OFLD_PKT_ERR_MSG_SUB_TYPE_GET(*msg_word));
 			break;
 		}
 		}
@@ -737,10 +740,10 @@ static void htt_t2h_lp_msg_handler(void *context, qdf_nbuf_t htt_t2h_msg,
 #define HTT_TX_COMPL_HEAD_SZ			4
 #define HTT_TX_COMPL_BYTES_PER_MSDU_ID		2
 
-/**
+/*
  * Generic Target to host Msg/event  handler  for low priority messages
  * Low priority message are handler in a different handler called from
- * this function . So that the most likely succes path like Rx and
+ * this function . So that the most likely success path like Rx and
  * Tx comp   has little code   foot print
  */
 void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
@@ -749,7 +752,6 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 	qdf_nbuf_t htt_t2h_msg = (qdf_nbuf_t) pkt->pPktContext;
 	uint32_t *msg_word;
 	enum htt_t2h_msg_type msg_type;
-	uint16_t *msdu_ids;
 
 	/* check for successful message reception */
 	if (pkt->Status != QDF_STATUS_SUCCESS) {
@@ -895,7 +897,8 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 		}
 
 		if (num_msdus & 0x1) {
-			msdu_ids = (uint16_t *)(msg_word + 1);
+			struct htt_tx_compl_ind_base *compl =
+				(void *)msg_word;
 
 			/*
 			 * Host CPU endianness can be different from FW CPU.
@@ -905,9 +908,11 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 			 * location payload[size-1], where the message
 			 * handler function expects to find it
 			 */
-			msdu_ids = msdu_ids + (num_msdus - 1);
-			if (*(msdu_ids + 1) != HTT_TX_COMPL_INV_MSDU_ID)
-				*msdu_ids = *(msdu_ids + 1);
+			if (compl->payload[num_msdus] !=
+			    HTT_TX_COMPL_INV_MSDU_ID) {
+				compl->payload[num_msdus - 1] =
+					compl->payload[num_msdus];
+			}
 		}
 
 		if (pdev->cfg.is_high_latency &&
@@ -1009,7 +1014,8 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 		}
 
 		if (num_msdus & 0x1) {
-			msdu_ids = (uint16_t *)(msg_word + 1);
+			struct htt_tx_compl_ind_base *compl =
+				(void *)msg_word;
 
 			/*
 			 * Host CPU endianness can be different from FW CPU.
@@ -1019,9 +1025,11 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 			 * location payload[size-1], where the message handler
 			 * function expects to find it
 			 */
-			msdu_ids = msdu_ids + (num_msdus - 1);
-			if (*(msdu_ids + 1) != HTT_TX_COMPL_INV_MSDU_ID)
-				*msdu_ids = *(msdu_ids + 1);
+			if (compl->payload[num_msdus] !=
+			    HTT_TX_COMPL_INV_MSDU_ID) {
+				compl->payload[num_msdus - 1] =
+					compl->payload[num_msdus];
+			}
 		}
 		ol_tx_inspect_handler(pdev->txrx_pdev, num_msdus,
 				      msg_word + 1);
@@ -1080,8 +1088,8 @@ void htt_t2h_msg_handler(void *context, HTC_PACKET *pkt)
 #ifdef WLAN_FEATURE_FASTPATH
 #define HTT_T2H_MSG_BUF_REINIT(_buf, dev)				\
 	do {								\
-		QDF_NBUF_CB_PADDR(_buf) -= (HTC_HEADER_LEN +		\
-					HTC_HDR_ALIGNMENT_PADDING);	\
+		qdf_nbuf_push_head(_buf, (HTC_HEADER_LEN) +		\
+				   HTC_HDR_ALIGNMENT_PADDING);		\
 		qdf_nbuf_init_fast((_buf));				\
 		qdf_mem_dma_sync_single_for_device(dev,			\
 					(QDF_NBUF_CB_PADDR(_buf)),	\
@@ -1108,7 +1116,6 @@ void htt_t2h_msg_handler_fast(void *context, qdf_nbuf_t *cmpl_msdus,
 	enum htt_t2h_msg_type msg_type;
 	uint32_t msg_len;
 	struct ol_txrx_soc_t *soc = cds_get_context(QDF_MODULE_ID_SOC);
-	uint16_t *msdu_ids;
 
 	for (i = 0; i < num_cmpls; i++) {
 		htt_t2h_msg = cmpl_msdus[i];
@@ -1234,7 +1241,8 @@ void htt_t2h_msg_handler_fast(void *context, qdf_nbuf_t *cmpl_msdus,
 			}
 
 			if (num_msdus & 0x1) {
-				msdu_ids = (uint16_t *)(msg_word + 1);
+				struct htt_tx_compl_ind_base *compl =
+					(void *)msg_word;
 
 				/*
 				 * Host CPU endianness can be different
@@ -1246,9 +1254,11 @@ void htt_t2h_msg_handler_fast(void *context, qdf_nbuf_t *cmpl_msdus,
 				 * payload[size-1],where the message
 				 * handler function expects to find it
 				 */
-				msdu_ids = msdu_ids + (num_msdus - 1);
-				if (*(msdu_ids + 1) != HTT_TX_COMPL_INV_MSDU_ID)
-					*msdu_ids = *(msdu_ids + 1);
+				if (compl->payload[num_msdus] !=
+				    HTT_TX_COMPL_INV_MSDU_ID) {
+					compl->payload[num_msdus - 1] =
+						compl->payload[num_msdus];
+				}
 			}
 			ol_tx_completion_handler(pdev->txrx_pdev, num_msdus,
 						 status, msg_word);
@@ -1383,7 +1393,8 @@ void htt_t2h_msg_handler_fast(void *context, qdf_nbuf_t *cmpl_msdus,
 			}
 
 			if (num_msdus & 0x1) {
-				msdu_ids = (uint16_t *)(msg_word + 1);
+				struct htt_tx_compl_ind_base *compl =
+					(void *)msg_word;
 
 				/*
 				 * Host CPU endianness can be different
@@ -1395,9 +1406,11 @@ void htt_t2h_msg_handler_fast(void *context, qdf_nbuf_t *cmpl_msdus,
 				 * payload[size-1], where the message
 				 * handler function expects to find it
 				 */
-				msdu_ids = msdu_ids + (num_msdus - 1);
-				if (*(msdu_ids + 1) != HTT_TX_COMPL_INV_MSDU_ID)
-					*msdu_ids = *(msdu_ids + 1);
+				if (compl->payload[num_msdus] !=
+				    HTT_TX_COMPL_INV_MSDU_ID) {
+					compl->payload[num_msdus - 1] =
+					compl->payload[num_msdus];
+				}
 			}
 			ol_tx_inspect_handler(pdev->txrx_pdev,
 					      num_msdus, msg_word + 1);

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -71,9 +72,10 @@
 #define FTM_CMD_MAX_BUF_LENGTH		    2048
 
 /**
- * enum wifi_ftm_cmd_type - the enumeration of the command source per pdev
+ * enum wifi_ftm_pdev_cmd_type - the enumeration of the command source per pdev
  * @WIFI_FTM_CMD_IOCTL: command from ioctl on the pdev
  * @WIFI_FTM_CMD_NL80211: command from nl80211 on the pdev
+ * @WIFI_FTM_CMD_UNKNOWN: unknown command
  *
  */
 enum wifi_ftm_pdev_cmd_type {
@@ -88,7 +90,7 @@ enum wifi_ftm_pdev_cmd_type {
  * struct wifi_ftm_pdev_priv_obj - wifi ftm pdev utf event info
  * @pdev: pointer to pdev
  * @data: data ptr
- * @current_seq: curent squence
+ * @current_seq: current sequence
  * @expected_seq: expected sequence
  * @length: length
  * @offset: offset
@@ -105,7 +107,7 @@ struct wifi_ftm_pdev_priv_obj {
 };
 
 /**
- * wlan_ftm_testmode_cmd() - handle FTM testmode command
+ * ucfg_wlan_ftm_testmode_cmd() - handle FTM testmode command
  * @pdev: pdev pointer
  * @data: data
  * @len: data length
@@ -116,7 +118,7 @@ QDF_STATUS ucfg_wlan_ftm_testmode_cmd(struct wlan_objmgr_pdev *pdev,
 					uint8_t *data, uint32_t len);
 
 /**
- * wlan_ftm_testmode_rsp() - handle FTM testmode command
+ * ucfg_wlan_ftm_testmode_rsp() - handle FTM testmode command
  * @pdev: pdev pointer
  * @data: data
  *
@@ -127,11 +129,11 @@ QDF_STATUS ucfg_wlan_ftm_testmode_rsp(struct wlan_objmgr_pdev *pdev,
 
 /**
  * wlan_ftm_process_utf_event() - process ftm UTF event
- * @scn_handle: scn handle
- * @event: event buffer
+ * @pdev: pdev pointer
+ * @event_buf: event buffer
  * @len: event length
  *
- * return: QDF_STATUS_SUCCESS for success or error code
+ * Return: QDF_STATUS_SUCCESS for success or error code
  */
 QDF_STATUS wlan_ftm_process_utf_event(struct wlan_objmgr_pdev *pdev,
 					uint8_t *event_buf, uint32_t len);
