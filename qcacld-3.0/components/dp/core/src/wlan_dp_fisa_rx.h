@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -23,6 +23,7 @@
 #endif
 #include <qdf_status.h>
 #include <wlan_dp_priv.h>
+#include "wlan_dp_flow_balance.h"
 
 //#define FISA_DEBUG_ENABLE
 
@@ -67,15 +68,27 @@
 
 #define DP_FT_LOCK_MAX_RECORDS 32
 
-#define FISA_FT_ENTRY_AGING_US	1000000
+/**
+ * enum dp_ft_action - Fisa action code for flow table task
+ * @DP_FT_ADD: Add flow table entry
+ * @DP_FT_DEL: Delete flow table entry
+ * @DP_FT_INV_PEER_ID: Invalidate flow table entry for a peer
+ */
+enum dp_ft_action {
+	DP_FT_ADD,
+	DP_FT_DEL,
+	DP_FT_INV_PEER_ID,
+};
 
 struct dp_fisa_rx_fst_update_elem {
 	/* Do not add new entries here */
 	qdf_list_node_t node;
 	struct cdp_rx_flow_tuple_info flow_tuple_info;
 	struct dp_vdev *vdev;
+	uint16_t peer_id;
 	uint8_t vdev_id;
 	uint32_t flow_idx;
+	enum dp_ft_action action_code;
 	uint32_t reo_dest_indication;
 	bool is_tcp_flow;
 	bool is_udp_flow;
@@ -186,6 +199,12 @@ void dp_rx_fst_detach(struct wlan_dp_psoc_context *dp_ctx);
  */
 void dp_resume_fse_cache_flush(struct wlan_dp_psoc_context *dp_ctx);
 
+static inline uint64_t
+wlan_dp_fisa_get_flow_tuple_hash(struct dp_fisa_rx_sw_ft *sw_ft_entry)
+{
+	return sw_ft_entry->flow_tuple_hash;
+}
+
 /**
  * dp_rx_fst_update_pm_suspend_status() - Update Suspend status in FISA
  * @dp_ctx: DP component context
@@ -205,6 +224,17 @@ void dp_rx_fst_update_pm_suspend_status(struct wlan_dp_psoc_context *dp_ctx,
 void dp_rx_fst_requeue_wq(struct wlan_dp_psoc_context *dp_ctx);
 
 void dp_print_fisa_rx_stats(enum cdp_fisa_stats_id stats_id);
+
+#ifdef WLAN_DP_FEATURE_STC
+/*
+ * dp_fisa_rx_fst_inv_peer_id() - Invalidate the peer_id in all the FST
+ *				  entries which belong to this peer
+ * @peer_id: peer_id for which the invalidation is to be done
+ *
+ * Return: None
+ */
+void dp_fisa_rx_fst_inv_peer_id(uint16_t peer_id);
+#endif
 
 /**
  * dp_fisa_cfg_init() - FISA INI items init
@@ -232,6 +262,22 @@ void dp_set_fst_in_cmem(bool fst_in_cmem);
  * Return: None
  */
 void dp_set_fisa_dynamic_aggr_size_support(bool dynamic_aggr_size_support);
+
+static inline void
+dp_fisa_rx_add_tcp_flow_to_fst(struct wlan_dp_psoc_context *dp_ctx)
+{
+	struct dp_rx_fst *rx_fst = dp_ctx->rx_fst;
+
+	if (!rx_fst)
+		return;
+
+	rx_fst->add_tcp_flow_to_fst = true;
+}
+
+static inline bool dp_is_fisa_in_cmem(struct wlan_dp_psoc_context *dp_ctx)
+{
+	return dp_ctx->fst_in_cmem;
+}
 #else
 static inline void
 dp_rx_fst_update_pm_suspend_status(struct wlan_dp_psoc_context *dp_ctx,
@@ -240,6 +286,10 @@ dp_rx_fst_update_pm_suspend_status(struct wlan_dp_psoc_context *dp_ctx,
 }
 
 static inline void dp_print_fisa_rx_stats(enum cdp_fisa_stats_id stats_id)
+{
+}
+
+static inline void dp_fisa_rx_fst_inv_peer_id(uint16_t peer_id)
 {
 }
 
@@ -256,5 +306,46 @@ static inline void
 dp_set_fisa_dynamic_aggr_size_support(bool dynamic_aggr_size_support)
 {
 }
+
+static inline void
+dp_fisa_rx_add_tcp_flow_to_fst(struct wlan_dp_psoc_context *dp_ctx)
+{
+}
+
+static inline bool dp_is_fisa_in_cmem(struct wlan_dp_psoc_context *dp_ctx)
+{
+	return false;
+}
+#endif
+
+/**
+ * dp_rx_is_ring_latency_sensitive_reo() - Check if the ring idx is latency
+ *					   sensitive reo index
+ * @ring_id: ring idx
+ *
+ * Return: None
+ */
+bool dp_rx_is_ring_latency_sensitive_reo(uint8_t ring_id);
+
+#if defined(WLAN_SUPPORT_RX_FISA) && \
+	defined(WLAN_DP_FLOW_BALANCE_SUPPORT)
+void dp_fisa_calc_flow_stats_avg(struct wlan_dp_psoc_context *dp_ctx);
+#else
+static inline void
+dp_fisa_calc_flow_stats_avg(struct wlan_dp_psoc_context *dp_ctx)
+{
+}
+#endif
+
+#if defined(WLAN_SUPPORT_RX_FISA) && \
+	defined(WLAN_DP_FLOW_BALANCE_SUPPORT)
+void
+dp_fisa_flow_balance_build_flow_map_tbl(struct wlan_dp_psoc_context *dp_ctx,
+					struct wlan_dp_rx_ring_fm_tbl *map_tbl,
+					uint32_t *total_flow_avg_pkts,
+					uint32_t *total_num_flows);
+void dp_fisa_update_fst_table(struct wlan_dp_psoc_context *dp_ctx,
+			      struct wlan_dp_mig_flow *migrate_list,
+			      uint32_t mig_flow_cnt);
 #endif
 #endif

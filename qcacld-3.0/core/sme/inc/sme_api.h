@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -108,6 +108,7 @@
 /* AP start timeout = vdev start + 2 sec */
 #define SME_CMD_VDEV_START_BSS_TIMEOUT (START_RESPONSE_TIMER + 2000)
 #define SME_CMD_START_BSS_TIMEOUT (SME_CMD_VDEV_START_BSS_TIMEOUT + 1000)
+#define SME_CMD_STOP_VDEV_TIMEOUT (STOP_RESPONSE_TIMER + 1000)
 
 /* AP stop timeout = vdev stop + self peer delete + 1 sec */
 #define SME_CMD_STOP_BSS_CMD_TIMEOUT (STOP_RESPONSE_TIMER + \
@@ -803,16 +804,20 @@ QDF_STATUS sme_disable_active_apf_mode_ind(mac_handle_t mac_handle,
 					   uint8_t device_mode,
 					   uint8_t *macAddr, uint8_t sessionId);
 #else
+static inline
 QDF_STATUS sme_enable_active_apf_mode_ind(mac_handle_t mac_handle,
 					  uint8_t device_mode,
 					  uint8_t *macAddr, uint8_t sessionId)
 {
+	return QDF_STATUS_E_NOSUPPORT;
 }
 
+static inline
 QDF_STATUS sme_disable_active_apf_mode_ind(mac_handle_t mac_handle,
 					   uint8_t device_mode,
 					   uint8_t *macAddr, uint8_t sessionId)
 {
+	return QDF_STATUS_E_NOSUPPORT;
 }
 #endif
 
@@ -879,15 +884,52 @@ void sme_async_oem_event_init(mac_handle_t mac_handle,
  * Return: None
  */
 void sme_async_oem_event_deinit(mac_handle_t mac_handle);
+
 #else
-static inline void sme_async_oem_event_init(
-				mac_handle_t mac_handle,
-				void (*oem_data_async_event_handler_cb)
-				(void *oem_event_data))
+static inline
+void sme_async_oem_event_init(mac_handle_t mac_handle,
+			      void (*oem_data_async_event_handler_cb)
+			      (void *oem_event_data))
 {
 }
 
-static inline void sme_async_oem_event_deinit(mac_handle_t mac_handle)
+static inline
+void sme_async_oem_event_deinit(mac_handle_t mac_handle)
+{
+}
+
+#endif
+
+#ifdef FEATURE_SMEM_MAILBOX
+/**
+ * sme_smem_oem_event_init() - function to register cb for smem oem event
+ * @mac_handle: Opaque handle to the global MAC context
+ * @oem_data_smem_event_handler_cb: callback to be registered
+ *
+ * Return: None
+ */
+void sme_smem_oem_event_init(mac_handle_t mac_handle,
+			     void (*oem_data_smem_event_handler_cb)
+			     (const struct oem_data *oem_event_data));
+
+/**
+ * sme_smem_oem_event_deinit() - function to deregister cb for smem oem event
+ * @mac_handle: Opaque handle to the global MAC context
+ *
+ * Return: None
+ */
+void sme_smem_oem_event_deinit(mac_handle_t mac_handle);
+
+#else
+static inline
+void sme_smem_oem_event_init(mac_handle_t mac_handle,
+			     void (*oem_data_smem_event_handler_cb)
+			     (void *oem_event_data))
+{
+}
+
+static inline
+void sme_smem_oem_event_deinit(mac_handle_t mac_handle)
 {
 }
 #endif
@@ -1023,6 +1065,15 @@ QDF_STATUS sme_hide_ssid(mac_handle_t mac_handle, uint8_t sessionId,
  */
 void sme_set_listen_interval(mac_handle_t mac_handle, uint8_t vdev_id);
 
+/**
+ * sme_set_eht_data_extra_ltf_tx() - Set the Extra EHT LTF param
+ * @vdev_id: vdev identifier
+ * @val: Extra EHT LTF value
+ *
+ * Return: None
+ */
+void sme_set_eht_data_extra_ltf_tx(mac_handle_t mac_handle, uint8_t vdev_id,
+				   uint8_t val);
 /**
  * sme_update_roam_scan_n_probes() - Update no.of roam scan probes
  * @mac_handle: The handle returned by mac_open
@@ -1368,7 +1419,9 @@ QDF_STATUS sme_roam_csa_ie_request(mac_handle_t mac_handle,
 				   struct qdf_mac_addr bssid,
 				   uint32_t target_chan_freq, uint8_t csaIeReqd,
 				   struct ch_params *ch_params,
-				   uint32_t new_cac_ms);
+				   uint32_t new_cac_ms,
+				   uint8_t beacon_cnt,
+				   uint8_t mode);
 
 /**
  * sme_set_addba_accept() - Allow/Reject the ADDBA req session
@@ -1408,6 +1461,20 @@ QDF_STATUS sme_modify_add_ie(mac_handle_t mac_handle,
 		tSirModifyIE *pModifyIE, eUpdateIEsType updateType);
 QDF_STATUS sme_update_add_ie(mac_handle_t mac_handle,
 		tSirUpdateIE *pUpdateIE, eUpdateIEsType updateType);
+
+/*
+ * sme_update_rnr_ie() - This function sends msg to updates
+ * the RNR IE buffers in PE
+ *
+ * @mac_handle - global structure
+ * @updateie - pointer to rnrie related information structure
+ *
+ * Return: QDF_STATUS_SUCCESS if update rnrie successfully else return
+ * appropriate error status.
+ */
+QDF_STATUS sme_update_rnr_ie(mac_handle_t mac_handle,
+			     struct ssirupdaternrie *updateie);
+
 QDF_STATUS sme_update_connect_debug(mac_handle_t mac_handle,
 				    uint32_t set_value);
 
@@ -2008,7 +2075,8 @@ QDF_STATUS sme_set_tsfcb(mac_handle_t mac_handle,
 
 QDF_STATUS sme_reset_tsfcb(mac_handle_t mac_handle);
 
-#if defined(WLAN_FEATURE_TSF) && !defined(WLAN_FEATURE_TSF_PLUS_NOIRQ)
+#if defined(WLAN_FEATURE_TSF_PLUS_EXT_GPIO_IRQ) || \
+	defined(WLAN_FEATURE_TSF_PLUS_EXT_GPIO_SYNC)
 QDF_STATUS sme_set_tsf_gpio(mac_handle_t mac_handle, uint32_t pinvalue);
 #endif
 
@@ -2088,10 +2156,26 @@ void sme_stop_beacon_report(mac_handle_t mac_handle,
 
 #endif
 
+/**
+ * sme_add_beacon_filter() - set the beacon filter configuration
+ * @mac_handle: The handle returned by macOpen
+ * @vdev_id: vdev id
+ * @ie_map: bitwise array of IEs
+ *
+ * Return: Return QDF_STATUS, otherwise appropriate failure code
+ */
 QDF_STATUS sme_add_beacon_filter(mac_handle_t mac_handle,
-				 uint32_t session_id, uint32_t *ie_map);
+				 uint8_t vdev_id, uint32_t *ie_map);
+
+/**
+ * sme_remove_beacon_filter() - set the beacon filter configuration
+ * @mac_handle: The handle returned by macOpen
+ * @vdev_id: vdev id
+ *
+ * Return: Return QDF_STATUS, otherwise appropriate failure code
+ */
 QDF_STATUS sme_remove_beacon_filter(mac_handle_t mac_handle,
-				    uint32_t session_id);
+				    uint8_t vdev_id);
 
 #ifdef FEATURE_WLAN_APF
 /**
@@ -2167,18 +2251,20 @@ sme_apf_read_work_memory(mac_handle_t mac_handle,
 #endif /* FEATURE_WLAN_APF */
 
 uint32_t sme_get_wni_dot11_mode(mac_handle_t mac_handle);
-QDF_STATUS sme_create_mon_session(mac_handle_t mac_handle, uint8_t *bssid,
-				  uint8_t vdev_id);
+
+QDF_STATUS sme_create_pe_session(mac_handle_t mac_handle, uint8_t *bssid,
+				 uint8_t vdev_id, enum QDF_OPMODE op_mode);
 
 /**
- * sme_delete_mon_session() - post message to delete PE session for mon_mode
- * operation
+ * sme_delete_pe_session() - post message to delete PE session
  * @mac_handle: Opaque handle to the global MAC context
  * @vdev_id: sme session id
+ * @op_mode: vdev operating mode
  *
  * Return: QDF_STATUS_SUCCESS on success, non-zero error code on failure.
  */
-QDF_STATUS sme_delete_mon_session(mac_handle_t mac_handle, uint8_t vdev_id);
+QDF_STATUS sme_delete_pe_session(mac_handle_t mac_handle, uint8_t vdev_id,
+				 enum QDF_OPMODE op_mode);
 
 /**
  * sme_set_vdev_ies_per_band() - sends the per band IEs to vdev
@@ -2432,6 +2518,17 @@ QDF_STATUS sme_set_sar_power_limits(mac_handle_t mac_handle,
 		struct sar_limit_cmd_params *sar_limit_cmd);
 
 /**
+ * sme_set_tx_power_per_mcs() - set tx power per mcs
+ * @mac_handle: Opaque handle to the global MAC context
+ * @txpower_adjust_params: struct to send adjust txpower per mcs cmd.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_tx_power_per_mcs(
+			   mac_handle_t mac_handle,
+			   struct tx_power_per_mcs_rate *txpower_adjust_params);
+
+/**
  * sme_send_coex_config_cmd() - Send COEX config params
  * @coex_cfg_params: struct to coex config params
  *
@@ -2641,7 +2738,7 @@ QDF_STATUS sme_set_chip_pwr_save_fail_cb(mac_handle_t mac_handle,
  *
  * Return: 0 on success, errno on failure
  */
-int sme_cli_set_command(int vdev_id, int param_id, int sval, int vpdev);
+int sme_cli_set_command(int vdev_id, int param_id, uint32_t sval, int vpdev);
 
 /**
  * sme_set_bt_activity_info_cb - set the callback handler for bt events
@@ -3063,6 +3160,31 @@ QDF_STATUS sme_handle_sae_msg(mac_handle_t mac_handle,
 }
 #endif
 
+#ifdef WLAN_FEATURE_FILS_SK_SAP
+/**
+ * sme_handle_fils_hlp_msg() - Sends HLP message received from data path
+ * @mac_handle: The handle returned by mac_open
+ * @session_id: session id
+ * @hlp_rsp: HLP response packet received
+ * @hlp_rsp_len: HLP response length
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_handle_fils_hlp_msg(mac_handle_t mac_handle,
+				   uint8_t session_id,
+				   uint8_t *hlp_rsp,
+				   uint16_t hlp_rsp_len);
+#else
+static inline
+QDF_STATUS sme_handle_fils_hlp_msg(mac_handle_t mac_handle,
+				   uint8_t session_id,
+				   uint8_t *hlp_rsp,
+				   uint16_t hlp_rsp_len)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 /**
  * sme_set_ba_buff_size() - sets BA buffer size
  * @mac_handle: Opaque handle to the global MAC context
@@ -3121,6 +3243,17 @@ int sme_set_auto_rate_ldpc(mac_handle_t mac_handle, uint8_t session_id,
 			   uint8_t ldpc_disable);
 
 /**
+ * sme_set_auto_rate_stbc() - Sets STBC for auto rate
+ * @mac_handle: Opaque handle to the global MAC context
+ * @session_id: SME session id
+ * @stbc_disable: STBC configuration value
+ *
+ * Return: 0 on success else err code
+ */
+int sme_set_auto_rate_stbc(mac_handle_t mac_handle, uint8_t session_id,
+			   uint8_t stbc_disable);
+
+/**
  * sme_set_auto_rate_he_ltf() - Sets HE LTF for auto rate
  * @mac_handle: Opaque handle to the global MAC context
  * @session_id: SME session id
@@ -3136,13 +3269,11 @@ int sme_set_auto_rate_he_ltf(mac_handle_t mac_handle, uint8_t session_id,
  * sme_update_tgt_eht_cap() - sets the EHT caps to pmac
  * @mac_handle: Pointer to MAC handle
  * @cfg: Pointer to WMA target CFG
- * @eht_cap_ini: Pointer to EHT CAP configured by INI
  *
  * Return: None
  */
 void sme_update_tgt_eht_cap(mac_handle_t mac_handle,
-			    struct wma_tgt_cfg *cfg,
-			    tDot11fIEeht_cap *eht_cap_ini);
+			    struct wma_tgt_cfg *cfg);
 
 /**
  * sme_update_eht_cap_nss() - sets the nss based on user request
@@ -3187,10 +3318,22 @@ void sme_update_eht_cap_mcs(mac_handle_t mac_handle, uint8_t session_id,
  */
 int sme_update_eht_om_ctrl_supp(mac_handle_t mac_handle, uint8_t session_id,
 				uint8_t cfg_val);
+
+/**
+ * sme_update_eht_scs_traffic_desc_support() - sets the EHT SCS traffic
+ * description support capability
+ * @mac_handle: Opaque handle to the global MAC context
+ * @session_id: SME session id
+ * @cfg_val: EHT SCS traffic description config
+ *
+ * Return: 0 on success else err code
+ */
+int sme_update_eht_scs_traffic_desc_support(mac_handle_t mac_handle,
+					    uint8_t session_id,
+					    uint8_t cfg_val);
 #else
 static inline void sme_update_tgt_eht_cap(mac_handle_t mac_handle,
-					  struct wma_tgt_cfg *cfg,
-					  tDot11fIEeht_cap *eht_cap_ini)
+					  struct wma_tgt_cfg *cfg)
 {}
 
 static inline void sme_update_eht_cap_nss(mac_handle_t mac_handle,
@@ -3209,6 +3352,14 @@ static inline void sme_update_eht_cap_mcs(mac_handle_t mac_handle,
 static inline
 int sme_update_eht_om_ctrl_supp(mac_handle_t mac_handle, uint8_t session_id,
 				uint8_t cfg_val)
+{
+	return 0;
+}
+
+static inline
+int sme_update_eht_scs_traffic_desc_support(mac_handle_t mac_handle,
+					    uint8_t session_id,
+					    uint8_t cfg_val)
 {
 	return 0;
 }
@@ -3731,6 +3882,14 @@ void sme_set_ru_242_tone_tx_cfg(mac_handle_t mac_handle, uint8_t cfg_val);
  */
 void sme_check_enable_ru_242_tx(mac_handle_t mac_handle, uint8_t vdev_id);
 
+/**
+ * sme_config_ba_mode_all_vdevs() - sets BA mode for all STA vdev
+ * @mac_handle: Opaque handle to the global MAC context
+ * @val: BA mode
+ *
+ * Return: None
+ */
+void sme_config_ba_mode_all_vdevs(mac_handle_t mac_handle, uint8_t val);
 #else
 static inline void sme_set_he_testbed_def(mac_handle_t mac_handle,
 					  uint8_t vdev_id)
@@ -3753,6 +3912,10 @@ static inline void sme_set_ru_242_tone_tx_cfg(mac_handle_t mac_handle,
 					      uint8_t cfg_val)
 {
 }
+
+static inline
+void sme_config_ba_mode_all_vdevs(mac_handle_t mac_handle, uint8_t val)
+{}
 #endif
 
 /**
@@ -3768,20 +3931,26 @@ void sme_set_nss_capability(mac_handle_t mac_handle, uint8_t vdev_id,
 			    uint8_t nss, enum QDF_OPMODE op_mode);
 
 /**
- * enum sme_eht_tx_bfee_cap_type - EHT TX Beamformee capability type
+ * enum sme_eht_cap_type - EHT capability type
  * @EHT_TX_BFEE_ENABLE: TX beamformee enable
  * @EHT_TX_BFEE_SS_80MHZ: TX beamformee for 80 MHz
  * @EHT_TX_BFEE_SS_160MHZ: TX beamformee for 160 MHz
  * @EHT_TX_BFEE_SS_320MHZ: TX beamformee for 320 MHz
  * @EHT_TX_BFEE_SOUNDING_FEEDBACK_RATELIMIT: TX beamformee sounding feedback
  * ratelimit
+ * @EHT_TX_TRIG_SU_BFORMING_FEEDBACK: Triggered SU Beamforming Feedback
+ * @EHT_RX_EXTRA_ETH_LTF： RX support for extra EHT-LTFs
+ * @EHT_RTWT_SUPPORT: RTWT feature support
  */
-enum sme_eht_tx_bfee_cap_type {
+enum sme_eht_cap_type {
 	EHT_TX_BFEE_ENABLE = 1,
 	EHT_TX_BFEE_SS_80MHZ = 2,
 	EHT_TX_BFEE_SS_160MHZ = 3,
 	EHT_TX_BFEE_SS_320MHZ = 4,
 	EHT_TX_BFEE_SOUNDING_FEEDBACK_RATELIMIT = 5,
+	EHT_TX_TRIG_SU_BFORMING_FEEDBACK = 6,
+	EHT_RX_EXTRA_ETH_LTF = 7,
+	EHT_RTWT_SUPPORT = 8,
 };
 
 #ifdef WLAN_FEATURE_11BE
@@ -3843,13 +4012,16 @@ void sme_set_mlo_assoc_link_band(mac_handle_t mac_handle, uint8_t vdev_id,
  * @mac_handle: Opaque handle to the global MAC context
  * @session_id: session id
  * @num_links: number of links to be forced active
- * @active_link_addr: link mac address of (up to 2) links to be forced active
+ * @active_link_addr: link mac address of (up to WLAN_MAX_ML_BSS_LINKS) links to
+ * be forced active
+ * @force_reason: reason to force the link(s)
  *
  * Return: void
  */
 void sme_activate_mlo_links(mac_handle_t mac_handle, uint8_t session_id,
 			    uint8_t num_links,
-			    struct qdf_mac_addr active_link_addr[2]);
+			    struct qdf_mac_addr *active_link_addr,
+			    enum mlo_link_force_reason force_reason);
 
 /**
  * sme_update_eht_caps() - Update the session EHT caps
@@ -3862,7 +4034,7 @@ void sme_activate_mlo_links(mac_handle_t mac_handle, uint8_t session_id,
  * Return: 0 on success otherwise error code
  */
 int sme_update_eht_caps(mac_handle_t mac_handle, uint8_t session_id,
-			uint8_t cfg_val, enum sme_eht_tx_bfee_cap_type cap_type,
+			uint8_t cfg_val, enum sme_eht_cap_type cap_type,
 			enum QDF_OPMODE op_mode);
 /**
  * sme_send_vdev_pause_for_bcn_period() - Send vdev pause indication to FW
@@ -3877,13 +4049,18 @@ int sme_send_vdev_pause_for_bcn_period(mac_handle_t mac_handle,
 				       uint8_t cfg_val);
 
 /**
- * sme_set_per_link_ba_mode() - sets BA mode for each STA MLD link
+ * sme_send_ext_mld_cap_wfatest_cmd() - Send Extended MLD capability support
+ * config to FW via wfa test command
+ *
  * @mac_handle: Opaque handle to the global MAC context
- * @val: BA mode
+ * @vdev_id: vdev id
+ * @value: Extended MLD capability support
  *
  * Return: None
  */
-void sme_set_per_link_ba_mode(mac_handle_t mac_handle, uint8_t val);
+void sme_send_ext_mld_cap_wfatest_cmd(mac_handle_t mac_handle, uint8_t vdev_id,
+				      uint8_t value);
+
 #else
 static inline void sme_set_eht_testbed_def(mac_handle_t mac_handle,
 					   uint8_t vdev_id)
@@ -3915,7 +4092,7 @@ void sme_set_mlo_max_simultaneous_links(mac_handle_t mac_handle,
 
 static inline
 int sme_update_eht_caps(mac_handle_t mac_handle, uint8_t session_id,
-			uint8_t cfg_val, enum sme_eht_tx_bfee_cap_type cap_type,
+			uint8_t cfg_val, enum sme_eht_cap_type cap_type,
 			enum QDF_OPMODE op_mode)
 {
 	return 0;
@@ -3932,12 +4109,14 @@ int sme_send_vdev_pause_for_bcn_period(mac_handle_t mac_handle,
 static inline
 void sme_activate_mlo_links(mac_handle_t mac_handle, uint8_t session_id,
 			    uint8_t num_links,
-			    struct qdf_mac_addr active_link_addr[2])
+			    struct qdf_mac_addr *active_link_addr,
+			    enum mlo_link_force_reason force_reason)
 {
 }
 
 static inline
-void sme_set_per_link_ba_mode(mac_handle_t mac_handle, uint8_t val)
+void sme_send_ext_mld_cap_wfatest_cmd(mac_handle_t mac_handle, uint8_t vdev_id,
+				      uint8_t value)
 {}
 #endif
 
@@ -4488,18 +4667,6 @@ QDF_STATUS sme_register_bcn_recv_pause_ind_cb(mac_handle_t mac_handle,
 #endif
 
 /**
- * sme_set_disconnect_ies() - set disconnect IEs
- * @mac_handle: handle returned by mac_open
- * @vdev_id: vdev id
- * @ie_data: Disconnect IE data
- * @ie_len: Disconnect IE length
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS sme_set_disconnect_ies(mac_handle_t mac_handle, uint8_t vdev_id,
-				  uint8_t *ie_data, uint16_t ie_len);
-
-/**
  * sme_set_vdev_sw_retry() - set sw retry threshold per vdev
  * @vdev_id: vdev id
  * @sw_retry_count: sw retry number
@@ -4527,6 +4694,30 @@ QDF_STATUS sme_set_vdev_sw_retry(uint8_t vdev_id, uint8_t sw_retry_count,
 QDF_STATUS sme_set_roam_config_enable(mac_handle_t mac_handle,
 				      uint8_t vdev_id,
 				      uint8_t roam_control_enable);
+
+/**
+ * sme_set_aggressive_roaming() - Set Aggressive roaming in SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @is_aggressive_roam_mode: True if roaming mode is set to aggressive
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_aggressive_roaming(mac_handle_t mac_handle,
+				      uint8_t vdev_id,
+				      bool is_aggressive_roam_mode);
+
+/**
+ * sme_get_aggressive_roaming() - Get Aggressive roaming in SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @is_aggressive_roam_mode: True if roaming mode is set to aggressive
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_get_aggressive_roaming(mac_handle_t mac_handle,
+				      uint8_t vdev_id,
+				      bool *is_aggressive_roam_mode);
 
 /**
  * sme_send_vendor_btm_params - Send vendor btm params to FW
@@ -4629,34 +4820,40 @@ QDF_STATUS sme_vdev_self_peer_delete_resp(struct del_vdev_params *param);
  */
 void sme_vdev_del_resp(uint8_t vdev_id);
 
-#ifdef FEATURE_MONITOR_MODE_SUPPORT
+#if defined(FEATURE_MONITOR_MODE_SUPPORT) || defined(DRIVER_PASSTHRU_MODE)
 /**
- * sme_set_monitor_mode_cb() - Register monitor mode vdev up operation callback
+ * sme_set_op_mode_cb() - Register mode specific vdev up operation callback
  * @mac_handle: Opaque handle to the MAC context
- * @monitor_mode_cb: callback to be registered
+ * @monitor_mode_cb: callback to be registered for monitor vdev
+ * @passthrough_mode_cb: callback to be registered for passthrough vdev
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS sme_set_monitor_mode_cb(mac_handle_t mac_handle,
-				   void (*monitor_mode_cb)(uint8_t vdev_id));
+QDF_STATUS sme_set_op_mode_cb(mac_handle_t mac_handle,
+			      void (*monitor_mode_cb)(uint8_t vdev_id,
+						      bool is_up),
+			      void (*passthrough_mode_cb)(uint8_t vdev_id,
+							  bool is_up));
 
 /*
- * sme_process_monitor_mode_vdev_up_evt() - Handle vdev up completion
+ * sme_process_monitor_mode_vdev_evt() - Handle vdev up completion
  * @vdev_id: vdev id
+ * @is_up: is vdev up
  *
  * Return: QDF_STATUS.
  */
-QDF_STATUS sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id);
+QDF_STATUS sme_process_monitor_mode_vdev_evt(uint8_t vdev_id, bool is_up);
 #else
 static inline
 QDF_STATUS sme_set_monitor_mode_cb(mac_handle_t mac_handle,
-				   void (*monitor_mode_cb)(uint8_t vdev_id))
+				   void (*monitor_mode_cb)(uint8_t vdev_id,
+							   bool is_up))
 {
 	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS
-sme_process_monitor_mode_vdev_up_evt(uint8_t vdev_id)
+sme_process_monitor_mode_vdev_evt(uint8_t vdev_id, bool is_up)
 {
 	return QDF_STATUS_E_FAILURE;
 }
@@ -4767,6 +4964,7 @@ QDF_STATUS sme_send_set_mac_addr(struct qdf_mac_addr mac_addr,
  * @update_sta_self_peer: Flag to check self peer MAC address or not.
  * @update_mld_addr: Flag to check if MLD address update needed or not.
  * @req_status: Status of the set MAC address request to the FW
+ * @skip_attach: flag to indicate if skip dp vdev attach or not
  *
  * API to update MLME structures with new MAC address. This will be invoked
  * after receiving success status form the FW for the set MAC address request
@@ -4778,7 +4976,8 @@ QDF_STATUS sme_update_vdev_mac_addr(struct wlan_objmgr_vdev *vdev,
 				    struct qdf_mac_addr mac_addr,
 				    struct qdf_mac_addr mld_addr,
 				    bool update_sta_self_peer,
-				    bool update_mld_addr, int req_status);
+				    bool update_mld_addr, int req_status,
+				    bool skip_attach);
 #endif
 
 /**
@@ -4803,6 +5002,28 @@ QDF_STATUS sme_get_network_params(struct mac_context *mac_ctx,
  */
 QDF_STATUS sme_start_bss(mac_handle_t mac_handle, uint8_t vdev_id,
 			 struct start_bss_config *bss_config);
+
+/**
+ * sme_set_p2p_go_bcn_int() - Sets the P2P GO beacon interval
+ * @mac_handle: mac handle
+ * @vdev_id: vdev id
+ * @bcn_int: beacon interval value
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_p2p_go_bcn_int(mac_handle_t mac_handle, uint8_t vdev_id,
+				  uint16_t bcn_int);
+
+/**
+ * sme_set_btm_req_reject() - Sets BTM request reject config to firmware
+ * @mac_handle: mac handle
+ * @vdev_id: vdev id
+ * @btm_reject: BTM request reject value
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_btm_req_reject(mac_handle_t mac_handle, uint8_t vdev_id,
+				  uint8_t btm_reject);
 
 /**
  * sme_sap_ser_callback() - callback from serialization module
@@ -4854,5 +5075,237 @@ QDF_STATUS sme_send_channel_change_req(mac_handle_t mac_handle,
 QDF_STATUS sme_update_beacon_country_ie(mac_handle_t mac_handle,
 					uint8_t vdev_id,
 					bool country_ie_for_all_band);
+/**
+ * sme_register_set_disconnect_cb() - function to register cb to set
+ * disconnect link_id
+ * @mac_handle: Opaque handle to the global MAC context
+ * @hdd_set_disconnect_link_info_cb: callback to be registered
+ *
+ * Return: None
+ */
 
+void sme_register_set_disconnect_cb(mac_handle_t mac_handle,
+				    void (*set_disconnect_link_info_cb)
+				    (uint8_t vdev_id, bool is_disconnect_sent));
+
+/**
+ * sme_deregister_disconnect_cb() - function to deregister cb to
+ * disconnect link_id
+ * @mac_handle: Opaque handle to the global MAC context
+ *
+ * Return: None
+ */
+void sme_deregister_disconnect_cb(mac_handle_t mac_handle);
+
+#if defined(WLAN_FEATURE_11BE_MLO)
+/**
+ * sme_pmkid_get_mld_addr - Get mld address from preauth list
+ * @mac_handle: pointer to mac handle
+ * @peer_addr : input peer link address
+ * @mld_addr: output mld address
+ *
+ *
+ * Return: None
+ */
+void sme_pmkid_get_mld_addr(mac_handle_t mac_handle,
+			    uint8_t *peer_addr,
+			    uint8_t *mld_addr);
+#else
+static inline
+void sme_pmkid_get_mld_addr(mac_handle_t mac_handle,
+			    uint8_t *peer_addr,
+			    uint8_t *mld_addr)
+{
+}
+#endif
+
+/**
+ * sme_update_2g_band_weight_value()-Send 2.4 GHz band weight value to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @band_2g_weightage: 2.4 GHz band weightage in percentage
+ *
+ * Updated 2.4 GHz band weightage in roam info and a roam_offload_scan request.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_update_2g_band_weight_value(mac_handle_t mac_handle,
+					   uint8_t vdev_id,
+					   uint32_t band_2g_weightage);
+/**
+ * sme_update_5g_band_weight_value()-Send 5 GHz band weight value to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @band_5g_weightage: 5 GHz band weightage in percentage
+ *
+ * Updated 5 GHz band weightage in roam info and a roam_offload_scan request.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_update_5g_band_weight_value(mac_handle_t mac_handle,
+					   uint8_t vdev_id,
+					   uint32_t band_5g_weightage);
+
+/**
+ * sme_update_6g_band_weight_value()-Send 6 GHz band weight value to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @band_6g_weightage: 6 GHz band weightage in percentage
+ *
+ * Updated 6 GHz band weightage in roam info and a roam_offload_scan request.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_update_6g_band_weight_value(mac_handle_t mac_handle,
+					   uint8_t vdev_id,
+					   uint32_t band_6g_weightage);
+
+/**
+ * sme_set_roam_periodic_scan_interval_value()- Send roam periodic scan interval
+ * to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @roam_periodic_scan_interval
+ *
+ * Updated roam periodic scan interval in roam info and a roam_offload_scan
+ * request
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+sme_set_roam_periodic_scan_interval_value(mac_handle_t mac_handle,
+					  uint8_t vdev_id,
+					  uint32_t roam_periodic_scan_interval);
+
+/**
+ * sme_get_roam_periodic_scan_interval() - Get roam periodic scan interval
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @roam_periodic_scan_interval: Pointer of a buffer to fill the
+ * roam_periodic_scan_interval
+ *
+ * Get the roam_periodic_scan_interval and fill in the given
+ * buffer roam_periodic_scan_interval.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+sme_get_roam_periodic_scan_interval(mac_handle_t mac_handle,
+				    uint8_t vdev_id,
+				    uint32_t *roam_periodic_scan_interval);
+
+/**
+ * sme_set_roam_score_delta_value() - Send roam score delta value to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @roam_score_delta: Roam score delta value in percentage
+ *
+ * Updated Roam score delta in roam info and a roam_offload_scan request.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_roam_score_delta_value(mac_handle_t mac_handle,
+					  uint8_t vdev_id,
+					  uint32_t roam_score_delta);
+
+/**
+ * sme_get_roam_score_delta_value() - Get roam score delta value
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @roam_score_delta: Pointer of a buffer to fill the roam score delta value
+ *
+ * Get the roam_score_delta and fill in the given
+ * buffer roam_score_delta.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_get_roam_score_delta_value(mac_handle_t mac_handle,
+					  uint8_t vdev_id,
+					  uint32_t *roam_score_delta);
+
+/**
+ * sme_set_roam_cfg_rt_params_enabled() -
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @roam_cfg_rt_params_enabled: bool value to set the status of
+ * roam_cfg_rt_params_enabled flag in vdev rso config.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS sme_set_roam_cfg_rt_params_enabled(mac_handle_t mac_handle,
+					      uint8_t vdev_id,
+					      bool roam_cfg_rt_params_enabled);
+
+/**
+ * sme_set_min_roam_score_delta_value() - Send min roam score delta value to SME
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @min_roam_score_delta: min roam score delta value in percentage
+ *
+ * Updated min roam score delta in roam info and a roam_offload_scan request.
+ *
+ * Return: QDF_STATUS
+ *
+ */
+QDF_STATUS sme_set_min_roam_score_delta_value(mac_handle_t mac_handle,
+					      uint8_t vdev_id,
+					      uint32_t min_roam_score_delta);
+
+/**
+ * sme_set_reconnect_disallow_period_value() - Send reconnect_disallow period
+ * value to SME.
+ * @mac_handle: Opaque handle to the MAC context
+ * @vdev_id: vdev id
+ * @reconnect_disallow_period: reconnect disallow period value
+ * in seconds.
+ *
+ * Updated reconnect disallow period in roam info and roam_offload_scan
+ * request.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+sme_set_reconnect_disallow_period_value(mac_handle_t mac_handle,
+					uint8_t vdev_id,
+					uint32_t reconnect_disallow_period);
+
+#ifdef DRIVER_PASSTHRU_MODE
+/**
+ * sme_passthru_peer_setup() - request passthru peer setup or update
+ * @mac_handle: mac handle
+ * @peer_setup: setup request; create_only=1 for NEW, 0 for UPDATE
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+sme_passthru_peer_setup(mac_handle_t mac_handle,
+			struct sir_passthru_peer_setup_msg *peer_setup);
+
+/**
+ * sme_passthru_peer_del() - request passthru peer deletion
+ * @mac_handle: mac handle
+ * @peer_del: deletion request carrying peer MAC address
+ *
+ * Posts WNI_SME_PASSTHRU_PEER_DEL to LIM to trigger WMI_PEER_DELETE_CMDID.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+sme_passthru_peer_del(mac_handle_t mac_handle,
+		      struct sir_passthru_peer_del_msg *peer_del);
+#else
+static inline QDF_STATUS
+sme_passthru_peer_setup(mac_handle_t mac_handle,
+			struct sir_passthru_peer_setup_msg *peer_setup)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+sme_passthru_peer_del(mac_handle_t mac_handle,
+		      struct sir_passthru_peer_del_msg *peer_del)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
 #endif /* #if !defined( __SME_API_H ) */

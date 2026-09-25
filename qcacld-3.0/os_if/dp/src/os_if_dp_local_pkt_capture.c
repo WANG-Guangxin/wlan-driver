@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -45,6 +45,10 @@
 	QCA_WLAN_VENDOR_ATTR_SET_MONITOR_MODE_CTRL_TX_FRAME_TYPE
 #define SET_MONITOR_MODE_CTRL_RX_FRAME_TYPE \
 	QCA_WLAN_VENDOR_ATTR_SET_MONITOR_MODE_CTRL_RX_FRAME_TYPE
+#define SET_MONITOR_MODE_OPERATING_TYPE \
+	QCA_WLAN_VENDOR_ATTR_SET_MONITOR_MODE_OPERATING_TYPE
+#define SET_MONITOR_MODE_CONNECTED_BEACON_INTERVAL \
+	QCA_WLAN_VENDOR_ATTR_SET_MONITOR_MODE_CONNECTED_BEACON_INTERVAL
 
 /* Short name for QCA_NL80211_VENDOR_SUBCMD_GET_MONITOR_MODE command */
 #define GET_MONITOR_MODE_CONFIG_MAX \
@@ -57,6 +61,12 @@
 #define MGMT_FRAME_TYPE    0
 #define DATA_FRAME_TYPE    1
 #define CTRL_FRAME_TYPE    2
+#define BIT_FRAME_TYPE_ALL \
+	(BIT(MGMT_FRAME_TYPE) | BIT(DATA_FRAME_TYPE) | BIT(CTRL_FRAME_TYPE))
+
+#define DATA_MAX_FILTER BIT(18)
+#define MGMT_MAX_FILTER BIT(5)
+#define CTRL_MAX_FILTER BIT(3)
 
 const struct nla_policy
 set_monitor_mode_policy[SET_MONITOR_MODE_CONFIG_MAX + 1] = {
@@ -66,6 +76,8 @@ set_monitor_mode_policy[SET_MONITOR_MODE_CONFIG_MAX + 1] = {
 	[SET_MONITOR_MODE_MGMT_RX_FRAME_TYPE] = { .type = NLA_U32 },
 	[SET_MONITOR_MODE_CTRL_TX_FRAME_TYPE] = { .type = NLA_U32 },
 	[SET_MONITOR_MODE_CTRL_RX_FRAME_TYPE] = { .type = NLA_U32 },
+	[SET_MONITOR_MODE_CONNECTED_BEACON_INTERVAL] = { .type = NLA_U32 },
+	[SET_MONITOR_MODE_OPERATING_TYPE] = { .type = NLA_U32 },
 };
 
 static
@@ -73,7 +85,7 @@ bool os_if_local_pkt_capture_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 {
 	uint32_t num_connections, sta_count;
 
-	num_connections = policy_mgr_get_connection_count(psoc);
+	num_connections = policy_mgr_get_connection_count_with_mlo(psoc);
 	osif_debug("Total connections %d", num_connections);
 
 	/*
@@ -91,7 +103,7 @@ bool os_if_local_pkt_capture_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 							      PM_STA_MODE,
 							      NULL);
 	osif_debug("sta_count %d", sta_count);
-	if (sta_count == 1)
+	if (sta_count)
 		return true;
 
 	return false;
@@ -100,11 +112,6 @@ bool os_if_local_pkt_capture_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 bool os_if_lpc_mon_intf_creation_allowed(struct wlan_objmgr_psoc *psoc)
 {
 	if (ucfg_dp_is_local_pkt_capture_enabled(psoc)) {
-		if (policy_mgr_is_mlo_sta_present(psoc)) {
-			osif_err("MLO STA present, lpc interface creation not allowed");
-			return false;
-		}
-
 		if (!os_if_local_pkt_capture_concurrency_allowed(psoc)) {
 			osif_err("Concurrency check failed, lpc interface creation not allowed");
 			return false;
@@ -135,16 +142,6 @@ static QDF_STATUS os_if_start_capture_allowed(struct wlan_objmgr_vdev *vdev)
 		return QDF_STATUS_E_PERM;
 	}
 
-	/*
-	 * Whether STA interface is present or not, is already checked
-	 * while creating monitor interface
-	 */
-
-	if (policy_mgr_is_mlo_sta_present(psoc)) {
-		osif_err("MLO STA present, start capture is not permitted");
-		return QDF_STATUS_E_PERM;
-	}
-
 	if (!os_if_local_pkt_capture_concurrency_allowed(psoc)) {
 		osif_err("Concurrency check failed, start capture not allowed");
 		return QDF_STATUS_E_PERM;
@@ -153,25 +150,18 @@ static QDF_STATUS os_if_start_capture_allowed(struct wlan_objmgr_vdev *vdev)
 	return QDF_STATUS_SUCCESS;
 }
 
-static QDF_STATUS os_if_stop_capture_allowed(struct wlan_objmgr_vdev *vdev)
+static QDF_STATUS
+os_if_stop_capture_allowed(struct wlan_objmgr_psoc *psoc,
+			   enum QDF_OPMODE opmode)
 {
-	enum QDF_OPMODE mode;
-	struct wlan_objmgr_psoc *psoc;
 	void *soc;
 
 	soc = cds_get_context(QDF_MODULE_ID_SOC);
 	if (!soc)
 		return QDF_STATUS_E_INVAL;
 
-	psoc = wlan_vdev_get_psoc(vdev);
-	if (!psoc) {
-		osif_err("NULL psoc");
-		return QDF_STATUS_E_INVAL;
-	}
-
-	mode = wlan_vdev_mlme_get_opmode(vdev);
-	if (mode != QDF_MONITOR_MODE) {
-		osif_warn("Operation not permitted in mode: %d", mode);
+	if (opmode != QDF_MONITOR_MODE) {
+		osif_warn("Operation not permitted in opmode: %d", opmode);
 		return QDF_STATUS_E_PERM;
 	}
 
@@ -188,6 +178,7 @@ static QDF_STATUS os_if_stop_capture_allowed(struct wlan_objmgr_vdev *vdev)
 	return QDF_STATUS_SUCCESS;
 }
 
+#ifndef WLAN_LOCAL_PKT_CAPTURE_SUBFILTER
 static
 QDF_STATUS os_if_dp_local_pkt_capture_start(struct wlan_objmgr_vdev *vdev,
 					    struct nlattr **tb)
@@ -196,6 +187,7 @@ QDF_STATUS os_if_dp_local_pkt_capture_start(struct wlan_objmgr_vdev *vdev,
 	struct cdp_monitor_filter filter = {0};
 	uint32_t pkt_type = 0, val;
 	void *soc;
+	bool is_coc_mode = false;
 
 	status = os_if_start_capture_allowed(vdev);
 	if (QDF_IS_STATUS_ERROR(status))
@@ -283,6 +275,147 @@ QDF_STATUS os_if_dp_local_pkt_capture_start(struct wlan_objmgr_vdev *vdev,
 		pkt_type |= BIT(CTRL_FRAME_TYPE);
 	}
 
+	if (tb[SET_MONITOR_MODE_OPERATING_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_OPERATING_TYPE]);
+
+		if (val == QCA_WLAN_VENDOR_MONITOR_OPERATING_TYPE_OCC) {
+			is_coc_mode = true;
+		} else if (val !=
+			   QCA_WLAN_VENDOR_MONITOR_OPERATING_TYPE_LPC) {
+			osif_err("Invalid operating type value: %d", val);
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+	}
+
+	if (pkt_type == 0) {
+		osif_err("Invalid config, pkt_type: %d", pkt_type);
+		status = QDF_STATUS_E_INVAL;
+		goto error;
+	}
+
+	if (is_coc_mode) {
+		if (pkt_type == BIT_FRAME_TYPE_ALL) {
+			filter.fp_mgmt = FILTER_MGMT_ALL;
+			filter.fp_data = FILTER_DATA_ALL;
+			filter.fp_ctrl = FILTER_CTRL_ALL;
+			filter.mo_mgmt = FILTER_MGMT_ALL;
+			filter.mo_data = FILTER_DATA_ALL;
+			filter.mo_ctrl = FILTER_CTRL_ALL;
+		} else {
+			osif_err("Invalid config for coc mode, pkt_type: %d",
+				 pkt_type);
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+	} else {
+		filter.fp_mgmt = pkt_type & BIT(MGMT_FRAME_TYPE) ?
+					FILTER_MGMT_ALL : 0;
+		filter.fp_data = pkt_type & BIT(DATA_FRAME_TYPE) ?
+					FILTER_DATA_ALL : 0;
+		filter.fp_ctrl = pkt_type & BIT(CTRL_FRAME_TYPE) ?
+					FILTER_CTRL_ALL : 0;
+	}
+
+	osif_debug("start capture mode %s, config pkt_type:0x%x",
+		   (is_coc_mode ? "coc" : "lpc"), pkt_type);
+
+	filter.mode = is_coc_mode ? MON_FILTER_ALL : MON_FILTER_PASS;
+
+	status = cdp_start_local_pkt_capture(soc, OL_TXRX_PDEV_ID, &filter);
+
+error:
+	return status;
+}
+#else
+static
+QDF_STATUS os_if_dp_local_pkt_capture_start(struct wlan_objmgr_vdev *vdev,
+					    struct nlattr **tb)
+{
+	QDF_STATUS status;
+	struct cdp_monitor_filter filter = {0};
+	uint32_t pkt_type = 0, val;
+	void *soc;
+
+	status = os_if_start_capture_allowed(vdev);
+	if (QDF_IS_STATUS_ERROR(status))
+		goto error;
+
+	soc = cds_get_context(QDF_MODULE_ID_SOC);
+	if (!soc)
+		return QDF_STATUS_E_INVAL;
+
+	if (tb[SET_MONITOR_MODE_MGMT_TX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_MGMT_TX_FRAME_TYPE]);
+		if (!val && val > MGMT_MAX_FILTER) {
+			osif_err("Invalid value Mgmt filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.mgmt_tx_frame_filter = val;
+		pkt_type |= BIT(MGMT_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_MGMT_RX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_MGMT_RX_FRAME_TYPE]);
+		if (!val && val > MGMT_MAX_FILTER) {
+			osif_err("Invalid value Mgmt filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.mgmt_rx_frame_filter = val;
+		pkt_type |= BIT(MGMT_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_DATA_TX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_DATA_TX_FRAME_TYPE]);
+		if (!val && val > DATA_MAX_FILTER) {
+			osif_err("Invalid value Data filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.data_tx_frame_filter = val;
+		pkt_type |= BIT(DATA_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_DATA_RX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_DATA_RX_FRAME_TYPE]);
+		if (!val && val > DATA_MAX_FILTER) {
+			osif_err("Invalid value Data filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.data_rx_frame_filter = val;
+		pkt_type |= BIT(DATA_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_CTRL_TX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_CTRL_TX_FRAME_TYPE]);
+		if (!val && val > CTRL_MAX_FILTER) {
+			osif_err("Invalid value Ctrl filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.ctrl_tx_frame_filter = val;
+		pkt_type |= BIT(CTRL_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_CTRL_RX_FRAME_TYPE]) {
+		val = nla_get_u32(tb[SET_MONITOR_MODE_CTRL_RX_FRAME_TYPE]);
+		if (!val && val > CTRL_MAX_FILTER) {
+			osif_err("Invalid value Ctrl filter");
+			status = QDF_STATUS_E_INVAL;
+			goto error;
+		}
+		filter.fp_subfilter.ctrl_rx_frame_filter = val;
+		pkt_type |= BIT(CTRL_FRAME_TYPE);
+	}
+
+	if (tb[SET_MONITOR_MODE_CONNECTED_BEACON_INTERVAL]) {
+		filter.fp_subfilter.connected_beacon_interval =
+		nla_get_u32(tb[SET_MONITOR_MODE_CONNECTED_BEACON_INTERVAL]);
+	}
+
 	if (pkt_type == 0) {
 		osif_err("Invalid config, pkt_type: %d", pkt_type);
 		status = QDF_STATUS_E_INVAL;
@@ -300,6 +433,7 @@ QDF_STATUS os_if_dp_local_pkt_capture_start(struct wlan_objmgr_vdev *vdev,
 error:
 	return status;
 }
+#endif /* End of WLAN_LOCAL_PKT_CAPTURE_SUBFILTER */
 
 QDF_STATUS os_if_dp_set_lpc_configure(struct wlan_objmgr_vdev *vdev,
 				      const void *data, int data_len)
@@ -320,16 +454,18 @@ error:
 	return status;
 }
 
-QDF_STATUS os_if_dp_local_pkt_capture_stop(struct wlan_objmgr_vdev *vdev)
+QDF_STATUS
+os_if_dp_local_pkt_capture_stop(struct wlan_objmgr_psoc *psoc,
+				enum QDF_OPMODE opmode)
 {
 	QDF_STATUS status;
 	void *soc;
 
 	soc = cds_get_context(QDF_MODULE_ID_SOC);
-	if (!soc || !vdev)
+	if (!soc || !psoc)
 		return QDF_STATUS_E_INVAL;
 
-	status = os_if_stop_capture_allowed(vdev);
+	status = os_if_stop_capture_allowed(psoc, opmode);
 	if (QDF_IS_STATUS_ERROR(status))
 		return status;
 

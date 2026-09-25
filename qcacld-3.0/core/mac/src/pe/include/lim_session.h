@@ -83,7 +83,7 @@ struct reassoc_params {
 #ifdef WLAN_FEATURE_11AX_BSS_COLOR
 #define MAX_BSS_COLOR_VALUE 63
 #define TIME_BEACON_NOT_UPDATED 30000
-#define BSS_COLOR_SWITCH_COUNTDOWN 5
+#define BSS_COLOR_SWITCH_COUNTDOWN 10
 #define OBSS_COLOR_COLLISION_DETECTION_STA_PERIOD_MS 120000
 #define OBSS_COLOR_COLLISION_DETECTION_AP_PERIOD_MS 120000
 /*
@@ -182,6 +182,7 @@ struct eml_capabilities {
  * @tid_link_map_supported: TID link map support
  * @str_freq_separation: STR freq separation
  * @aar_support: AAR support
+ * @link_reconfig_operation_support: Link reconfig operation support (13th BIT)
  * @reserved: reserve
  */
 struct mld_capab_and_op {
@@ -190,19 +191,26 @@ struct mld_capab_and_op {
 	uint16_t tid_link_map_supported:2;
 	uint16_t str_freq_separation:5;
 	uint16_t aar_support:1;
-	uint16_t reserved:3;
+	uint16_t link_reconfig_operation_support:1;
+	uint16_t reserved:2;
 };
 
 /**
  * struct ext_mld_capab_and_op - EXT MLD capability and operations info
  * @op_parameter_update_support: operation parameter update support
  * @rec_max_simultaneous_links: recommended max simultaneous links
+ * @nstr_status_update_support: NSTR status update support
+ * @emlsr_enablement_on_one_link_support: EMLSR enablement on one link support
+ * @btm_mld_rec_for_multi_ap_supp: BTM MLD recommendation multi AP support
  * @reserved: reserved
  */
 struct ext_mld_capab_and_op {
 	uint16_t op_parameter_update_support:1;
-	uint16_t rec_max_simultaneous_links:3;
-	uint16_t reserved:11;
+	uint16_t rec_max_simultaneous_links:4;
+	uint16_t nstr_status_update_support:1;
+	uint16_t emlsr_enablement_on_one_link_support:1;
+	uint16_t btm_mld_rec_for_multi_ap_supp:1;
+	uint16_t reserved:8;
 };
 
 /**
@@ -217,6 +225,7 @@ struct ext_mld_capab_and_op {
  * @mld_id_present: the present flag of MLD ID
  * @ext_mld_capab_and_op_present: Extended MLD Capabilities And
  *                                Operations Present
+ * @mld_mac_address_present: MLD MAC address Present
  * @reserved_1: reserved
  * @common_info_length: common info length
  * @mld_mac_addr: MLD mac address
@@ -243,7 +252,8 @@ struct wlan_mlo_ie {
 	uint16_t mld_capab_and_op_present: 1;
 	uint16_t mld_id_present: 1;
 	uint16_t ext_mld_capab_and_op_present: 1;
-	uint16_t reserved_1:5;
+	uint16_t mld_mac_address_present: 1;
+	uint16_t reserved_1:4;
 	uint8_t common_info_length;
 	uint8_t mld_mac_addr[6];
 	uint8_t link_id;
@@ -254,7 +264,7 @@ struct wlan_mlo_ie {
 	uint8_t mld_id_info;
 	struct ext_mld_capab_and_op ext_mld_capab_and_op_info;
 	uint16_t num_sta_profile;
-	struct wlan_mlo_sta_profile sta_profile[WLAN_MLO_MAX_VDEVS];
+	struct wlan_mlo_sta_profile sta_profile[WLAN_MAX_ML_BSS_LINKS + 1];
 	uint16_t num_data;
 	uint8_t data[WLAN_MLO_IE_COM_MAX_LEN];
 };
@@ -268,7 +278,10 @@ struct wlan_mlo_ie {
  * @link_csa: csa IE
  * @link_ecsa:ecsa IE
  * @link_swt_time: switch time IE
+ * @link_bss_color_change: bss color change IE
  * @link_quiet: quiet IE
+ * @link_operatingmode: operating mode IE
+ * @link_widerbwchanswitchann: wide bandwidth channel switch IE
  * @link_ht_cap: ht cap IE
  * @link_ht_info: ht info IE
  * @link_cap: link caps IE
@@ -283,6 +296,10 @@ struct wlan_mlo_ie {
  * @link_eht_op: eht op IE
  * @max_chan_swt_time: MLOTD
  * @bss_param_change_cnt: bss param change count
+ * @tsf_fw: tsf reported from fw
+ * @qtimer_fw: qtimer reported from fw
+ * @tsf_host: calculated tsf
+ * @tsf_valid: whether tsf_host is valid or not
  */
 struct mlo_link_ie {
 	tDot11fIEDSParams                    link_ds;
@@ -292,7 +309,10 @@ struct mlo_link_ie {
 	tDot11fIEChanSwitchAnn               link_csa;
 	tDot11fIEext_chan_switch_ann         link_ecsa;
 	tDot11fIEmax_chan_switch_time        link_swt_time;
+	tDot11fIEbss_color_change            link_bss_color_change;
 	tDot11fIEQuiet                       link_quiet;
+	tDot11fIEOperatingMode               link_operatingmode;
+	tDot11fIEWiderBWChanSwitchAnn        link_widerbwchanswitchann;
 	tDot11fIEHTCaps                      link_ht_cap;
 	tDot11fIEHTInfo                      link_ht_info;
 	tDot11fFfCapabilities                link_cap;
@@ -307,6 +327,10 @@ struct mlo_link_ie {
 	tDot11fIEeht_op                      link_eht_op;
 	uint32_t                             max_chan_swt_time;
 	uint8_t                              bss_param_change_cnt;
+	uint64_t                             tsf_fw;
+	uint64_t                             qtimer_fw;
+	uint64_t                             tsf_host;
+	bool                                 tsf_valid;
 };
 
 /**
@@ -370,6 +394,44 @@ struct wlan_mlo_ie_info {
 } qdf_packed;
 
 #endif
+
+#define MAX_NUM_RNR_ENTRY 2
+
+/**
+ * struct dfs_p2p_group_info - Data struct to hold DFS operating P2P group info
+ * @is_assisted_p2p_group: Is AP assisted DFS group
+ * @chan_usage_req_resp_inprog: Is channel usage exchange in progress
+ * @is_ap_bcn_monitor_active: Is FW monitoring assisted AP beacons
+ * @reserved: Reserved
+ * @ap_bssid: BSSID of assisted AP
+ * @non_tx_bssid: Non-TxBSSID of assisted AP
+ * @chan_usage_req: Channel usage request info
+ * @chan_usage_resp: Channel usage response info
+ */
+struct dfs_p2p_group_info {
+	uint8_t is_assisted_p2p_group:1,
+		chan_usage_req_resp_inprog:1,
+		is_ap_bcn_monitor_active:1,
+		reserved:5;
+	struct qdf_mac_addr ap_bssid;
+	struct qdf_mac_addr non_tx_bssid;
+	tDot11fchannel_usage_req chan_usage_req;
+	tDot11fchannel_usage_resp chan_usage_resp;
+};
+
+/**
+ * struct punc_chan_info - Channel information
+ * @chan_width: channel width
+ * @center_freq_seg0: Center frequency segment 0
+ * @center_freq_seg1: Center frequency segment 1
+ * @present: boolean flag
+ */
+struct punc_chan_info {
+	uint8_t chan_width;
+	uint8_t center_freq_seg0;
+	uint8_t center_freq_seg1;
+	bool present;
+};
 
 /**
  * struct pe_session - per-vdev PE context
@@ -629,12 +691,15 @@ struct wlan_mlo_ie_info {
  * @he_op:
  * @he_sta_obsspd:
  * @he_6ghz_band:
+ * @he_punc_chan_info: HE punctured channel info
  * @he_bss_color_change:
  * @bss_color_info:
  * @bss_color_changing:
  * @deauth_retry:
  * @ht_client_cnt:
  * @ch_switch_in_progress:
+ * @post_csa_notify_cap: Send notify capability pending post CSA
+ * @post_csa_ocv_sa_query_timer: Timer to check peer STA CSA OCV SA Query
  * @he_with_wep_tkip:
  * @fils_info:
  * @prev_auth_seq_num: Sequence number of previously received auth frame to
@@ -672,11 +737,21 @@ struct wlan_mlo_ie_info {
  * @ml_partner_info:
  * @mlo_ie_total_len:
  * @mlo_ie:
+ * @start_bss_rnr_ie: RNRIE
  * @user_edca_set:
  * @is_oui_auth_assoc_6mbps_2ghz_enable: send auth/assoc req with 6 Mbps rate
+ * @action_oui_limit_bw_2g: Disable 40 MHz BW when connect 2 GHz IoT AP
  * @is_unexpected_peer_error: true if unexpected peer error
  * on 2.4 GHz
+ * @is_amsdu_2g_enabled: Is amsdu enabled for 2g connection with IoT AP
  * @join_probe_cnt: join probe request count
+ * @cal_tpc_post_csa: Recalculate tx power power csa
+ * @rsno_gen_used: rsno gen used for connection
+ * @wnm_action_dialog_token: Dialog token for WNM action frames.
+ * @dfs_p2p_info: DFS P2P group operation info.
+ * @qcn_ie_present_in_beacon: QCN Ie Present in beacon
+ * @passthru_pending_create_only: one-shot flag set before
+ *   lim_add_sta() for passthru NEW action, cleared after
  */
 struct pe_session {
 	uint8_t available;
@@ -787,8 +862,6 @@ struct pe_session {
 	uint8_t privacy;
 	tAniAuthType authType;
 	tDot11fIEWMMParams wmm_params;
-	tDot11fIERSN gStartBssRSNIe;
-	tDot11fIEWPA gStartBssWPAIe;
 	tSirAPWPSIEs APWPSIEs;
 	uint8_t apUapsdEnable;
 	tSirWPSPBCSession *pAPWPSPBCSession;
@@ -952,9 +1025,14 @@ struct pe_session {
 	uint8_t bss_color_changing;
 #endif
 #endif
+	struct punc_chan_info he_punc_chan_info;
 	struct deauth_retry_params deauth_retry;
 	uint8_t ht_client_cnt;
 	bool ch_switch_in_progress;
+	bool post_csa_notify_cap;
+#ifdef CFG80211_SA_QUERY_OFFLOAD_SUPPORT
+	qdf_mc_timer_t post_csa_ocv_sa_query_timer;
+#endif
 	bool he_with_wep_tkip;
 #ifdef WLAN_FEATURE_FILS_SK
 	struct pe_fils_session *fils_info;
@@ -998,12 +1076,23 @@ struct pe_session {
 	struct mlo_partner_info ml_partner_info;
 	uint16_t mlo_ie_total_len;
 	struct wlan_mlo_ie mlo_ie;
+	tDot11fIEreduced_neighbor_report start_bss_rnr_ie[MAX_NUM_RNR_ENTRY];
 #endif
 #endif /* WLAN_FEATURE_11BE */
 	uint8_t user_edca_set;
 	bool is_oui_auth_assoc_6mbps_2ghz_enable;
-	bool is_unexpected_peer_error;
+	bool action_oui_limit_bw_2g;
+	bool is_amsdu_2g_enabled;
 	uint8_t join_probe_cnt;
+	bool cal_tpc_post_csa;
+	uint8_t rsno_gen_used;
+	uint8_t wnm_action_dialog_token;
+	struct dfs_p2p_group_info dfs_p2p_info;
+	uint8_t qcn_ie_present_in_beacon;
+#ifdef DRIVER_PASSTHRU_MODE
+	/* one-shot flag set before lim_add_sta(NEW), cleared after */
+	uint8_t passthru_pending_create_only;
+#endif
 };
 
 /*-------------------------------------------------------------------------

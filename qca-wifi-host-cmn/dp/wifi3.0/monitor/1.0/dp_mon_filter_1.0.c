@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -38,13 +38,20 @@
  */
 static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 {
+	/*
+	 * mac_id value is required in case where per MAC mon_mac handle
+	 * is required in single pdev multiple MAC case.
+	 */
+	uint8_t mac_id = 0;
 	struct dp_mon_pdev *mon_pdev = pdev->monitor_pdev;
+	struct dp_mon_mac *mon_mac = dp_get_mon_mac(pdev, mac_id);
+
 	/*
 	 * Check if the Rx Enhanced capture mode, monitor mode,
 	 * smart_monitor_mode and mcopy mode can co-exist together.
 	 */
 	if ((mon_pdev->rx_enh_capture_mode != CDP_RX_ENH_CAPTURE_DISABLED) &&
-	    ((mon_pdev->neighbour_peers_added && mon_pdev->mvdev) ||
+	    ((mon_pdev->neighbour_peers_added && mon_mac->mvdev) ||
 		 mon_pdev->mcopy_mode)) {
 		dp_mon_filter_err("%pK:Rx Capture mode can't exist with modes:\n"
 				  "Smart Monitor Mode:%d\n"
@@ -57,7 +64,7 @@ static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 	/*
 	 * Check if the monitor mode cannot co-exist with any other mode.
 	 */
-	if ((mon_pdev->mvdev && mon_pdev->monitor_configured) &&
+	if ((mon_mac->mvdev && mon_pdev->monitor_configured) &&
 	    (mon_pdev->mcopy_mode || mon_pdev->neighbour_peers_added)) {
 		dp_mon_filter_err("%pK: Monitor mode can't exist with modes\n"
 				  "M_Copy Mode:%d\n"
@@ -85,11 +92,11 @@ static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 	 * can co-exist together.
 	 */
 	if (mon_pdev->mcopy_mode &&
-	    (mon_pdev->mvdev || mon_pdev->neighbour_peers_added)) {
+	    (mon_mac->mvdev || mon_pdev->neighbour_peers_added)) {
 		dp_mon_filter_err("%pK: mcopy mode can't exist with modes\n"
 				  "Monitor Mode:%pK\n"
 				  "Smart Monitor Mode:%d",
-				  pdev->soc, mon_pdev->mvdev,
+				  pdev->soc, mon_mac->mvdev,
 				  mon_pdev->neighbour_peers_added);
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -100,7 +107,7 @@ static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 	 */
 	if ((mon_pdev->rx_pktlog_mode != DP_RX_PKTLOG_DISABLED) &&
 	    !mon_pdev->rx_pktlog_cbf &&
-	    (mon_pdev->mvdev || mon_pdev->monitor_configured)) {
+	    (mon_mac->mvdev || mon_pdev->monitor_configured)) {
 		dp_mon_filter_err("%pK: Rx pktlog full/lite can't exist with modes\n"
 				  "Monitor Mode:%d", pdev->soc,
 				  mon_pdev->monitor_configured);
@@ -111,13 +118,19 @@ static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 #else
 static QDF_STATUS dp_mon_filter_check_co_exist(struct dp_pdev *pdev)
 {
+	/*
+	 * mac_id value is required in case where per MAC mon_mac handle
+	 * is required in single pdev multiple MAC case.
+	 */
+	uint8_t mac_id = 0;
 	struct dp_mon_pdev *mon_pdev = pdev->monitor_pdev;
+	struct dp_mon_mac *mon_mac = dp_get_mon_mac(pdev, mac_id);
 	/*
 	 * Check if the Rx packet log lite or full can co-exist with
 	 * the enable modes.
 	 */
 	if ((mon_pdev->rx_pktlog_mode != DP_RX_PKTLOG_DISABLED) &&
-	    (mon_pdev->mvdev || mon_pdev->monitor_configured)) {
+	    (mon_mac->mvdev || mon_pdev->monitor_configured)) {
 		 dp_mon_filter_err("%pK: Rx pktlog full/lite can't exist with modes\n"
 				   "Monitor Mode:%d", pdev->soc,
 				   mon_pdev->monitor_configured);
@@ -259,9 +272,7 @@ static void dp_mon_filter_set_reset_mcopy_dest(struct dp_pdev *pdev,
 	enum dp_mon_filter_mode mode = DP_MON_FILTER_MCOPY_MODE;
 	enum dp_mon_filter_srng_type srng_type;
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	/* Set the filter */
 	if (pfilter->valid) {
@@ -432,9 +443,7 @@ void dp_mon_filter_set_reset_rx_enh_capture_dest(struct dp_pdev *pdev,
 	enum dp_mon_filter_mode mode = DP_MON_FILTER_RX_CAPTURE_MODE;
 	enum dp_mon_filter_srng_type srng_type;
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	/* Set the filter */
 	if (pfilter->valid) {
@@ -552,14 +561,11 @@ void dp_mon_filter_reset_rx_enh_capture_1_0(struct dp_pdev *pdev)
 static void dp_mon_filter_set_reset_mon_dest(struct dp_pdev *pdev,
 					     struct dp_mon_filter *pfilter)
 {
-	struct dp_soc *soc = pdev->soc;
 	struct dp_mon_pdev *mon_pdev = pdev->monitor_pdev;
 	enum dp_mon_filter_mode mode = DP_MON_FILTER_MONITOR_MODE;
 	enum dp_mon_filter_srng_type srng_type;
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	/* set the filter */
 	if (pfilter->valid) {
@@ -788,14 +794,11 @@ static
 void dp_mon_filter_set_reset_rx_pkt_log_cbf_dest(struct dp_pdev *pdev,
 						 struct dp_mon_filter *pfilter)
 {
-	struct dp_soc *soc = pdev->soc;
 	struct dp_mon_pdev *mon_pdev = pdev->monitor_pdev;
 	enum dp_mon_filter_mode mode = DP_MON_FILTER_PKT_LOG_CBF_MODE;
 	enum dp_mon_filter_srng_type srng_type;
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	/*set the filter */
 	if (pfilter->valid) {
@@ -885,8 +888,6 @@ void dp_mon_filter_reset_rx_pktlog_cbf_1_0(struct dp_pdev *pdev)
  * dp_mon_should_reset_buf_ring_filter() - Reset the monitor buf ring filter
  * @pdev: DP PDEV handle
  *
- * WIN has targets which does not support monitor mode, but still do the
- * monitor mode init/deinit, only the rxdma1_enable flag will be set to 0.
  * MCL need to do the monitor buffer ring filter reset always, but this is
  * not needed for WIN targets where rxdma1 is not enabled (the indicator
  * that monitor mode is not enabled.
@@ -897,7 +898,14 @@ void dp_mon_filter_reset_rx_pktlog_cbf_1_0(struct dp_pdev *pdev)
  */
 static inline bool dp_mon_should_reset_buf_ring_filter(struct dp_pdev *pdev)
 {
-	return (pdev->monitor_pdev->mvdev) ? true : false;
+	/*
+	 * mac_id value is required in case where per MAC mon_mac handle
+	 * is required in single pdev multiple MAC case.
+	 */
+	uint8_t mac_id = 0;
+	struct dp_mon_mac *mon_mac = dp_get_mon_mac(pdev, mac_id);
+
+	return (mon_mac->mvdev) ? true : false;
 }
 #else
 static inline bool dp_mon_should_reset_buf_ring_filter(struct dp_pdev *pdev)
@@ -935,11 +943,8 @@ static QDF_STATUS dp_mon_filter_dest_update(struct dp_pdev *pdev,
 	struct dp_mon_pdev *mon_pdev = pdev->monitor_pdev;
 	enum dp_mon_filter_srng_type srng_type;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	uint32_t target_type = hal_get_target_type(soc->hal_soc);
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	dp_mon_filter_h2t_setup(soc, pdev, srng_type, pfilter);
 	*pmon_mode_set = pfilter->valid;
@@ -948,30 +953,19 @@ static QDF_STATUS dp_mon_filter_dest_update(struct dp_pdev *pdev,
 		status = dp_mon_ht2_rx_ring_cfg(soc, pdev,
 						srng_type,
 						&pfilter->tlv_filter);
+		mon_pdev->mon_dst_filter_reset = false;
 	} else if (dp_mon_should_reset_buf_ring_filter(pdev)) {
 		if (dp_mon_filter_dest_for_mm_rx_mon(soc)) {
 			dp_info("Reset rxdma buffer to regular filter");
 			status = soc->arch_ops.dp_rxdma_ring_sel_cfg(soc);
+			mon_pdev->mon_dst_filter_reset = false;
 		} else {
 			status = dp_mon_ht2_rx_ring_cfg(soc, pdev,
 							srng_type,
 							&pfilter->tlv_filter);
-		}
-	} else {
-		/*
-		 * For WIN case the monitor buffer ring is used and it does need
-		 * reset when monitor mode gets enabled/disabled.
-		 */
-		if (soc->wlan_cfg_ctx->rxdma1_enable ||
-		    target_type == TARGET_TYPE_QCN9160) {
-			if (mon_pdev->monitor_configured || *pmon_mode_set) {
-				status = dp_mon_ht2_rx_ring_cfg(soc, pdev,
-								srng_type,
-								&pfilter->tlv_filter);
-			}
+			mon_pdev->mon_dst_filter_reset = true;
 		}
 	}
-
 	return status;
 }
 
@@ -980,9 +974,7 @@ static void dp_mon_filter_dest_reset(struct dp_pdev *pdev)
 	struct dp_soc *soc = pdev->soc;
 	enum dp_mon_filter_srng_type srng_type;
 
-	srng_type = ((soc->wlan_cfg_ctx->rxdma1_enable) ?
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_MON_BUF :
-			DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF);
+	srng_type = DP_MON_FILTER_SRNG_TYPE_RXDMA_BUF;
 
 	dp_mon_filter_reset_mon_srng(soc, pdev, srng_type);
 }
@@ -1101,6 +1093,7 @@ static void dp_cfr_filter_1_0(struct cdp_soc_t *soc_hdl,
 	int max_mac_rings;
 	uint8_t mac_id = 0;
 	struct dp_mon_pdev *mon_pdev;
+	struct dp_mon_mac *mon_mac;
 
 	pdev = dp_get_pdev_from_soc_pdev_id_wifi3(soc, pdev_id);
 	if (!pdev) {
@@ -1109,8 +1102,9 @@ static void dp_cfr_filter_1_0(struct cdp_soc_t *soc_hdl,
 	}
 
 	mon_pdev = pdev->monitor_pdev;
+	mon_mac = dp_get_mon_mac(pdev, mac_id);
 
-	if (mon_pdev->mvdev) {
+	if (mon_mac->mvdev) {
 		if (enable && cfr_enable_monitor_mode)
 			pdev->cfr_rcc_mode = true;
 		else

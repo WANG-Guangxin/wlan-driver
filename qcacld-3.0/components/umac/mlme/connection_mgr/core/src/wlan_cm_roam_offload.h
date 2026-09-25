@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -81,6 +81,21 @@ void cm_roam_result_info_event(struct wlan_objmgr_psoc *psoc,
 			       struct wmi_roam_result *res,
 			       struct wmi_roam_scan_data *scan_data,
 			       uint8_t vdev_id);
+
+ /**
+  * cm_roam_reject_reassoc_event() - Send connectivity diag log
+  * event while rejecting reassoc request to connected BSSID
+  * @psoc: Pointer to PSOC object
+  * @vdev: Pointer to vdev object
+  * @bssid: connected BSSID
+  *
+  * Return: None
+  */
+void
+cm_roam_reject_reassoc_event(struct wlan_objmgr_psoc *psoc,
+			     struct wlan_objmgr_vdev *vdev,
+			     struct qdf_mac_addr *bssid);
+
 #elif defined(WLAN_FEATURE_CONNECTIVITY_LOGGING) && \
     defined(WLAN_FEATURE_ROAM_OFFLOAD)
 /**
@@ -132,6 +147,22 @@ void cm_roam_result_info_event(struct wlan_objmgr_psoc *psoc,
 			       struct wmi_roam_result *res,
 			       struct wmi_roam_scan_data *scan_data,
 			       uint8_t vdev_id);
+
+/**
+ * cm_roam_reject_reassoc_event() - Send connectivity diag log
+ * event while rejecting reassoc request to connected BSSID
+ * @psoc: Pointer to PSOC object
+ * @vdev: Pointer to vdev object
+ * @bssid: connected BSSID
+ *
+ * Return: None
+ */
+static inline void
+cm_roam_reject_reassoc_event(struct wlan_objmgr_psoc *psoc,
+			     struct wlan_objmgr_vdev *vdev,
+			     struct qdf_mac_addr *bssid)
+{
+}
 #else
 static inline void
 cm_roam_scan_info_event(struct wlan_objmgr_psoc *psoc,
@@ -160,7 +191,25 @@ void cm_roam_result_info_event(struct wlan_objmgr_psoc *psoc,
 			       uint8_t vdev_id)
 {
 }
+
+static inline void
+cm_roam_reject_reassoc_event(struct wlan_objmgr_psoc *psoc,
+			     struct wlan_objmgr_vdev *vdev,
+			     struct qdf_mac_addr *bssid)
+{
+}
 #endif /* WLAN_FEATURE_CONNECTIVITY_LOGGING */
+
+/**
+ * cm_is_bssid_present_on_any_assoc_link() - Check if bssid belongs to any
+ * assoc link
+ * @vdev: VDEV pointer
+ * @bssid: bssid pointer
+ *
+ * Return: True if bssid belongs to any assoc else return false
+ */
+bool cm_is_bssid_present_on_any_assoc_link(struct wlan_objmgr_vdev *vdev,
+					   struct qdf_mac_addr *bssid);
 
 #if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
 
@@ -402,6 +451,18 @@ cm_roam_send_vendor_handoff_param_req(struct wlan_objmgr_psoc *psoc,
 				      void *vendor_handoff_context);
 
 /**
+ * cm_roam_reset_vendor_handoff_req() - reset vendor handoff param cmd
+ * @psoc: psoc pointer
+ * @vdev_id: vdev id
+ *
+ * This function is used to reset vendor handoff param cmd
+ *
+ * Return: none
+ */
+void cm_roam_reset_vendor_handoff_req(struct wlan_objmgr_psoc *psoc,
+				      uint8_t vdev_id);
+
+/**
  * cm_roam_is_vendor_handoff_control_enable() - check whether vendor handoff
  * control feature is enable or not in driver
  * @psoc: psoc pointer
@@ -573,6 +634,10 @@ QDF_STATUS
 cm_handle_mlo_rso_state_change(struct wlan_objmgr_pdev *pdev, uint8_t *vdev_id,
 			       enum roam_offload_state requested_state,
 			       uint8_t reason, bool *is_rso_skip);
+void
+cm_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
+		   struct wlan_objmgr_vdev *vdev,
+		   struct wlan_roam_start_config *start_req);
 #else
 static inline QDF_STATUS
 cm_handle_mlo_rso_state_change(struct wlan_objmgr_pdev *pdev, uint8_t *vdev_id,
@@ -582,6 +647,11 @@ cm_handle_mlo_rso_state_change(struct wlan_objmgr_pdev *pdev, uint8_t *vdev_id,
 	return QDF_STATUS_E_NOSUPPORT;
 }
 
+static inline void
+cm_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
+		   struct wlan_objmgr_vdev *vdev,
+		   struct wlan_roam_start_config *start_req)
+{}
 #endif
 
 #if (defined(CONNECTIVITY_DIAG_EVENT) && \

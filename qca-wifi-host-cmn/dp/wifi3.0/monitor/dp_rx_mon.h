@@ -63,6 +63,10 @@
 #define DP_RX_MON_SNAP_SIZE 4
 #define DP_RX_MON_DECAP_HDR_SIZE 14
 
+#define DP_RX_MON_FCS_LEN 4
+#define DP_RX_MON_QOS_LEN 2
+#define DP_RX_MON_DSTODS_MASK 0xff00
+#define DP_RX_MON_DSTODS_BITS 8
 
 /**
  * enum dp_mon_reap_status - monitor status ring ppdu status
@@ -118,12 +122,13 @@ QDF_STATUS dp_rx_populate_cbf_hdr(struct dp_soc *soc,
  *
  * @pdev: DP pdev handle
  * @mon_status_srng: Monitor status SRNG
+ * @mac_id: MAC ID
  *
  * Return: enum dp_mon_reap_status
  */
 enum dp_mon_reap_status
 dp_rx_mon_handle_status_buf_done(struct dp_pdev *pdev,
-				 void *mon_status_srng);
+				 void *mon_status_srng, uint8_t mac_id);
 
 #ifdef QCA_SUPPORT_FULL_MON
 
@@ -137,17 +142,6 @@ dp_rx_mon_handle_status_buf_done(struct dp_pdev *pdev,
  *
  */
 void dp_full_mon_attach(struct dp_pdev *pdev);
-
-/**
- * dp_full_mon_detach() - Full monitor mode attach
- * This API deinitilises full monitor mode resources
- *
- * @pdev: dp pdev object
- *
- * Return: void
- *
- */
-void dp_full_mon_detach(struct dp_pdev *pdev);
 
 /**
  * dp_full_mon_partial_detach() - Full monitor mode detach with no locks
@@ -184,16 +178,6 @@ static inline void dp_full_mon_attach(struct dp_pdev *pdev)
 {
 }
 
-/**
- * dp_full_mon_detach() - detach full monitor mode resources
- * @pdev: Datapath PDEV handle
- *
- * Return: void
- *
- */
-static inline void dp_full_mon_detach(struct dp_pdev *pdev)
-{
-}
 #endif
 
 /**
@@ -508,13 +492,14 @@ dp_rx_process_mcopy_mode(struct dp_soc *soc, struct dp_pdev *pdev,
  * @pdev: Datapath PDEV handle
  * @ppdu_info: Structure for rx ppdu info
  * @nbuf: Qdf nbuf abstraction for linux skb
+ * @mac_id: MAC ID
  *
  * Return: 0 on success, 1 on failure
  */
 int
 dp_rx_handle_smart_mesh_mode(struct dp_soc *soc, struct dp_pdev *pdev,
 			      struct hal_rx_ppdu_info *ppdu_info,
-			      qdf_nbuf_t nbuf);
+			      qdf_nbuf_t nbuf, uint8_t mac_id);
 
 /**
  * dp_rx_nbuf_prepare() - prepare RX nbuf
@@ -782,9 +767,6 @@ struct rx_desc_pool *dp_rx_get_mon_desc_pool(struct dp_soc *soc,
 					     uint8_t mac_id,
 					     uint8_t pdev_id)
 {
-	if (soc->wlan_cfg_ctx->rxdma1_enable)
-		return &soc->rx_desc_mon[mac_id];
-
 	return &soc->rx_desc_buf[pdev_id];
 }
 
@@ -819,11 +801,15 @@ dp_mon_rx_stats_update_rssi_dbm_params(struct dp_mon_pdev *mon_pdev,
 				       struct hal_rx_ppdu_info *ppdu_info);
 
 #ifdef WLAN_FEATURE_LOCAL_PKT_CAPTURE
+/* RX header dma length - 256 bytes */
+#define LPC_RX_HDR_DMA_LENGTH 256
+
 /**
  * dp_rx_handle_local_pkt_capture() - Rx handle for local packet capture
  * @pdev: Datapath PDEV handle
  * @ppdu_info: Structure for rx ppdu info
  * @nbuf: Qdf nbuf abstraction for linux skb
+ * @mac_id: mac id
  * @tlv_status: TLV status
  *
  * Return: 0 on success, 1 on failure
@@ -831,14 +817,27 @@ dp_mon_rx_stats_update_rssi_dbm_params(struct dp_mon_pdev *mon_pdev,
 int
 dp_rx_handle_local_pkt_capture(struct dp_pdev *pdev,
 			      struct hal_rx_ppdu_info *ppdu_info,
-			      qdf_nbuf_t nbuf, uint32_t tlv_status);
+			      qdf_nbuf_t nbuf, uint8_t mac_id,
+			      uint32_t tlv_status);
 #else
 static inline int
 dp_rx_handle_local_pkt_capture(struct dp_pdev *pdev,
 			      struct hal_rx_ppdu_info *ppdu_info,
-			      qdf_nbuf_t nbuf, uint32_t tlv_status)
+			      qdf_nbuf_t nbuf, uint8_t mac_id,
+			      uint32_t tlv_status)
 {
 	return 0;
 }
 #endif
+
+#ifdef QCA_SUPPORT_MON_FCS_CAP_DBG
+void dp_rx_mon_fcs_cap_debug(struct dp_mon_pdev *mon_pdev,
+			     qdf_nbuf_t mpdu);
+#else
+static inline void
+dp_rx_mon_fcs_cap_debug(struct dp_mon_pdev *mon_pdev,
+			qdf_nbuf_t mpdu)
+{
+}
+#endif /*QCA_SUPPORT_MON_FCS_CAP_DBG */
 #endif /* _DP_RX_MON_H_ */

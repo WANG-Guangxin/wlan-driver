@@ -97,6 +97,7 @@ struct wma_caps_per_phy {
 
 struct wma_ps_params {
 	enum wmi_sta_ps_scheme_cfg opm_mode;
+	uint8_t ps_opm_level;
 	uint16_t ps_ito;
 	uint16_t spec_wake;
 };
@@ -106,11 +107,13 @@ struct wma_ps_params {
  * @WMA_STA_PS_OPM_CONSERVATIVE: Conservative OPM mode
  * @WMA_STA_PS_OPM_AGGRESSIVE: Aggressive OPM mode
  * @WMA_STA_PS_USER_DEF: User defined OPM mode
+ * @WMA_STA_PS_LATENCY_DEF: Latency based opm mode
  */
 enum wma_sta_ps_scheme_cfg {
 	WMA_STA_PS_OPM_CONSERVATIVE = 0,
 	WMA_STA_PS_OPM_AGGRESSIVE = 1,
 	WMA_STA_PS_USER_DEF = 2,
+	WMA_STA_PS_LATENCY_DEF = 3,
 };
 
 #define VDEV_CMD 1
@@ -163,10 +166,17 @@ int wma_rx_service_ready_ext2_event(void *handle, uint8_t *ev, uint32_t len);
 
 QDF_STATUS wma_wait_for_ready_event(WMA_HANDLE handle);
 
+/**
+ * wma_is_wmi_init_cmd_sent() - check if WMI init command has been sent
+ *
+ * Return: true if WMI init command was sent to firmware, false otherwise
+ */
+bool wma_is_wmi_init_cmd_sent(void);
+
 int wma_cli_get_command(int vdev_id, int param_id, int vpdev);
-int wma_cli_set_command(int vdev_id, int param_id, int sval, int vpdev);
-int wma_cli_set2_command(int vdev_id, int param_id, int sval1,
-			 int sval2, int vpdev);
+int wma_cli_set_command(int vdev_id, int param_id, uint32_t sval, int vpdev);
+int wma_cli_set2_command(int vdev_id, int param_id, uint32_t sval1,
+			 uint32_t sval2, int vpdev);
 
 /**
  * wma_get_fw_phy_mode_for_freq_cb() - Callback to get current PHY Mode.
@@ -208,8 +218,6 @@ QDF_STATUS wma_update_channel_list(WMA_HANDLE handle, void *scan_chan_info);
  */
 uint8_t *wma_get_vdev_address_by_vdev_id(uint8_t vdev_id);
 struct wma_txrx_node *wma_get_interface_by_vdev_id(uint8_t vdev_id);
-QDF_STATUS wma_get_connection_info(uint8_t vdev_id,
-		struct policy_mgr_vdev_entry_info *conn_table_entry);
 QDF_STATUS wma_ndi_update_connection_info(uint8_t vdev_id,
 		struct nan_datapath_channel_info *ndp_chan_info);
 
@@ -317,7 +325,7 @@ void wma_process_pdev_hw_mode_trans_ind(void *wma,
  * @wma_handle:                  pointer to wma handle.
  * @cts2self_for_p2p_go:         value needs to set to firmware.
  *
- * At the time of driver startup, inform about ini parma to FW that
+ * At the time of driver startup, inform about ini param to FW that
  * if legacy client connects to P2P GO, stop using NOA for P2P GO.
  *
  * Return: QDF_STATUS.
@@ -440,11 +448,23 @@ QDF_STATUS wma_set_sar_limit(WMA_HANDLE handle,
 		struct sar_limit_cmd_params *sar_limit_params);
 
 /**
+ * wma_set_tx_power_per_mcs() - set tx power per mcs in the target
+ * @handle: wma handle
+ * @txpower_adjust_params: adjust txpower per mcs cmd params
+ *
+ * This function sends WMI command to adjust txpower per mcs.
+ *
+ * Return: QDF_STATUS enumeration
+ */
+QDF_STATUS wma_set_tx_power_per_mcs(WMA_HANDLE handle,
+		struct tx_power_per_mcs_rate *txpower_adjust_params);
+
+/**
  * wma_send_coex_config_cmd() - Send coex config params
  * @wma_handle: wma handle
- * @coex_cfg_params: struct to coex cofig params
+ * @coex_cfg_params: struct to coex config params
  *
- * This function sends WMI command to send coex cofig params
+ * This function sends WMI command to send coex config params
  *
  * Return: QDF_STATUS
  */
@@ -469,6 +489,16 @@ QDF_STATUS wma_set_power_config(uint8_t vdev_id,
  * Return: QDF_STATUS_SUCCESS on success, error number otherwise
  */
 QDF_STATUS wma_set_power_config_ito(uint8_t vdev_id, uint16_t ps_ito);
+
+/**
+ * wma_set_power_config_opm_level() - update power save opm level
+ * @vdev_id:	  the Id of the vdev to configure
+ * @ps_opm_level: new power save inactivity timeout level
+ *
+ * Return: QDF_STATUS_SUCCESS on success, error number otherwise
+ */
+QDF_STATUS
+wma_set_power_config_opm_level(uint8_t vdev_id, uint8_t ps_opm_level);
 
 /**
  * wma_set_power_config_spec_wake() - update opm speculative wake interval
@@ -564,14 +594,18 @@ QDF_STATUS wma_enable_active_apf_mode(WMA_HANDLE handle, tAniDHCPInd *ta_dhcp_in
  */
 QDF_STATUS wma_disable_active_apf_mode(WMA_HANDLE handle, tAniDHCPInd *ta_dhcp_ind);
 #else
-QDF_STATUS wma_enable_active_apf_mode(WMA_HANDLE handle, tAniDHCPInd *ta_dhcp_ind)
+static inline
+QDF_STATUS wma_enable_active_apf_mode(WMA_HANDLE handle,
+				      tAniDHCPInd *ta_dhcp_ind)
 {
-	return QDF_STATUS_SUCCESS;
+	return QDF_STATUS_E_NOSUPPORT;
 }
 
-QDF_STATUS wma_disable_active_apf_mode(WMA_HANDLE handle, tAniDHCPInd *ta_dhcp_ind)
+static inline
+QDF_STATUS wma_disable_active_apf_mode(WMA_HANDLE handle,
+				       tAniDHCPInd *ta_dhcp_ind)
 {
-	return QDF_STATUS_SUCCESS;
+	return QDF_STATUS_E_NOSUPPORT;
 }
 #endif
 
@@ -712,7 +746,7 @@ wma_mlme_vdev_notify_down_complete(struct vdev_mlme_obj *vdev_mlme,
  *
  * API handle vdev stop during start req
  *
- * Return: SUCCESS alsways
+ * Return: SUCCESS always
  */
 QDF_STATUS wma_ap_mlme_vdev_stop_start_send(struct vdev_mlme_obj *vdev_mlme,
 					    enum vdev_cmd_type type,
@@ -768,6 +802,15 @@ wma_send_multi_pdev_vdev_set_params(enum mlme_dev_setparam param_type,
  */
 QDF_STATUS
 wma_validate_txrx_chain_mask(uint32_t paramid, uint32_t paramvalue);
+
+/**
+ * wma_get_txrx_default_chain_mask - get default chain mask
+ * @psoc: psoc
+ *
+ * Return: default chain mask
+ */
+
+uint8_t wma_get_txrx_default_chain_mask(struct wlan_objmgr_psoc *psoc);
 
 /**
  * wma_vdev_set_data_tx_callback() - Set dp vdev tx callback
@@ -835,6 +878,15 @@ QDF_STATUS wma_mon_mlme_vdev_stop_send(struct vdev_mlme_obj *vdev_mlme,
  */
 QDF_STATUS wma_mon_mlme_vdev_down_send(struct vdev_mlme_obj *vdev_mlme,
 				       uint16_t data_len, void *data);
+
+/**
+ * wma_mon_mlme_vdev_stop_resp() - VDEV down operation
+ * @vdev_mlme:  VDEV MLME comp object
+ *
+ * Return: SUCCESS on successful completion of VDEV stop response
+ *         FAILURE, if it fails due to any
+ */
+QDF_STATUS wma_mon_mlme_vdev_stop_resp(struct vdev_mlme_obj *vdev_mlme);
 
 /**
  * wma_vdev_detach_callback() - VDEV delete response handler
@@ -938,6 +990,43 @@ void wma_cleanup_vdev(struct wlan_objmgr_vdev *vdev);
  * Return: None
  */
 void wma_set_wakeup_logs_to_console(bool value);
+
+#ifdef WLAN_FEATURE_PEER_TXQ_FLUSH_CONF
+QDF_STATUS
+wma_peer_txq_flush_config_send(struct peer_txq_flush_config_params *params);
+
+QDF_STATUS
+wma_peer_flush_tids_send(uint8_t peer_addr[QDF_MAC_ADDR_SIZE],
+			 struct peer_flush_params *param);
+#endif
+
+#ifdef FEATURE_EPM
+bool wma_is_epm_supported_cfg(WMA_HANDLE handle);
+bool wma_is_epm_supported_fw(WMA_HANDLE handle);
+#else
+static inline bool wma_is_epm_supported_cfg(WMA_HANDLE handle)
+{
+	return false;
+}
+
+static inline bool wma_is_epm_supported_fw(WMA_HANDLE handle)
+{
+	return false;
+}
+#endif
+
+/**
+ * wma_is_both_psd_eirp_support_present_for_sp() - FW can handle
+ * PSD and EIRP together or not
+ *
+ * @param: reg tpc power
+ * @value: true if FW can handle PSD and EIRP together or not
+ *
+ * Return: None
+ */
+void
+wma_is_both_psd_eirp_support_present_for_sp(struct reg_tpc_power_info *param,
+					    bool *value);
 
 #ifdef FEATURE_WLAN_APF
 /**

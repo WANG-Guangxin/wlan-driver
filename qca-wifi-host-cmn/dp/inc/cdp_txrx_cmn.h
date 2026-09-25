@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -31,6 +31,7 @@
 #include "cdp_txrx_handle.h"
 #include "cdp_txrx_cmn_struct.h"
 #include "wlan_objmgr_global_obj.h"
+#include "wlan_ipa_logging.h"
 
 #ifdef WLAN_SUPPORT_DPDK
 #include <cfgmgr_api_if.h>
@@ -52,6 +53,18 @@ extern bool is_dp_verbose_debug_enabled;
 #define dp_info(params...) \
 	__QDF_TRACE_FL(QDF_TRACE_LEVEL_INFO_HIGH, QDF_MODULE_ID_DP, ## params)
 #define dp_debug(params...) QDF_TRACE_DEBUG(QDF_MODULE_ID_DP, params)
+/* logs for IPA logging Infra */
+#define dp_ipa_log(params...) WLAN_IPA_LOGGING(params)
+#define dp_ipa_log_rl(params...) WLAN_IPA_LOGGING_RL(params)
+/* To collect common log in both wlan and IPA logging infra */
+#define dp_ipa_debug(params...) \
+	do { dp_info(params); dp_ipa_log(params); } while (0)
+#define dp_ipa_info_rl(params...) \
+	do { dp_info_rl(params); dp_ipa_log_rl(params); } while (0)
+#define dp_ipa_err(params...) \
+	do { dp_err(params); dp_ipa_log(params); } while (0)
+#define dp_ipa_err_rl(params...) \
+	do { dp_err_rl(params); dp_ipa_log_rl(params); } while (0)
 
 #ifdef DP_PRINT_NO_CONSOLE
 #define dp_err_log(params...) \
@@ -177,13 +190,32 @@ typedef void (*ipa_uc_op_cb_type)(uint8_t *op_msg,
 				  void *osif_ctxt);
 
 #ifdef QCA_SUPPORT_DP_GLOBAL_CTX
-/* Global level structure for win contexts */
+/**
+ * struct dp_global_context - Global level structure for win contexts
+ * @fst_ctx: Rx FST Handle
+ * @tx_desc: flow pool pointer
+ * @tx_cc_ctx: main context for HW cookie conversion
+ * @spcl_tx_desc: flow pool
+ * @spcl_tx_cc_ctx: special context for HW cookie conversion
+ * @tx_ext_desc: extension desc pointer
+ * @rx_fst_ref_cnt: ref cnt for tx descriptors
+ * @global_descriptor_in_use: global descriptors in usage
+ * @tx_cookie_ctx_alloc_cnt: Tx cookie context alloc count
+ * @tx_desc_pool_alloc_cnt: Tx descriptor pool alloc count
+ * @tx_desc_pool_init_cnt: Tx descriptor pool init count
+ * @spcl_tx_cookie_ctx_alloc_cnt: Special tx cookie context alloc count
+ * @spcl_tx_desc_pool_alloc_cnt: Special tx desc pool alloc count
+ * @spcl_tx_desc_pool_init_cnt: special tx desc pool init cnt
+ * @tx_ext_desc_pool_alloc_cnt: extension tx desc pool alloc cnt
+ * @tx_ext_desc_pool_init_cnt: extension tx desc pool init cnt
+ */
 struct dp_global_context {
 	struct dp_rx_fst *fst_ctx;
 	struct dp_tx_desc_pool_s *tx_desc[2][4];
 	struct dp_hw_cookie_conversion_t *tx_cc_ctx[4];
 	struct dp_tx_desc_pool_s *spcl_tx_desc[2][4];
 	struct dp_hw_cookie_conversion_t *spcl_tx_cc_ctx[4];
+	struct dp_tx_ext_desc_pool_s *tx_ext_desc[4];
 	qdf_atomic_t rx_fst_ref_cnt;
 	qdf_atomic_t global_descriptor_in_use;
 	int tx_cookie_ctx_alloc_cnt;
@@ -192,6 +224,8 @@ struct dp_global_context {
 	int spcl_tx_cookie_ctx_alloc_cnt;
 	int spcl_tx_desc_pool_alloc_cnt[2];
 	int spcl_tx_desc_pool_init_cnt[2];
+	int tx_ext_desc_pool_alloc_cnt;
+	int tx_ext_desc_pool_init_cnt;
 };
 
 /**
@@ -344,6 +378,30 @@ static inline void cdp_flow_pool_unmap(ol_txrx_soc_handle soc,
 }
 #endif
 
+#ifdef IPA_OPT_WIFI_DP_CTRL
+static inline bool
+cdp_get_opt_dp_ctrl_refill_cap(ol_txrx_soc_handle soc)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return false;
+	}
+
+	if (!soc->ops->cmn_drv_ops ||
+	    !soc->ops->cmn_drv_ops->txrx_get_opt_dp_ctrl_refill_cap)
+		return false;
+
+	return soc->ops->cmn_drv_ops->txrx_get_opt_dp_ctrl_refill_cap(soc);
+}
+#else
+static inline bool
+cdp_get_opt_dp_ctrl_refill_cap(ol_txrx_soc_handle soc)
+{
+	return 0;
+}
+#endif
+
 static inline QDF_STATUS
 cdp_vdev_detach(ol_txrx_soc_handle soc, uint8_t vdev_id,
 		ol_txrx_vdev_delete_cb callback, void *cb_context)
@@ -362,7 +420,25 @@ cdp_vdev_detach(ol_txrx_soc_handle soc, uint8_t vdev_id,
 						       callback, cb_context);
 }
 
-#if defined(WLAN_FEATURE_11BE_MLO) && defined(WLAN_MLO_MULTI_CHIP)
+#if defined(WLAN_FEATURE_11BE_MLO)
+static inline void
+cdp_ppeds_cfg_astidx_cache_mapping(struct cdp_soc_t *soc, uint8_t vdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return;
+	}
+
+	if (!soc->ops->cmn_drv_ops ||
+	    !soc->ops->cmn_drv_ops->txrx_ppeds_cfg_astidx_cache_mapping)
+		return;
+
+	soc->ops->cmn_drv_ops->txrx_ppeds_cfg_astidx_cache_mapping(soc,
+								   vdev_id);
+}
+
+#if defined(WLAN_MLO_MULTI_CHIP)
 static inline void
 cdp_vdev_recovery_flush_peers(ol_txrx_soc_handle soc,
 			      uint8_t vdev_id,
@@ -382,6 +458,7 @@ cdp_vdev_recovery_flush_peers(ol_txrx_soc_handle soc,
 							      vdev_id,
 							      mlo_peers_only);
 }
+#endif
 #endif
 
 static inline int
@@ -934,7 +1011,6 @@ cdp_set_monitor_mode(ol_txrx_soc_handle soc, uint8_t vdev_id,
 {
 	if (!soc || !soc->ops) {
 		dp_cdp_debug("Invalid Instance:");
-		QDF_BUG(0);
 		return 0;
 	}
 
@@ -993,6 +1069,14 @@ cdp_set_monitor_filter(ol_txrx_soc_handle soc, uint8_t pdev_id,
 	return 0;
 }
 
+static inline int
+cdp_set_mu_sniffer(ol_txrx_soc_handle soc, uint8_t pdev_id, uint32_t mode)
+{
+	if (soc->ops->mon_ops->txrx_set_mu_sniffer)
+		return soc->ops->mon_ops->txrx_set_mu_sniffer(soc, pdev_id,
+							      mode);
+	return 0;
+}
 
 /******************************************************************************
  * Data Interface (B Interface)
@@ -1328,7 +1412,6 @@ cdp_get_mon_vdev_from_pdev(ol_txrx_soc_handle soc, uint8_t pdev_id)
 {
 	if (!soc || !soc->ops) {
 		dp_cdp_debug("Invalid Instance:");
-		QDF_BUG(0);
 		return -EINVAL;
 	}
 
@@ -1890,8 +1973,11 @@ static inline void cdp_txrx_umac_reset_init(ol_txrx_soc_handle soc)
 /**
  * cdp_txrx_umac_reset_deinit(): De-initialize UMAC HW reset module
  * @soc: soc handle
+ * @recovery_type: Mode0 or mode 1 recovery
  */
-static inline void cdp_txrx_umac_reset_deinit(ol_txrx_soc_handle soc)
+static inline
+void cdp_txrx_umac_reset_deinit(ol_txrx_soc_handle soc,
+				uint8_t recovery_type)
 {
 	if (!soc || !soc->ops) {
 		dp_cdp_debug("Invalid Instance:");
@@ -1903,7 +1989,7 @@ static inline void cdp_txrx_umac_reset_deinit(ol_txrx_soc_handle soc)
 	    !soc->ops->cmn_drv_ops->txrx_umac_reset_deinit)
 		return;
 
-	soc->ops->cmn_drv_ops->txrx_umac_reset_deinit(soc);
+	soc->ops->cmn_drv_ops->txrx_umac_reset_deinit(soc, recovery_type);
 }
 
 /**
@@ -3160,7 +3246,6 @@ cdp_enable_mon_reap_timer(ol_txrx_soc_handle soc,
 	if (!soc || !soc->ops) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_FATAL,
 			  "%s invalid instance", __func__);
-		QDF_BUG(0);
 		return false;
 	}
 
@@ -3528,6 +3613,76 @@ int cdp_cfgmgr_get_peer_create_evt_info(struct cdp_soc_t *soc, uint16_t peer_id,
 
 	return soc->ops->cmn_drv_ops->cfgmgr_get_peer_create_evt_info(
 						soc, peer_id, ev_buf);
+}
+#endif
+
+#ifdef WLAN_DP_LOAD_BALANCE_SUPPORT
+/**
+ * cdp_calculate_per_ring_pkt_avg() - calculate rx rings pkt average
+ * @soc: Datapath soc handle
+ *
+ * Return: none.
+ */
+static inline void
+cdp_calculate_per_ring_pkt_avg(ol_txrx_soc_handle soc)
+{
+	if (!soc) {
+		dp_cdp_debug("Invalid Instance");
+		return;
+	}
+
+	if (!soc->ops->cmn_drv_ops ||
+	    !soc->ops->cmn_drv_ops->calculate_per_ring_pkt_avg)
+		return;
+
+	soc->ops->cmn_drv_ops->calculate_per_ring_pkt_avg(soc);
+}
+
+/**
+ * cdp_get_per_ring_pkt_avg() - get per rx ring pkt average
+ * @soc: Datapath soc handle
+ * @pkt_avg_cnt: Array of counters to update Rx rings pkt average
+ * @total_avg_pkt_cnt: total average packet count of all rx rings
+ *
+ * Return: None.
+ */
+static inline void
+cdp_get_per_ring_pkt_avg(ol_txrx_soc_handle soc,
+			 uint32_t *pkt_avg_cnt, uint32_t *total_avg_pkt_cnt)
+{
+	if (!soc) {
+		dp_cdp_debug("Invalid Instance");
+		return;
+	}
+
+	if (!soc->ops->cmn_drv_ops ||
+	    !soc->ops->cmn_drv_ops->get_per_ring_pkt_avg)
+		return;
+
+	soc->ops->cmn_drv_ops->get_per_ring_pkt_avg(soc, pkt_avg_cnt,
+						    total_avg_pkt_cnt);
+}
+
+/**
+ * cdp_get_ext_grp_id_from_reo_num() - get ext group id from reo number
+ * @soc: Datapath soc handle
+ * @reo_num: reo ring number
+ *
+ * Return: ext group id
+ */
+static inline int
+cdp_get_ext_grp_id_from_reo_num(ol_txrx_soc_handle soc, uint8_t reo_num)
+{
+	if (!soc) {
+		dp_cdp_debug("Invalid Instance");
+		return -EINVAL;
+	}
+
+	if (!soc->ops->cmn_drv_ops ||
+	    !soc->ops->cmn_drv_ops->get_ext_grp_id_from_reo_num)
+		return -EINVAL;
+
+	return soc->ops->cmn_drv_ops->get_ext_grp_id_from_reo_num(soc, reo_num);
 }
 #endif
 #endif /* _CDP_TXRX_CMN_H_ */

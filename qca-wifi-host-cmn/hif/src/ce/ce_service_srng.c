@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -88,14 +89,13 @@ void hif_display_ctrl_traffic_pipes_state(struct hif_opaque_softc *hif_ctx)
 	hal_get_sw_hptp(scn->hal_soc,
 			CE_state->status_ring->srng_ctx,
 			&tp, &hp);
-	hif_info_high("CE-2 Dest status ring current snapshot HP:%u TP:%u",
-		      hp, tp);
+	hif_err("CE-2 Dest status ring current snapshot HP:%u TP:%u", hp, tp);
 
 	hp = 0;
 	tp = 0;
 	CE_state = scn->ce_id_to_state[3];
 	hal_get_sw_hptp(scn->hal_soc, CE_state->src_ring->srng_ctx, &tp, &hp);
-	hif_info_high("CE-3 Source ring current snapshot HP:%u TP:%u", hp, tp);
+	hif_err("CE-3 Source ring current snapshot HP:%u TP:%u", hp, tp);
 }
 
 #if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF)
@@ -154,6 +154,10 @@ void hif_record_ce_srng_desc_event(struct hif_softc *scn, int ce_id,
 
 	hif_record_latest_evt(ce_hist, type, ce_id, event->time,
 			      event->current_hp, event->current_tp);
+	ce_trace_hif_hist_event((uint8_t)ce_id, event->current_hp,
+				event->current_tp, event->cpu_id,
+				event->time, event->type);
+
 }
 #endif /* HIF_CONFIG_SLUB_DEBUG_ON || HIF_CE_DEBUG_DATA_BUF */
 
@@ -599,6 +603,7 @@ ce_completed_send_next_nolock_srng(struct CE_state *CE_state,
 	unsigned int swi = src_ring->sw_index;
 	struct hif_softc *scn = CE_state->scn;
 	struct ce_srng_src_desc *src_desc;
+	void *ctx = NULL;
 
 	if (hal_srng_access_start(scn->hal_soc, src_ring->srng_ctx)) {
 		status = QDF_STATUS_E_FAILURE;
@@ -623,6 +628,12 @@ ce_completed_send_next_nolock_srng(struct CE_state *CE_state,
 		*nbytesp = src_desc->nbytes;
 		*transfer_idp = src_desc->meta_data;
 		*toeplitz_hash_result = 0; /*src_desc->toeplitz_hash_result;*/
+
+		if (CE_state->id == CE_ID_3) {
+			ctx = src_ring->per_transfer_context[swi];
+			hif_ce_tx_desc_data_record(scn, *bufferp,
+						   (qdf_nbuf_t)ctx);
+		}
 
 		if (per_CE_contextp)
 			*per_CE_contextp = CE_state->send_context;
@@ -1264,6 +1275,8 @@ QDF_STATUS ce_get_direct_link_srng_info(struct hif_softc *scn,
 
 		if (ce_info_idx > max_ce_info_len)
 			return QDF_STATUS_E_FAILURE;
+
+		ce_state->service_dl = true;
 
 		info[ce_info_idx].ce_id = ce_state->id;
 		info[ce_info_idx].pipe_dir = tgt_svc_cfg[i].pipedir;

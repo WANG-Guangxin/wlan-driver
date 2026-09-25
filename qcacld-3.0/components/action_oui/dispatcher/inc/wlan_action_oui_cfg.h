@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -130,13 +130,14 @@
 
 /*
  * <ini>
- * gEnableActionOUI - Enable/Disable action oui feature
+ * gEnableActionOUI - Enable/Disable action oui feature and version
  * @Min: 0 (disable)
- * @Max: 1 (enable)
- * @Default: 1 (enable)
+ * @Max: 2 (enable action oui v2)
+ * @Default: 1
  *
  * This ini is used to enable the action oui feature to control
  * mode of connection, connected AP's in-activity time, Tx rate etc.,
+ * it also set action oui version: 2 means V2, 1 means legacy V1.
  *
  * Related: If gEnableActionOUI is set, then at least one of the following inis
  * must be set with the proper action oui extensions:
@@ -148,11 +149,10 @@
  *
  * </ini>
  */
-#define CFG_ENABLE_ACTION_OUI CFG_INI_BOOL( \
+#define CFG_ENABLE_ACTION_OUI CFG_INI_UINT( \
 	"gEnableActionOUI", \
-	1, \
-	"Enable/Disable action oui feature")
-
+	0, 2, 1, \
+	CFG_VALUE_OR_DEFAULT, "Configure action oui feature")
 /*
  * <ini>
  * gActionOUIConnect1x1 - Used to specify action OUIs for 1x1 connection
@@ -500,7 +500,7 @@
  * This ini is used to specify AP OUIs. Some of AP doesn't response our
  * first association request, but it would response our second association
  * request. Add such OUI configuration INI to apply reconnect logic when
- * association timeout happends with such AP.
+ * association timeout happens with such AP.
  * For default:
  *     gActionOUIReconnAssocTimeout=00E04C 00 01
  *          Explain: 00E04C: OUI
@@ -567,7 +567,7 @@
 	"gActionOUIDisableTWT", \
 	0, \
 	ACTION_OUI_MAX_STR_LEN, \
-	"001018 00 01 000986 00 01 000ce7 00 01 00e0fc 00 01", \
+	"001018 00 01 000986 00 01 000ce7 00 01 00e0fc 00 01 000b86 04 01040817 F0 01 000b86 04 0104080F F0 01 000b86 04 01040819 F0 01", \
 	"Used to specify action OUIs to control TWT configuration")
 
 /*
@@ -707,10 +707,11 @@
  * capability for specified AP with some conditions
  *
  * Example OUIs: (All values in Hex)
- * OUI 1: 000c43
- *       OUI data Len: 04
- *       OUI Data : 03000000
- *       OUI data Mask: F0 - 11110000
+ * gActionOUIDisableBFORMEE=00E04C 03 020160 E0 01
+ *       OUI: 00E04C
+ *       OUI data Len: 03
+ *       OUI Data : 020160
+ *       OUI data Mask: E0 - 11100000
  *       Info Mask : 01 - only OUI present in Info mask
  *
  * Refer to gEnableActionOUI for more detail about the format.
@@ -862,7 +863,40 @@
 
 /*
  * <ini>
+ * gActionOUIRestrictSLO - Used to downgrade to single link connection for
+ * specific AP build version.
+ *
+ * Sample OUIs: (All values in Hex)
+ *   OUI 3 : 000CE7
+ *   OUI data Len : 4
+ *   OUI Data : 01000000
+ *   OUI data Mask: F0
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * gActionOUIRestrictSLO=000CE7 04 01000000 F0 01 000CE7 04 09000000 F0 01
+ * Refer to gEnableActionOUI for more detail about the format.
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_RESTRICT_SLO CFG_INI_STRING( \
+	"gActionOUIRestrictSLO", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"", \
+	"To restrict matching OUI APs to single link connection at max")
+
+/*
+ * <ini>
  * CFG_ACTION_OUI_LIMIT_BW - Used to limit BW for specified AP
+ *
+ * To avoid IoT issue, limit 2.4 GHz STA connection BW to 20MHz,
+ * Limit 5/6 GHz STA connection TX BW to 40MHz
  *
  * Example OUIs: (All values in Hex)
  * OUI 1: 00904c
@@ -888,6 +922,203 @@
 	"", \
 	"Limit BW for specified AP")
 
+/*
+ * <ini>
+ * gActionOUIDisableAuxListen - Used to specify action OUIs to disable AUX
+ * Listen operation during the connection with specified APs.
+ *
+ * This ini is used to specify AP OUIs. Aux listen is prone to ITO issues.
+ * Thus, this INI is needed to ensure Aux listen can be disabled if we detect
+ * some ITO issue with specific APs.
+ * Note: User should strictly add new action OUIs at the end of this
+ * default value.
+ * If no OUI set, then allow STA to disable Aux listen for ALL APs.
+ * If INI is set to "ffffff 00 01", then STA is not allowed to disable Aux
+ * listen for any AP.
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_DISABLE_AUX_LISTEN CFG_INI_STRING( \
+	"gActionOUIDisableAuxListen", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"ffffff 00 01", \
+	"Used to specify action OUIs to control Aux listen configuration")
+
+/*
+ * <ini>
+ * CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS - Used to disable Dynamic SMPS
+ * capability for specified AP.
+ *
+ * Default OUIs: (All values in Hex)
+ * OUI 1: f832e4
+ *   OUI data Len: 00
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * Refer to gEnableActionOUI for more detail about the format.
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS CFG_INI_STRING( \
+	"gActionOUIDisableDynamicSMPS", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"F832E4 00 01", \
+	"disable dynamic SMPS capability for specified AP")
+
+/*
+ * <ini>
+ * CFG_ACTION_OUI_EXT_MLD_CAP_OP - Used to Exclude Extended MLD
+ * capability field in assoc request for specified AP.
+ *
+ * Default OUIs: (All values in Hex)
+ * OUI 1: 000CE7
+ *   OUI data Len: 00
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * Refer to gEnableActionOUI for more detail about the format.
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_EXT_MLD_CAP_OP CFG_INI_STRING( \
+	"gActionOUIExtMLDCapOp", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"000CE7 00 01", \
+	"Exclude Extended MLD capability field for specified AP")
+
+/*
+ * <ini>
+ * CFG_ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK - Used to skip beacon
+ * frame channel mismatch check for specified AP.
+ *
+ * Default OUIs: (All values in Hex)
+ * OUI 1: 18FE34
+ *   OUI data Len: 00
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * Refer to gEnableActionOUI for more detail about the format.
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK CFG_INI_STRING( \
+	"gActionOUISkipBcnChMismatchCheck", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"18FE34 00 01", \
+	"skip beacon frame channel mismatch check for specified AP.")
+
+/*
+ * <ini>
+ * g_force_tx_null_frame_on_p2p – Used to avoid disconnecting p2p Go of no
+ * beacon.
+ *
+ * Indicate sending qos null frames on p2p interface when final bmiss is
+ * detected if specific vendor OUI is in beacon.
+ * If an ACK is received, suppress reporting the final bmiss to the host for
+ * avoiding a disconnect.
+ *
+ * If the INI is set to "ffffff 00 01", always send qos null frames on p2p
+ * interface when final bmiss is detected.
+ *
+ * Related: None
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_FORCE_TX_NULL_FRAME_ON_P2P CFG_INI_STRING( \
+	"g_force_tx_null_frame_on_p2p", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"", \
+	"Allow connection to APs without beacon frames")
+
+/*
+ * <ini>
+ * gActionOUIEnableAmsdu2G - Used to enable AMSDU for 2.4 GHz STA connections
+ * with specified APs
+ * @Default: ""
+ *
+ * This ini is used to specify AP OUIs for which AMSDU should be enabled
+ * in ADDBA response frames for 2.4 GHz STA connections. By default, AMSDU is
+ * only enabled for HE mode on 2.4 GHz or all modes on 5GHz. This action OUI
+ * allows enabling AMSDU for HT/VHT (non-HE) STA connections on 2.4 GHz with
+ * specific APs.
+ *
+ * Example:
+ * To enable AMSDU for AP with OUI 00-11-22:
+ * gActionOUIEnableAmsdu2G="001122 00 01"
+ *
+ * To enable AMSDU for multiple APs:
+ * gActionOUIEnableAmsdu2G="001122 00 01 334455 00 01"
+ *
+ * Related: None
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_ENABLE_AMSDU_2G CFG_INI_STRING( \
+	"gActionOUIEnableAmsdu2G", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"", \
+	"Enable AMSDU for 2.4 GHz STA connections with specified APs")
+
+/*
+ * <ini>
+ * CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS_V2 - Used to disable Dynamic SMPS
+ * capability for specified AP.
+ *
+ * Default OUIs: (All values in Hex)
+ * OUI 1: f832e4
+ *   OUI data Len: 00
+ *   Info Mask : 01 - only OUI present in Info mask
+ *
+ * Refer to gEnableActionOUI for more detail about the format.
+ *
+ * Related: gEnableActionOUI
+ *
+ * Supported Feature: Action OUIs
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS_V2 CFG_INI_STRING( \
+	"gActionOUIDisableDynamicSMPS_V2", \
+	0, \
+	ACTION_OUI_MAX_STR_LEN, \
+	"F832E4 00 01", \
+	"disable dynamic SMPS capability for specified AP")
+
 #define CFG_ACTION_OUI \
 	CFG(CFG_ACTION_OUI_CCKM_1X1) \
 	CFG(CFG_ACTION_OUI_CONNECT_1X1) \
@@ -906,9 +1137,29 @@
 	CFG(CFG_ACTION_OUI_ENABLE_CTS2SELF) \
 	CFG(CFG_ACTION_OUI_ENABLE_CTS2SELF_WITH_QOS_NULL) \
 	CFG(CFG_ACTION_OUI_RESTRICT_MAX_MLO_LINKS) \
+	CFG(CFG_ACTION_OUI_RESTRICT_SLO) \
 	CFG(CFG_ACTION_OUI_SEND_SMPS_FRAME_WITH_OMN) \
 	CFG(CFG_ACTION_OUI_AUTH_ASSOC_6MBPS_2GHZ) \
 	CFG(CFG_ACTION_OUI_DISABLE_BFORMEE) \
 	CFG(CFG_ACTION_OUI_LIMIT_BW) \
+	CFG(CFG_ACTION_OUI_DISABLE_AUX_LISTEN) \
+	CFG(CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS) \
+	CFG(CFG_ACTION_OUI_EXT_MLD_CAP_OP) \
+	CFG(CFG_ACTION_OUI_ENABLE_AMSDU_2G) \
+	CFG(CFG_ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK) \
+	CFG(CFG_ACTION_OUI_FORCE_TX_NULL_FRAME_ON_P2P) \
 	CFG(CFG_ENABLE_ACTION_OUI)
+
+/* Action OUI V2 ini use different name format XXX_V2, support operator
+ * "&&" or "||" between different OUI, "&&" priority is higher than "||",
+ * such as: XXX_V2=OUI1 && OUI2 || OUI3 && OUI4
+ *
+ * For V2 ini name XXX_V2, if both host and F/W enabled action oui V2,  can be
+ * parsed, otherwise, can't be parsed.
+ *
+ * For legacy ini name without V2, only support legacy operator, can't support
+ * operator "&&", use space instead of "||".
+ */
+#define CFG_ACTION_OUI_V2 \
+	CFG(CFG_ACTION_OUI_DISABLE_DYNAMIC_SMPS_V2)
 #endif

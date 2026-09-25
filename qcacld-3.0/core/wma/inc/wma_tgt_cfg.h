@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -42,6 +42,7 @@
  * @en_tdls_11ax_support: Get TDLS ax support
  * @en_tdls_6g_support: Get TDLS 6g fw capability
  * @en_tdls_mlo_support: Get TDLS mlo fw support
+ * @en_tdls_nss_confirm_support: Get TDLS TDLS NSS operation fw support
  * @en_n_link_mlo_support: Get N-Link mlo fw support
  * @en_roam_offload: enable roam offload
  * @en_11ax: enable 11ax
@@ -60,6 +61,8 @@
  *                                supported or not
  * @is_mlo_per_link_stats_supported: Per link mlo stats is supported or not
  * @en_mlo_tid_to_link_support: Get tid to link fw support
+ * @is_passthru_chan_hop_supported: passthru channel hop capability
+ * @is_passthru_ampdu_ra_supported: passthru ampdu and ra capability
  */
 struct wma_tgt_services {
 	uint32_t sta_power_save;
@@ -87,6 +90,9 @@ struct wma_tgt_services {
 #ifdef WLAN_FEATURE_11BE
 	bool en_tdls_mlo_support;
 	bool en_n_link_mlo_support;
+#endif
+#ifdef WLAN_FEATURE_TDLS_NSS_4_4
+	bool en_tdls_nss_confirm_support;
 #endif
 #endif /* FEATURE_WLAN_TDLS */
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
@@ -119,6 +125,10 @@ struct wma_tgt_services {
 #endif
 #ifdef WLAN_FEATURE_11BE
 	bool en_mlo_tid_to_link_support;
+#endif
+#ifdef DRIVER_PASSTHRU_MODE
+	bool is_passthru_chan_hop_supported;
+	bool is_passthru_ampdu_ra_supported;
 #endif
 };
 
@@ -233,6 +243,7 @@ struct board_info {
  * @obss_detection_offloaded: obss detection offloaded to firmware
  * @obss_color_collision_offloaded: obss color collision offloaded to firmware
  * @sar_version: Version of SAR supported by firmware
+ * @sar_flag: SAR flags supported by firmware
  * @legacy_bcast_twt_support: broadcast twt support
  * @restricted_80p80_bw_supp: Restricted 80+80MHz(165MHz BW) support
  * @twt_bcast_req_support: twt bcast requestor support
@@ -240,7 +251,7 @@ struct board_info {
  * @twt_nudge_enabled: twt nudge enable
  * @all_twt_enabled: all twt enabled
  * @twt_stats_enabled: twt stats enabled
- *
+ * @tx_powerboost: tx powerboost enabled
  */
 struct wma_tgt_cfg {
 	uint32_t target_fw_version;
@@ -281,6 +292,7 @@ struct wma_tgt_cfg {
 	uint32_t hw_bd_id;
 	struct board_info hw_bd_info;
 	enum sar_version sar_version;
+	enum sar_flag sar_flag;
 	struct nan_tgt_caps nan_caps;
 	bool legacy_bcast_twt_support;
 	bool restricted_80p80_bw_supp;
@@ -297,5 +309,8 @@ struct wma_tgt_cfg {
 	tDot11fIEeht_cap eht_cap_5g;
 #endif
 	struct wma_tgt_aux_dev_caps wma_aux0_dev_caps[WMI_HOST_HW_MODE_MAX];
+#ifdef FEATURE_WLAN_TX_POWERBOOST
+	bool tx_powerboost;
+#endif
 };
 #endif /* WMA_TGT_CFG_H */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -56,6 +56,7 @@
 #define IGMP_QUERY_ADDRESS 0x10000e0
 
 #define WOW_LARGE_RX_RTPM_DELAY 1200
+#define WOW_TBTT_NACK_RETRY_RTPM_DELAY 44
 
 /**
  * enum pmo_vdev_param_id: tell vdev param id
@@ -103,6 +104,7 @@ enum pmo_beacon_dtim_policy {
  *  before the entering the Active state
  * @pmo_sta_ps_param_ito_repeat_count: Indicates ito repeated count
  * @pmo_sta_ps_param_spec_wake_interval: OPM speculative wake interval
+ * @pmo_sta_ps_param_opm_level: OPM power save level
  */
 enum pmo_sta_powersave_param {
 	pmo_sta_ps_param_rx_wake_policy = 0,
@@ -115,6 +117,7 @@ enum pmo_sta_powersave_param {
 	pmo_sta_ps_param_advanced_power_max_tx_before_wake = 7,
 	pmo_sta_ps_param_ito_repeat_count = 8,
 	pmo_sta_ps_param_spec_wake_interval = 9,
+	pmo_sta_ps_param_opm_level = 10,
 };
 
 /**
@@ -170,11 +173,13 @@ enum pmo_wow_enable_type {
  * @PMO_PS_ADVANCED_POWER_SAVE_DISABLE: Disable advanced power save mode
  * @PMO_PS_ADVANCED_POWER_SAVE_ENABLE: Enable power save mode
  * @PMO_PS_ADVANCED_POWER_SAVE_USER_DEFINED: User Defined
+ * @PMO_PS_ADVANCED_POWER_SAVE_LATENCY_BASED : Latency Enabled
  */
 enum powersave_mode {
 	PMO_PS_ADVANCED_POWER_SAVE_DISABLE = 0,
 	PMO_PS_ADVANCED_POWER_SAVE_ENABLE = 1,
-	PMO_PS_ADVANCED_POWER_SAVE_USER_DEFINED = 2
+	PMO_PS_ADVANCED_POWER_SAVE_USER_DEFINED = 2,
+	PMO_PS_ADVANCED_POWER_SAVE_LATENCY_BASED = 3
 };
 
 /**
@@ -363,7 +368,8 @@ enum pmo_page_fault_action {
  * @active_mode_offload: true if psoc supports active mode offload else false
  * @ap_arpns_support: true if psoc supports arp ns for ap mode
  * @d0_wow_supported: true if psoc supports D0 wow command
- * @ra_ratelimit_enable: true when ra filtering ins eanbled else false
+ * @ra_ratelimit_enable: true when ra filtering ins enabled else false
+ * @ra_priority_enable: true when ra priority ins enabled else false
  * @ra_ratelimit_interval: ra packets interval
  * @magic_ptrn_enable: true when magic pattern is enabled else false
  * @deauth_enable: true when wake up on deauth is enabled else false
@@ -371,9 +377,13 @@ enum pmo_page_fault_action {
  * @lpass_enable: true when lpass is enabled else false
  * @max_ps_poll: max power save poll
  * @sta_dynamic_dtim: station dynamic DTIM value
+ * @sta_teles_dtim: station telescopic DTIM value
+ * @min_teles_dtim: minimum telescopic DTIM level
  * @sta_mod_dtim: station modulated DTIM value
  * @sta_max_li_mod_dtim: station max listen interval DTIM value
  * @sta_forced_dtim: station forced DTIM value
+ * @wow_wakeup_event_mask: sta wow wakeup events bitmask lower 32 bits
+ * @wow_wakeup_event_mask_h32: sta wow wakeup events bitmask higher 32 bit
  * @wow_enable: enable wow with majic pattern match or pattern byte match
  * @power_save_mode: power save mode for psoc
  * @default_power_save_mode: default power save mode for psoc
@@ -406,11 +416,16 @@ enum pmo_page_fault_action {
  *	mode for uc packets
  * @active_mc_bc_apf_mode: Setting that determines how APF is applied in
  *	active mode for MC/BC packets
+ * @apf_mode: Indicates the apf mode
  * @ito_repeat_count: Indicates ito repeated count
  * @is_mod_dtim_on_sys_suspend_enabled: true when mod dtim is enabled for
  * system suspend wow else false
+ * @is_teles_dtim_only_on_sys_suspend_enabled: true when tele dtim is enable
+ *  for system suspend wow, false when tele dtim is enable for system suspend
+ *  or run time PM.
  * @is_bus_suspend_enabled_in_sap_mode: Can bus suspend in SoftAP mode
  * @is_bus_suspend_enabled_in_go_mode: Can bus suspend in P2P GO mode
+ * @wow_suspend_type: What wow suspend type is currently happening
  * @enable_gpio_wakeup: enable gpio wakeup
  * @gpio_wakeup_pin: gpio wakeup pin
  * @gpio_wakeup_mode: gpio wakeup mode
@@ -428,6 +443,8 @@ enum pmo_page_fault_action {
  * on max pagefault
  * @is_apf_configure_per_screen_state: Configure APF mode enable/disable
  * per screen off/on state
+ * @apfv6_disable_offload_bitmap: Offload bitmap in APFv6
+ * @is_ap_mode_enable: apf mode configuration enable/disable
  */
 struct pmo_psoc_cfg {
 	bool ptrn_match_enable_all_vdev;
@@ -443,6 +460,7 @@ struct pmo_psoc_cfg {
 	bool ap_arpns_support;
 	bool d0_wow_supported;
 	bool ra_ratelimit_enable;
+	bool ra_priority_enable;
 #ifdef FEATURE_WLAN_RA_FILTERING
 	uint16_t ra_ratelimit_interval;
 #endif
@@ -452,9 +470,13 @@ struct pmo_psoc_cfg {
 	bool lpass_enable;
 	uint8_t max_ps_poll;
 	uint8_t sta_dynamic_dtim;
+	uint8_t sta_teles_dtim;
+	uint8_t min_teles_dtim;
 	uint8_t sta_mod_dtim;
 	uint8_t sta_max_li_mod_dtim;
 	bool sta_forced_dtim;
+	uint32_t wow_wakeup_event_mask;
+	uint32_t wow_wakeup_event_mask_h32;
 	enum pmo_wow_enable_type wow_enable;
 	enum powersave_mode power_save_mode;
 	enum powersave_mode default_power_save_mode;
@@ -492,10 +514,13 @@ struct pmo_psoc_cfg {
 	uint8_t wow_spec_wake_interval;
 	enum active_apf_mode active_uc_apf_mode;
 	enum active_apf_mode active_mc_bc_apf_mode;
+	uint32_t apf_mode;
 	uint8_t ito_repeat_count;
 	bool is_mod_dtim_on_sys_suspend_enabled;
+	bool is_teles_dtim_only_on_sys_suspend_enabled;
 	bool is_bus_suspend_enabled_in_sap_mode;
 	bool is_bus_suspend_enabled_in_go_mode;
+	enum qdf_suspend_type wow_suspend_type;
 #ifdef WLAN_ENABLE_GPIO_WAKEUP
 	bool enable_gpio_wakeup;
 	uint32_t gpio_wakeup_pin;
@@ -514,6 +539,8 @@ struct pmo_psoc_cfg {
 	uint32_t interval_for_pagefault_wakeup_counts;
 	uint32_t ssr_frequency_on_pagefault;
 	bool is_apf_configure_per_screen_state;
+	uint32_t apfv6_disable_offload_bitmap;
+	bool is_ap_mode_enable;
 };
 
 /**
@@ -526,6 +553,7 @@ struct pmo_psoc_cfg {
  *	This allows both D0-WoW (bus up) and Non-D0-WoW (bus down) to use one
  *	unified command
  * @li_offload: Firmware has listen interval offload support
+ * @apf_offload_enabled: Firmware has apf data offload enabled
  */
 struct pmo_device_caps {
 	bool apf;
@@ -533,6 +561,7 @@ struct pmo_device_caps {
 	bool packet_filter;
 	bool unified_wow;
 	bool li_offload;
+	bool apf_offload_enabled;
 };
 
 /**
@@ -557,11 +586,13 @@ struct pmo_igmp_offload_req {
  * struct pmo_ps_params - structure to hold OPM params
  *
  * @opm_mode: OPM mode
+ * @ps_opm_level: power save opm level
  * @ps_ito: power save inactivity timeout
  * @spec_wake: OPM speculative wake interval
  */
 struct pmo_ps_params {
 	enum powersave_mode opm_mode;
+	uint8_t ps_opm_level;
 	uint16_t ps_ito;
 	uint16_t spec_wake;
 };

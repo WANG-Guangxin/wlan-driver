@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -178,9 +178,18 @@ int wlan_cfg80211_tdls_add_peer_mlo(struct hdd_adapter *adapter,
 		return -EINVAL;
 
 	if (wlan_vdev_is_up(vdev) != QDF_STATUS_SUCCESS) {
-		osif_debug("sta is not connected or disconnecting");
+		osif_debug("vdev %d sta is not connected or disconnecting",
+			   wlan_vdev_get_id(vdev));
 		hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_TDLS_ID);
 		return -EINVAL;
+	}
+
+	if (wlan_cm_roaming_in_progress(wlan_vdev_get_pdev(vdev),
+					wlan_vdev_get_id(vdev))) {
+		osif_debug("vdev %d Roaming is in progress",
+			   wlan_vdev_get_id(vdev));
+		hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_TDLS_ID);
+		return -EAGAIN;
 	}
 
 	is_mlo_vdev = wlan_vdev_mlme_is_mlo_vdev(vdev);
@@ -335,7 +344,7 @@ tdls_calc_channels_from_staparams(struct wlan_objmgr_vdev *vdev,
 		osif_debug(" %d,", dest_freq[i]);
 
 	req_info->supported_channels_len = num_unique_freq;
-	osif_debug("After removing duplcates supported_channels_len: %d",
+	osif_debug("After removing duplicates supported_channels_len: %d",
 		   req_info->supported_channels_len);
 }
 
@@ -844,13 +853,11 @@ int wlan_cfg80211_tdls_oper(struct wlan_objmgr_vdev *vdev,
 	bool is_mlo_vdev;
 
 	status = wlan_cfg80211_tdls_validate_mac_addr(peer);
-
 	if (status)
 		return status;
 
 	if (NL80211_TDLS_DISCOVERY_REQ == oper) {
-		osif_warn(
-			"We don't support in-driver setup/teardown/discovery");
+		osif_warn("We don't support in-driver setup/teardown/discovery");
 		return -ENOTSUPP;
 	}
 
@@ -1181,11 +1188,12 @@ wlan_cfg80211_tdls_mgmt(struct wlan_objmgr_vdev *vdev,
 		&tdls_priv->tdls_mgmt_comp,
 		msecs_to_jiffies(WAIT_TIME_FOR_TDLS_MGMT));
 
-	if ((0 == rc) || (QDF_STATUS_SUCCESS !=
-				tdls_priv->mgmt_tx_completion_status)) {
-		osif_err("%s rc %ld mgmtTxCompletionStatus %u",
-			 !rc ? "Mgmt Tx Completion timed out" :
-			 "Mgmt Tx Completion failed",
+	if (!rc ||
+	    QDF_STATUS_SUCCESS != tdls_priv->mgmt_tx_completion_status) {
+		osif_err("vdev:%d %s rc %ld Tx Completion Status %u",
+			 mgmt_req.vdev_id,
+			 !rc ? "TDLS Tx Completion timed out" :
+			 "TDLS Tx Completion failed",
 			 rc, tdls_priv->mgmt_tx_completion_status);
 
 		tdls_priv->mgmt_tx_completion_status = false;
@@ -1193,7 +1201,8 @@ wlan_cfg80211_tdls_mgmt(struct wlan_objmgr_vdev *vdev,
 		goto error_mgmt_req;
 	}
 
-	osif_debug("Mgmt Tx Completion status %ld TxCompletion %u",
+	osif_debug("vdev:%d rc:%ld TDLS Tx Completion status:%u",
+		   mgmt_req.vdev_id,
 		   rc, tdls_priv->mgmt_tx_completion_status);
 
 	if (TDLS_SETUP_RESPONSE == action_code ||
@@ -1212,12 +1221,88 @@ error_mgmt_req:
 	return status;
 }
 
+int wlan_cfg80211_tdls_send_mgmt_on_active_link(struct hdd_adapter *adapter,
+						const uint8_t *peer,
+						uint8_t action_code,
+						uint8_t dialog_token,
+						uint16_t status_code,
+						uint32_t peer_capability,
+						const uint8_t *buf,
+						size_t len, int link_id)
+{
+	struct hdd_context *hdd_ctx = adapter->hdd_ctx;
+	struct wlan_objmgr_vdev *vdev = NULL;
+	struct wlan_objmgr_vdev *tdls_vdev = NULL;
+	int ret = -EINVAL;
+	uint8_t vdev_id;
+	bool is_mlo_vdev = true;
+
+	if (!hdd_ctx) {
+		osif_err("hdd_ctx is null");
+		return -EINVAL;
+	}
+
+	if (!hdd_ctx->psoc) {
+		osif_err("psoc is null");
+		return -EINVAL;
+	}
+
+	vdev = hdd_objmgr_get_vdev_by_user(adapter->deflink, WLAN_OSIF_TDLS_ID);
+	if (!vdev) {
+		osif_err("vdev is null");
+		return -EINVAL;
+	}
+
+	if (!wlan_vdev_mlme_is_mlo_vdev(vdev)) {
+		tdls_vdev = vdev;
+		is_mlo_vdev = false;
+		goto end;
+	}
+
+	vdev_id = ucfg_mlo_get_active_vdev_id(vdev);
+	if (vdev_id == WLAN_UMAC_VDEV_ID_MAX) {
+		osif_err("vdev id is not valid");
+		goto ref_rel;
+	}
+
+	tdls_vdev = wlan_objmgr_get_vdev_by_id_from_psoc(hdd_ctx->psoc,
+							 vdev_id,
+							 WLAN_OSIF_TDLS_ID);
+
+	if (!tdls_vdev) {
+		osif_err("vdev is not found for id %d", vdev_id);
+		goto ref_rel;
+	}
+
+end:
+	if (action_code == TDLS_DISCOVERY_REQUEST &&
+	    ucfg_tdls_discovery_on_going(tdls_vdev)) {
+		osif_err("discovery request is going");
+		ret = -EAGAIN;
+		goto ref_rel;
+	}
+
+	ret = wlan_cfg80211_tdls_mgmt(tdls_vdev, peer, action_code,
+				      dialog_token, status_code,
+				      peer_capability, buf, len, link_id);
+
+ref_rel:
+	if (vdev)
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_OSIF_TDLS_ID);
+
+	if (is_mlo_vdev && tdls_vdev)
+		wlan_objmgr_vdev_release_ref(tdls_vdev, WLAN_OSIF_TDLS_ID);
+
+	return ret;
+}
+
 int
 wlan_cfg80211_tdls_mgmt_mlo(struct hdd_adapter *adapter, const uint8_t *peer,
 			    uint8_t action_code, uint8_t dialog_token,
 			    uint16_t status_code, uint32_t peer_capability,
 			    const uint8_t *buf, size_t len, int link_id)
 {
+	struct hdd_context *hdd_ctx = adapter->hdd_ctx;
 	struct wlan_objmgr_vdev *tdls_link_vdev = NULL;
 	struct wlan_objmgr_vdev *mlo_vdev = NULL;
 	struct wlan_objmgr_vdev *vdev;
@@ -1226,6 +1311,11 @@ wlan_cfg80211_tdls_mgmt_mlo(struct hdd_adapter *adapter, const uint8_t *peer,
 	bool dis_req_more = false;
 	uint8_t i;
 	int ret = 0;
+
+	if (!hdd_ctx) {
+		osif_err_rl("hdd_ctx is null");
+		return -EINVAL;
+	}
 
 	vdev = hdd_objmgr_get_vdev_by_user(adapter->deflink, WLAN_OSIF_TDLS_ID);
 	if (!vdev)
@@ -1284,6 +1374,14 @@ wlan_cfg80211_tdls_mgmt_mlo(struct hdd_adapter *adapter, const uint8_t *peer,
 				osif_err_rl("mlo vdev is NULL");
 				continue;
 			}
+
+			if (!ucfg_tdls_is_vdev_allowed_to_tx(mlo_vdev) ||
+			    !wlan_hdd_is_tdls_allowed(hdd_ctx, mlo_vdev)) {
+				ucfg_tdls_release_mlo_vdev(mlo_vdev,
+							   WLAN_OSIF_TDLS_ID);
+				continue;
+			}
+
 			ret = wlan_cfg80211_tdls_mgmt(mlo_vdev, peer,
 						      action_code,
 						      dialog_token, status_code,

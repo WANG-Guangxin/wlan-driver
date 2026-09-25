@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -53,6 +53,8 @@
 #define IS_LSB_SET(__num) ((__num) & BIT(0))
 
 #define VDEV_ALL                    0xFF
+
+#define NOISE_FLOOR_INVALID         (-128)
 
 /**
  * enum stats_req_type - enum indicating bit position of various stats type in
@@ -142,6 +144,7 @@ enum txrate_gi {
  * @ipv6_mcast_ra_stats:        ipv6 multicast ra stats
  * @ipv6_mcast_ns_stats:        ipv6 multicast ns stats
  * @ipv6_mcast_na_stats:        ipv6 multicast na stats
+ * @ipv6_mcast_mlq_stats:	ipv6 multicast mlq stats
  * @icmpv4_count:               ipv4 icmp packet count
  * @icmpv6_count:               ipv6 icmp packet count
  * @rssi_breach_wake_up_count:  rssi breach wakeup count
@@ -171,6 +174,7 @@ struct wake_lock_stats {
 	uint32_t ipv6_mcast_ra_stats;
 	uint32_t ipv6_mcast_ns_stats;
 	uint32_t ipv6_mcast_na_stats;
+	uint32_t ipv6_mcast_mlq_stats;
 	uint32_t icmpv4_count;
 	uint32_t icmpv6_count;
 	uint32_t rssi_breach_wake_up_count;
@@ -474,6 +478,26 @@ struct vdev_summary_extd_stats {
 };
 
 /**
+ * struct bcn_his_info - beacon history info
+ * @bcn_rssi: beacon rssi
+ * @bcn_tsf: beacon tsf
+ */
+struct bcn_his_info {
+	int32_t bcn_rssi;
+	uint32_t bcn_tsf;
+};
+
+/**
+ * struct recv_bcn_stats - receive beacon stats
+ * @vdev_id: vdev_id
+ * @bcn_history: structure to bcn_his_info
+ */
+struct recv_bcn_stats {
+	uint8_t vdev_id;
+	struct bcn_his_info bcn_history[WMI_MAX_BCN_HISTORY];
+};
+
+/**
  * struct vdev_mc_cp_stats - vdev specific stats
  * @cca: cca stats
  * @tx_rate_flags: tx rate flags (enum tx_rate_info)
@@ -481,6 +505,8 @@ struct vdev_summary_extd_stats {
  * @vdev_summary_stats: vdev's summary stats
  * @pmf_bcn_stats: pmf beacon protect stats
  * @vdev_extd_stats: vdev summary extended stats
+ * @num_recv_bcn_stats: number of beacon stats
+ * @bcn_stats: beacon history report stats
  */
 struct vdev_mc_cp_stats {
 	struct cca_stats cca;
@@ -489,6 +515,8 @@ struct vdev_mc_cp_stats {
 	struct summary_stats vdev_summary_stats;
 	struct pmf_bcn_protect_stats pmf_bcn_stats;
 	struct vdev_summary_extd_stats vdev_extd_stats;
+	uint32_t num_recv_bcn_stats;
+	struct recv_bcn_stats bcn_stats[WLAN_UMAC_MLO_MAX_VDEVS];
 };
 
 /**
@@ -730,6 +758,10 @@ struct chain_rssi_event {
  * @num_rx_rate_counts: Num rx rate count for current peer
  * @tx_pkt_per_mcs: Number of tx packets for each MCS
  * @rx_pkt_per_mcs: Number of rx packets for each MCS
+ * @tx_retries_ratio: cumulative retry counts among
+ *  the last 100 packets via ratio approximation.
+ * @tx_failed_retrylimit: failed packets due to the number of
+ *  retransmission attempts exceeding 802.11 retry limit.
  */
 struct peer_stats_info_ext_event {
 	struct qdf_mac_addr peer_macaddr;
@@ -750,6 +782,8 @@ struct peer_stats_info_ext_event {
 	uint32_t num_rx_rate_counts;
 	uint32_t *tx_pkt_per_mcs;
 	uint32_t *rx_pkt_per_mcs;
+	uint32_t tx_retries_ratio;
+	uint32_t tx_failed_retrylimit;
 };
 
 /**
@@ -783,6 +817,8 @@ struct peer_stats_info_ext_event {
  * @bcn_protect_stats: pmf bcn protect stats
  * @num_vdev_extd_stats: number of vdev extended stats
  * @vdev_extd_stats: if populated indicates array of ext summary stats per vdev
+ * @num_recv_bcn_stats: number of bcn stats
+ * @bcn_stats: if populated indicates receive beacon stats
  */
 struct stats_event {
 	uint32_t num_pdev_stats;
@@ -814,6 +850,8 @@ struct stats_event {
 	struct pmf_bcn_protect_stats bcn_protect_stats;
 	uint32_t num_vdev_extd_stats;
 	struct vdev_summary_extd_stats *vdev_extd_stats;
+	uint32_t num_recv_bcn_stats;
+	struct recv_bcn_stats *bcn_stats;
 };
 
 /**
@@ -850,6 +888,10 @@ struct peer_stats_request_params {
  * @num_rx_rate_counts: Num rx rate count for current peer
  * @tx_pkt_per_mcs: Number of tx rate counts for each MCS
  * @rx_pkt_per_mcs: Number of rx rate counts for each MCS
+ * @tx_retries_ratio: cumulative retry counts among
+ *  the last 100 packets via ratio approximation.
+ * @tx_failed_retrylimit: failed packets due to the number of
+ *  retransmission attempts exceeding 802.11 retry limit.
  */
 typedef struct {
 	struct qdf_mac_addr peer_macaddr;
@@ -870,6 +912,14 @@ typedef struct {
 	uint32_t num_rx_rate_counts;
 	uint32_t *tx_pkt_per_mcs;
 	uint32_t *rx_pkt_per_mcs;
+	uint32_t tx_retries_ratio;
+	uint32_t tx_failed_retrylimit;
 } wmi_host_peer_stats_info;
 
+static inline bool is_noise_floor_invalid(uint32_t noise_floor)
+{
+	if (!noise_floor || noise_floor == NOISE_FLOOR_INVALID)
+		return true;
+	return false;
+}
 #endif /* __WLAN_CP_STATS_MC_DEFS_H__ */

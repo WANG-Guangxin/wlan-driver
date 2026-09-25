@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015, 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -28,6 +28,7 @@
 #include "osif_cm_rsp.h"
 #include "wlan_cfg80211_scan.h"
 #include "wlan_mlo_mgr_sta.h"
+#include "osif_link_reconfig.h"
 
 enum qca_sta_connect_fail_reason_codes
 osif_cm_mac_to_qca_connect_fail_reason(enum wlan_status_code internal_reason)
@@ -258,11 +259,14 @@ osif_cm_disconnect_complete_cb(struct wlan_objmgr_vdev *vdev,
 	return osif_disconnect_handler(vdev, rsp);
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 void osif_cm_unlink_bss(struct wlan_objmgr_vdev *vdev,
 			struct qdf_mac_addr *bssid)
 {
 	struct scan_filter *filter;
+
+	if (qdf_is_macaddr_zero(bssid) ||
+	    qdf_is_macaddr_broadcast(bssid))
+		return;
 
 	filter = qdf_mem_malloc(sizeof(*filter));
 	if (!filter)
@@ -338,15 +342,8 @@ osif_cm_send_keys_cb(struct wlan_objmgr_vdev *vdev, uint8_t key_index,
 				       pairwise,
 				       cipher_type);
 }
-#else
-static inline QDF_STATUS
-osif_cm_disable_netif_queue(struct wlan_objmgr_vdev *vdev)
-{
-	return QDF_STATUS_SUCCESS;
-}
-#endif
 
-#if defined(CONN_MGR_ADV_FEATURE) && defined(WLAN_FEATURE_11BE_MLO)
+#ifdef WLAN_FEATURE_11BE_MLO
 /**
  * osif_link_reconfig_notify_cb() - Link reconfig notify callback
  * @vdev: vdev pointer
@@ -588,6 +585,23 @@ osif_cm_roam_rt_stats_evt_cb(struct roam_stats_event *roam_stats,
 		osif_cm_legacy_ops->roam_rt_stats_event_cb(roam_stats, idx);
 }
 
+/**
+ * osif_cm_reset_scan_reject_params() - to reset scan reject params
+ * @vdev: vdev pointer
+ *
+ * This callback resets scan reject params
+ *
+ * Return: QDF_STATUS
+ */
+static QDF_STATUS
+osif_cm_reset_scan_reject_params(struct wlan_objmgr_vdev *vdev)
+{
+	if (osif_cm_legacy_ops &&
+	    osif_cm_legacy_ops->reset_scan_reject_params_cb)
+		osif_cm_legacy_ops->reset_scan_reject_params_cb(vdev);
+
+	return QDF_STATUS_SUCCESS;
+}
 #endif
 
 #ifdef WLAN_FEATURE_PREAUTH_ENABLE
@@ -662,26 +676,24 @@ static void osif_cm_perfd_reset_cpufreq_ctrl_cb(void)
 #endif
 
 static struct mlme_cm_ops cm_ops = {
-#ifdef CONN_MGR_ADV_FEATURE
 	.mlme_cm_connect_active_notify_cb = osif_cm_connect_active_notify,
-#endif
 	.mlme_cm_connect_complete_cb = osif_cm_connect_complete_cb,
 	.mlme_cm_failed_candidate_cb = osif_cm_failed_candidate_cb,
 	.mlme_cm_update_id_and_src_cb = osif_cm_update_id_and_src_cb,
 	.mlme_cm_disconnect_complete_cb = osif_cm_disconnect_complete_cb,
 	.mlme_cm_disconnect_start_cb = osif_cm_disconnect_start_cb,
-#ifdef CONN_MGR_ADV_FEATURE
 	.mlme_cm_roam_sync_cb = osif_cm_roam_sync_cb,
 	.mlme_cm_pmksa_candidate_notify_cb = osif_pmksa_candidate_notify_cb,
 	.mlme_cm_send_keys_cb = osif_cm_send_keys_cb,
 	.mlme_cm_link_reconfig_notify_cb = osif_link_reconfig_notify_cb,
-#endif
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	.mlme_cm_roam_start_cb = osif_cm_roam_start_cb,
 	.mlme_cm_roam_abort_cb = osif_cm_roam_abort_cb,
 	.mlme_cm_roam_cmpl_cb = osif_cm_roam_cmpl_cb,
 	.mlme_cm_roam_get_scan_ie_cb = osif_cm_get_scan_ie_info_cb,
 	.mlme_cm_roam_rt_stats_cb = osif_cm_roam_rt_stats_evt_cb,
+	.mlme_cm_roam_connect_complete_cb = osif_cm_roam_complete_cb,
+	.mlme_cm_reset_scan_reject_params_cb = osif_cm_reset_scan_reject_params,
 #endif
 #ifdef WLAN_FEATURE_PREAUTH_ENABLE
 	.mlme_cm_ft_preauth_cmpl_cb = osif_cm_ft_preauth_cmpl_cb,
@@ -696,6 +708,13 @@ static struct mlme_cm_ops cm_ops = {
 #ifdef WLAN_BOOST_CPU_FREQ_IN_ROAM
 	.mlme_cm_perfd_reset_cpufreq_ctrl_cb =
 				osif_cm_perfd_reset_cpufreq_ctrl_cb,
+#endif
+#if defined(WLAN_FEATURE_11BE_MLO)
+	.mlme_cm_link_reconfig_status_cb = osif_link_reconfig_status_cb,
+	.mlme_cm_populate_link_recfg_done_data =
+			osif_populate_link_recfg_done_data,
+	.mlme_cm_free_link_reconfig_done_data =
+			osif_free_link_reconfig_done_data,
 #endif
 };
 
@@ -751,13 +770,19 @@ QDF_STATUS osif_cm_osif_priv_deinit(struct wlan_objmgr_vdev *vdev)
 	return QDF_STATUS_SUCCESS;
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 void osif_cm_connect_active_notify(uint8_t vdev_id)
 {
 	if (osif_cm_legacy_ops && osif_cm_legacy_ops->connect_active_notify_cb)
 		osif_cm_legacy_ops->connect_active_notify_cb(vdev_id);
 }
-#endif
+
+QDF_STATUS osif_cm_roam_complete_cb(struct wlan_objmgr_vdev *vdev)
+{
+	if (osif_cm_legacy_ops && osif_cm_legacy_ops->roam_complete_notify_cb)
+		osif_cm_legacy_ops->roam_complete_notify_cb(vdev);
+
+	return QDF_STATUS_SUCCESS;
+}
 
 QDF_STATUS osif_cm_connect_comp_ind(struct wlan_objmgr_vdev *vdev,
 				    struct wlan_cm_connect_resp *rsp,
@@ -773,6 +798,21 @@ QDF_STATUS osif_cm_connect_comp_ind(struct wlan_objmgr_vdev *vdev,
 
 	return ret;
 }
+
+#ifdef ENABLE_CFG80211_BACKPORTS_MLO
+struct net_device *osif_cm_get_mld_netdev(struct wlan_objmgr_vdev *vdev)
+{
+	osif_cm_get_mld_netdev_cb cb = NULL;
+	struct net_device *dev;
+
+	if (osif_cm_legacy_ops)
+		cb = osif_cm_legacy_ops->osif_get_mld_netdev_cb;
+	if (cb)
+		dev = cb(vdev);
+
+	return dev;
+}
+#endif
 
 #ifdef WLAN_VENDOR_HANDOFF_CONTROL
 QDF_STATUS osif_cm_vendor_handoff_params_cb(struct wlan_objmgr_psoc *psoc,
@@ -804,7 +844,6 @@ QDF_STATUS osif_cm_disconnect_comp_ind(struct wlan_objmgr_vdev *vdev,
 	return ret;
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 QDF_STATUS osif_cm_netif_queue_ind(struct wlan_objmgr_vdev *vdev,
 				   enum netif_action_type action,
 				   enum netif_reason_type reason)
@@ -862,7 +901,6 @@ osif_cm_send_vdev_keys(struct wlan_objmgr_vdev *vdev,
 
 	return QDF_STATUS_E_FAILURE;
 }
-#endif
 
 #ifdef WLAN_FEATURE_FILS_SK
 QDF_STATUS osif_cm_set_hlp_data(struct net_device *dev,

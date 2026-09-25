@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -187,6 +187,10 @@ struct wlan_objmgr_psoc *wlan_objmgr_psoc_obj_create(uint32_t phy_version,
 	}
 	wlan_minidump_log(psoc, sizeof(*psoc), psoc,
 			  WLAN_MD_OBJMGR_PSOC, "wlan_objmgr_psoc");
+
+	wlan_minidump_log(g_umac_glb_obj, sizeof(*g_umac_glb_obj), psoc,
+			  WLAN_MD_OBJMGR_GLOBAL, "wlan_objmgr_global");
+
 	obj_mgr_info("Created psoc %d", psoc->soc_objmgr.psoc_id);
 
 	return psoc;
@@ -218,6 +222,8 @@ static QDF_STATUS wlan_objmgr_psoc_obj_destroy(struct wlan_objmgr_psoc *psoc)
 	wlan_minidump_remove(psoc, sizeof(*psoc), psoc,
 			     WLAN_MD_OBJMGR_PSOC, "wlan_objmgr_psoc");
 
+	wlan_minidump_remove(g_umac_glb_obj, sizeof(*g_umac_glb_obj), psoc,
+			     WLAN_MD_OBJMGR_GLOBAL, "wlan_objmgr_global");
 	/* Invoke registered create handlers */
 	for (id = 0; id < WLAN_UMAC_MAX_COMPONENTS; id++) {
 		handler = g_umac_glb_obj->psoc_destroy_handler[id];
@@ -870,6 +876,7 @@ struct wlan_objmgr_pdev *wlan_objmgr_get_pdev_by_id_no_state(
 
 	return pdev;
 }
+
 QDF_STATUS wlan_objmgr_psoc_vdev_attach(struct wlan_objmgr_psoc *psoc,
 					struct wlan_objmgr_vdev *vdev)
 {
@@ -879,6 +886,12 @@ QDF_STATUS wlan_objmgr_psoc_vdev_attach(struct wlan_objmgr_psoc *psoc,
 
 	wlan_psoc_obj_lock(psoc);
 	objmgr = &psoc->soc_objmgr;
+
+	/* For bridge vdevs allocate vdev ids at the end */
+	if ((vdev->vdev_objmgr.c_flags & WLAN_MLO_BRIDGE_VAP) &&
+	    (objmgr->max_vdev_count > WLAN_MAX_PDEV_BRIDGE_VDEVS))
+		id = objmgr->max_vdev_count - WLAN_MAX_PDEV_BRIDGE_VDEVS;
+
 	/* Find first free vdev id */
 	while ((id < objmgr->max_vdev_count)) {
 		if (qdf_test_bit(id, objmgr->wlan_vdev_id_map)) {
@@ -3056,10 +3069,10 @@ uint32_t wlan_objmgr_psoc_check_for_peer_leaks(struct wlan_objmgr_psoc *psoc)
 	obj_mgr_alert("----------------------------------------------------");
 
 	wlan_objmgr_for_each_psoc_vdev(psoc, vdev_id, vdev) {
-		struct wlan_objmgr_peer *peer;
+		struct wlan_objmgr_peer *peer, *next;
 
 		wlan_vdev_obj_lock(vdev);
-		wlan_objmgr_for_each_vdev_peer(vdev, peer) {
+		wlan_objmgr_for_each_vdev_peer(vdev, peer, next) {
 			wlan_peer_obj_lock(peer);
 			leaks += qdf_atomic_read(&peer->peer_objmgr.ref_cnt);
 			wlan_objmgr_print_peer_ref_leaks(peer, vdev_id);

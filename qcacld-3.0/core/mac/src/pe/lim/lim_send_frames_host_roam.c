@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -67,17 +68,17 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 {
 	tDot11fReAssocRequest *frm;
 	uint16_t caps;
-	uint8_t *frame;
+	uint8_t *frame, *rsnxe = NULL;
 	uint32_t bytes, payload, status;
 	uint8_t qos_enabled, wme_enabled, wsm_enabled;
 	void *packet;
 	QDF_STATUS qdf_status;
 	uint8_t power_caps_populated = false;
-	uint16_t ft_ies_length = 0;
+	uint16_t ft_ies_length = 0, rsnxe_len = 0;
 	uint8_t *body;
 	uint16_t add_ie_len;
 	uint8_t *add_ie;
-	const uint8_t *wps_ie = NULL;
+	const uint8_t *wps_ie = NULL, *rsnxe_ptr = NULL;
 	uint8_t tx_flag = 0;
 	uint8_t vdev_id = 0;
 	bool vht_enabled = false;
@@ -346,8 +347,9 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 
 	if (lim_is_session_he_capable(pe_session)) {
 		pe_debug("Populate HE IEs");
-		populate_dot11f_he_caps(mac_ctx, pe_session,
-					&frm->he_cap);
+		populate_dot11f_he_caps(mac_ctx, pe_session, pe_session->opmode,
+					pe_session->curr_op_freq,
+					pe_session->ch_width, &frm->he_cap);
 		populate_dot11f_he_6ghz_cap(mac_ctx, pe_session,
 					    &frm->he_6ghz_band_cap);
 	}
@@ -390,6 +392,18 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 						  &frm->ExtCap);
 	}
 
+	rsnxe_ptr = wlan_get_ie_ptr_from_eid(WLAN_ELEMID_RSNXE, add_ie,
+					     add_ie_len);
+	if (add_ie_len && rsnxe_ptr) {
+		rsnxe_len = rsnxe_ptr[1] + 2;
+
+		rsnxe = qdf_mem_malloc(rsnxe_len);
+		if (!rsnxe)
+			goto end;
+
+		qdf_mem_copy(rsnxe, rsnxe_ptr, rsnxe_len);
+	}
+
 	/*
 	 * Do unpack to populate the add_ie buffer to frm structure
 	 * before packing the frm structure. In this way, the IE ordering
@@ -420,7 +434,7 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 		pe_warn("Warnings in size calculation (0x%08x)", status);
 	}
 
-	bytes = payload + sizeof(tSirMacMgmtHdr);
+	bytes = payload + sizeof(tSirMacMgmtHdr) + rsnxe_len;
 
 	pe_debug("FT IE Reassoc Req %d",
 		 mlme_priv->connect_info.ft_info.reassoc_ie_len);
@@ -444,9 +458,11 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 	pe_debug("BSSID: "QDF_MAC_ADDR_FMT,
 		 QDF_MAC_ADDR_REF(pe_session->limReAssocbssId));
 	/* Next, we fill out the buffer descriptor: */
-	lim_populate_mac_header(mac_ctx, frame, SIR_MAC_MGMT_FRAME,
-		SIR_MAC_MGMT_REASSOC_REQ, pe_session->limReAssocbssId,
-		pe_session->self_mac_addr);
+	lim_populate_mac_header(mac_ctx, frame, WLAN_FC0_TYPE_MGMT,
+				SIR_MAC_MGMT_REASSOC_REQ,
+				pe_session->limReAssocbssId,
+				pe_session->self_mac_addr);
+
 	mac_hdr = (tpSirMacMgmtHdr) frame;
 	/* That done, pack the ReAssoc Request: */
 	status = dot11f_pack_re_assoc_request(mac_ctx, frm, frame +
@@ -460,6 +476,11 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 		pe_warn("Warnings in pack (0x%08x)", status);
 	}
 
+	if (rsnxe && rsnxe_len) {
+		qdf_mem_copy(frame + sizeof(tSirMacMgmtHdr) + payload,
+			     rsnxe, rsnxe_len);
+		payload += rsnxe_len;
+	}
 	pe_debug("*** Sending Re-Assoc Request length: %d %d to",
 		       bytes, payload);
 
@@ -523,6 +544,8 @@ void lim_send_reassoc_req_with_ft_ies_mgmt_frame(struct mac_context *mac_ctx,
 	}
 
 end:
+	if (rsnxe)
+		qdf_mem_free(rsnxe);
 	qdf_mem_free(frm);
 err:
 	/* Free up buffer allocated for mlmAssocReq */
@@ -791,8 +814,9 @@ void lim_send_reassoc_req_mgmt_frame(struct mac_context *mac,
 
 	if (lim_is_session_he_capable(pe_session)) {
 		pe_debug("Populate HE IEs");
-		populate_dot11f_he_caps(mac, pe_session,
-					&frm->he_cap);
+		populate_dot11f_he_caps(mac, pe_session, pe_session->opmode,
+					pe_session->curr_op_freq,
+					pe_session->ch_width, &frm->he_cap);
 		populate_dot11f_he_6ghz_cap(mac, pe_session,
 					    &frm->he_6ghz_band_cap);
 	}
@@ -881,9 +905,11 @@ void lim_send_reassoc_req_mgmt_frame(struct mac_context *mac,
 	qdf_mem_zero(pFrame, nBytes);
 
 	/* Next, we fill out the buffer descriptor: */
-	lim_populate_mac_header(mac, pFrame, SIR_MAC_MGMT_FRAME,
-		SIR_MAC_MGMT_REASSOC_REQ, pe_session->limReAssocbssId,
-		pe_session->self_mac_addr);
+	lim_populate_mac_header(mac, pFrame, WLAN_FC0_TYPE_MGMT,
+				SIR_MAC_MGMT_REASSOC_REQ,
+				pe_session->limReAssocbssId,
+				pe_session->self_mac_addr);
+
 	pMacHdr = (tpSirMacMgmtHdr) pFrame;
 
 	/* That done, pack the Probe Request: */

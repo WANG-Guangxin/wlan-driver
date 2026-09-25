@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -68,8 +68,12 @@
 
 #define tdls_notice(params...) \
 	QDF_TRACE_INFO(QDF_MODULE_ID_TDLS, params)
+#define tdls_notice_rl(params...) \
+	QDF_TRACE_INFO_RL(QDF_MODULE_ID_TDLS, params)
 #define tdls_warn(params...) \
 	QDF_TRACE_WARN(QDF_MODULE_ID_TDLS, params)
+#define tdls_warn_rl(params...) \
+	QDF_TRACE_WARN_RL(QDF_MODULE_ID_TDLS, params)
 #define tdls_err(params...) \
 	QDF_TRACE_ERROR(QDF_MODULE_ID_TDLS, params)
 #define tdls_alert(params...) \
@@ -93,6 +97,14 @@
 #define SET_BIT(value, mask) ((value) |= (1 << (mask)))
 #define CLEAR_BIT(value, mask) ((value) &= ~(1 << (mask)))
 #define CHECK_BIT(value, mask) ((value) & (1 << (mask)))
+
+#define TDLS_IS_ENABLE_FULL(tdls_support_enable) \
+	CHECK_BIT(tdls_support_enable, TDLS_ENABLE_BIT_FULL)
+#define TDLS_IS_ENABLE_UPTO_11AX(tdls_support_enable) \
+	CHECK_BIT(tdls_support_enable, TDLS_ENABLE_BIT_11AX)
+#define TDLS_IS_ENABLE_UPTO_11BE(tdls_support_enable) \
+	CHECK_BIT(tdls_support_enable, TDLS_ENABLE_BIT_11BE)
+
 /**
  * struct tdls_conn_info - TDLS connection record
  * @session_id: session id
@@ -146,7 +158,8 @@ struct tdls_set_state_info {
  * @delete_all_tdls_peers: Callback to lim to delete TDLS peers
  */
 struct tdls_callbacks {
-	QDF_STATUS (*delete_all_tdls_peers) (struct wlan_objmgr_vdev *vdev);
+	QDF_STATUS (*delete_all_tdls_peers) (struct wlan_objmgr_vdev *vdev,
+					     enum wlan_tdls_peer_delete_reason reason);
 };
 
 /**
@@ -186,6 +199,7 @@ struct tdls_callbacks {
  * @tdls_add_sta_req: store eWNI_SME_TDLS_ADD_STA_REQ value
  * @tdls_del_sta_req: store eWNI_SME_TDLS_DEL_STA_REQ value
  * @tdls_update_peer_state: store WMA_UPDATE_TDLS_PEER_STATE value
+ * @tdls_update_offchan_mode: store WMA_UPDATE_TDLS_OFF_CHAN value
  * @tdls_del_all_peers:store eWNI_SME_DEL_ALL_TDLS_PEERS
  * @tdls_update_dp_vdev_flags: store CDP_UPDATE_TDLS_FLAGS
  * @tdls_idle_peer_data: provide information about idle peer
@@ -243,6 +257,7 @@ struct tdls_soc_priv_obj {
 	uint16_t tdls_add_sta_req;
 	uint16_t tdls_del_sta_req;
 	uint16_t tdls_update_peer_state;
+	uint16_t tdls_update_offchan_mode;
 	uint16_t tdls_del_all_peers;
 	uint32_t tdls_update_dp_vdev_flags;
 	qdf_spinlock_t tdls_ct_spinlock;
@@ -928,6 +943,15 @@ QDF_STATUS tdls_handle_start_bss(struct wlan_objmgr_psoc *psoc);
  * Return: True or False
  */
 bool tdls_is_concurrency_allowed(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * tdls_check_if_offchannel_allowed() - Check if tdls off-channel is allowed
+ * @vdev: vdev object
+ *
+ * Function determines the whether TDLS off-channel is allowed
+ * Return: true or false
+ */
+bool tdls_check_if_offchannel_allowed(struct wlan_objmgr_vdev *vdev);
 #else
 static inline
 QDF_STATUS tdls_handle_start_bss(struct wlan_objmgr_psoc *psoc)
@@ -941,5 +965,10 @@ tdls_is_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 	return false;
 }
 
+static inline bool
+tdls_check_if_offchannel_allowed(struct wlan_objmgr_vdev *vdev)
+{
+	return false;
+}
 #endif /* WLAN_FEATURE_TDLS_CONCURRENCIES */
 #endif

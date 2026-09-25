@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -1042,6 +1042,36 @@ QDF_STATUS mlo_mgr_is_mld_has_active_link(bool *is_active)
 }
 #endif
 
+/**
+ * mlo_t2lm_reset_established_and_upcoming_mapping() - API to initialize the
+ * established and upcoming mapping to default values.
+ * @ml_dev: Pointer to ML Dev context
+ *
+ * Return: None
+ */
+void mlo_t2lm_reset_established_and_upcoming_mapping(
+	struct wlan_mlo_dev_context *ml_dev);
+
+/**
+ * ucfg_mlo_get_active_vdev_id() - This API wrapper for
+ * "wlan_mlo_get_active_vdev_id"
+ *
+ * @vdev: VDEV object
+ *
+ * Return: VDEV ID
+ */
+uint8_t ucfg_mlo_get_active_vdev_id(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * ucfg_mlo_is_mlo_vdev_active() - This API wrapper for
+ * "mlo_mgr_is_mlo_vdev_active"
+ *
+ * @vdev: VDEV object
+ *
+ * Return: true for active vdev
+ */
+
+bool ucfg_mlo_is_mlo_vdev_active(struct wlan_objmgr_vdev *vdev);
 #else
 static inline QDF_STATUS wlan_mlo_mgr_init(void)
 {
@@ -1100,5 +1130,22 @@ QDF_STATUS wlan_mlo_mgr_mld_vdev_detach(struct wlan_objmgr_vdev *vdev)
 	return QDF_STATUS_SUCCESS;
 }
 
+static inline
+uint8_t ucfg_mlo_get_active_vdev_id(struct wlan_objmgr_vdev *vdev)
+{
+	return WLAN_UMAC_VDEV_ID_MAX;
+}
+
+static inline bool
+ucfg_mlo_is_mlo_vdev_active(struct wlan_objmgr_vdev *vdev)
+{
+	return false;
+}
+
+static inline struct wlan_mlo_dev_context *
+wlan_mlo_get_mld_ctx_by_mldaddr(struct qdf_mac_addr *mldaddr)
+{
+	return NULL;
+}
 #endif
 #endif

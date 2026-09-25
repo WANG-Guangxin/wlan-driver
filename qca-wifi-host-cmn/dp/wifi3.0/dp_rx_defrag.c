@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -43,6 +43,8 @@ const struct dp_rx_defrag_cipher dp_f_ccmp = {
 	0,
 };
 
+qdf_export_symbol(dp_f_ccmp);
+
 const struct dp_rx_defrag_cipher dp_f_tkip = {
 	"TKIP",
 	IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN + IEEE80211_WEP_EXTIVLEN,
@@ -50,12 +52,16 @@ const struct dp_rx_defrag_cipher dp_f_tkip = {
 	IEEE80211_WEP_MICLEN,
 };
 
+qdf_export_symbol(dp_f_tkip);
+
 const struct dp_rx_defrag_cipher dp_f_wep = {
 	"WEP",
 	IEEE80211_WEP_IVLEN + IEEE80211_WEP_KIDLEN,
 	IEEE80211_WEP_CRCLEN,
 	0,
 };
+
+qdf_export_symbol(dp_f_wep);
 
 /*
  * The header and mic length are same for both
@@ -67,6 +73,8 @@ const struct dp_rx_defrag_cipher dp_f_gcmp = {
 	WLAN_IEEE80211_GCMP_MICLEN,
 	WLAN_IEEE80211_GCMP_MICLEN,
 };
+
+qdf_export_symbol(dp_f_gcmp);
 
 /**
  * dp_rx_defrag_frames_free() - Free fragment chain
@@ -767,7 +775,7 @@ static QDF_STATUS dp_rx_defrag_tkip_demic(struct dp_soc *soc,
 	QDF_STATUS status;
 	uint32_t pktlen = 0, prev_data_len;
 	uint8_t mic[IEEE80211_WEP_MICLEN];
-	uint8_t mic0[IEEE80211_WEP_MICLEN];
+	uint8_t mic0[IEEE80211_WEP_MICLEN] = {0};
 	qdf_nbuf_t prev = NULL, prev0, next;
 	uint8_t len0 = 0;
 
@@ -797,15 +805,21 @@ static QDF_STATUS dp_rx_defrag_tkip_demic(struct dp_soc *soc,
 			return QDF_STATUS_E_DEFRAG_ERROR;
 		}
 		len0 = dp_f_tkip.ic_miclen - (uint8_t)prev_data_len;
-		qdf_nbuf_copy_bits(prev0, qdf_nbuf_len(prev0) - len0, len0,
-				   (caddr_t)mic0);
+		if (qdf_nbuf_copy_bits(prev0, qdf_nbuf_len(prev0) - len0, len0,
+				       (caddr_t)mic0) < 0) {
+			dp_err_rl("MIC copy (prev0) failed !");
+			return QDF_STATUS_E_DEFRAG_ERROR;
+		}
 		qdf_nbuf_trim_tail(prev0, len0);
 	}
 
-	qdf_nbuf_copy_bits(prev, (qdf_nbuf_len(prev) -
-			   (dp_f_tkip.ic_miclen - len0)),
-			   (dp_f_tkip.ic_miclen - len0),
-			   (caddr_t)(&mic0[len0]));
+	if (qdf_nbuf_copy_bits(prev, (qdf_nbuf_len(prev) -
+				(dp_f_tkip.ic_miclen - len0)),
+				(dp_f_tkip.ic_miclen - len0),
+				(caddr_t)(&mic0[len0])) < 0) {
+		dp_err_rl("MIC copy (prev) failed !");
+		return QDF_STATUS_E_DEFRAG_ERROR;
+	}
 	qdf_nbuf_trim_tail(prev, (dp_f_tkip.ic_miclen - len0));
 	pktlen -= dp_f_tkip.ic_miclen;
 
@@ -933,6 +947,15 @@ dp_rx_construct_fraglist(struct dp_txrx_peer *txrx_peer, int tid,
 		if (hal_rx_msdu_is_wlan_mcast(soc->hal_soc, msdu)) {
 			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
 				  "Dropping multicast/broadcast fragments");
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		/* Validate buffer has enough data before pulling header */
+		if (soc->rx_pkt_tlv_size + hdrsize > qdf_nbuf_len(msdu)) {
+			QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+				  "%s: hdrsize %u exceeds frag len %u",
+				  __func__, hdrsize,
+				  (uint32_t)qdf_nbuf_len(msdu));
 			return QDF_STATUS_E_FAILURE;
 		}
 
@@ -1297,6 +1320,8 @@ static QDF_STATUS dp_rx_defrag_reo_reinject(struct dp_txrx_peer *txrx_peer,
 	cookie = temp_buf_info.sw_cookie;
 	rx_desc_pool = &soc->rx_desc_buf[pdev->lmac_id];
 
+	dp_rx_buf_smmu_mapping_lock(soc);
+
 	/* map the nbuf before reinject it into HW */
 	ret = qdf_nbuf_map_nbytes_single(soc->osdev, head,
 					 QDF_DMA_FROM_DEVICE,
@@ -1304,16 +1329,15 @@ static QDF_STATUS dp_rx_defrag_reo_reinject(struct dp_txrx_peer *txrx_peer,
 	if (qdf_unlikely(ret == QDF_STATUS_E_FAILURE)) {
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_ERROR,
 				"%s: nbuf map failed !", __func__);
+		dp_rx_buf_smmu_mapping_unlock(soc);
 		return QDF_STATUS_E_FAILURE;
 	}
 
 	dp_ipa_handle_rx_buf_smmu_mapping(soc, head,
 					  rx_desc_pool->buf_size, true,
-					  __func__, __LINE__);
-	dp_audio_smmu_map(soc->osdev,
-			  qdf_mem_paddr_from_dmaaddr(soc->osdev,
-						     QDF_NBUF_CB_PADDR(head)),
-			  QDF_NBUF_CB_PADDR(head), rx_desc_pool->buf_size);
+					  __func__, __LINE__,
+					  DP_RX_IPA_SMMU_MAP_REO_REINJECT);
+	dp_audio_smmu_map(soc, head, rx_desc_pool->buf_size);
 
 	/*
 	 * As part of rx frag handler buffer was unmapped and rx desc
@@ -1321,6 +1345,8 @@ static QDF_STATUS dp_rx_defrag_reo_reinject(struct dp_txrx_peer *txrx_peer,
 	 * it back to 0.
 	 */
 	rx_desc->unmapped = 0;
+
+	dp_rx_buf_smmu_mapping_unlock(soc);
 
 	paddr = qdf_nbuf_get_frag_paddr(head, 0);
 
@@ -1560,6 +1586,16 @@ QDF_STATUS dp_rx_defrag(struct dp_txrx_peer *txrx_peer, unsigned int tid,
 
 			return QDF_STATUS_E_DEFRAG_ERROR;
 		}
+	}
+
+	/* Validate hdr_space doesn't exceed first fragment's data */
+	if (soc->rx_pkt_tlv_size + hdr_space + sizeof(struct llc_snap_hdr_t) >
+	    qdf_nbuf_len(frag_list_head)) {
+		QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_ERROR,
+			  "%s: hdr_space %u exceeds frag data len %u",
+			  __func__, hdr_space,
+			  (uint32_t)qdf_nbuf_len(frag_list_head));
+		return QDF_STATUS_E_DEFRAG_ERROR;
 	}
 
 	/* Convert the header to 802.3 header */
@@ -2173,14 +2209,17 @@ uint32_t dp_rx_frag_handle(struct dp_soc *soc, hal_ring_desc_t ring_desc,
 	if (rx_desc->unmapped)
 		return rx_bufs_used;
 
-	dp_ipa_rx_buf_smmu_mapping_lock(soc);
+	dp_rx_buf_smmu_mapping_lock(soc);
 	dp_rx_nbuf_unmap_pool(soc, rx_desc_pool, rx_desc->nbuf);
 	rx_desc->unmapped = 1;
-	dp_ipa_rx_buf_smmu_mapping_unlock(soc);
+	dp_rx_buf_smmu_mapping_unlock(soc);
 
 	rx_desc->rx_buf_start = qdf_nbuf_data(msdu);
 
 	tid = hal_rx_mpdu_start_tid_get(soc->hal_soc, rx_desc->rx_buf_start);
+
+	mpdu_desc_info->mpdu_seq =
+		hal_rx_get_rx_sequence(soc->hal_soc, rx_desc->rx_buf_start);
 
 	/* Process fragment-by-fragment */
 	status = dp_rx_defrag_store_fragment(soc, ring_desc,

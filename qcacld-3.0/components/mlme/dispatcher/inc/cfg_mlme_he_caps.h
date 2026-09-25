@@ -132,7 +132,7 @@
 
 #define CFG_HE_FLEX_TWT_SCHED CFG_BOOL( \
 				"he_flex_twt_sched", \
-				0, \
+				1, \
 				"HE Flex Twt Sched")
 
 #define CFG_HE_RX_CTRL CFG_BOOL( \
@@ -528,7 +528,7 @@
 				"he_rx_mcs_map_lt_80", \
 				0, \
 				0xFFFF, \
-				0xFFFA, \
+				0xFFAA, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He Rx Mcs Map Lt 80")
 
@@ -538,7 +538,7 @@
  * he_tx_mcs_map_lt_80 - configure Tx HE-MCS Map for ≤ 80 MHz
  * @Min: 0
  * @Max: 0xFFFF
- * @Default: 0xFFFA
+ * @Default: 0xFFAA
  *
  * This ini is used to configure Tx HE-MCS Map for ≤ 80 MHz
  * 0:1 Max HE-MCS For 1 SS
@@ -567,7 +567,7 @@
 				"he_tx_mcs_map_lt_80", \
 				0, \
 				0xFFFF, \
-				0xFFFA, \
+				0xFFAA, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He Tx Mcs Map Lt 80")
 /* 11AX related INI configuration */
@@ -576,7 +576,7 @@
  * he_rx_mcs_map_160 - configure Rx HE-MCS Map for 160 MHz
  * @Min: 0
  * @Max: 0xFFFF
- * @Default: 0xFFFA
+ * @Default: 0xFFAA
  *
  * This ini is used to configure Rx HE-MCS Map for 160 MHz
  * 0:1 Max HE-MCS For 1 SS
@@ -605,7 +605,7 @@
 				"he_rx_mcs_map_160", \
 				0, \
 				0xFFFF, \
-				0xFFFA, \
+				0xFFAA, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He Rx Mcs Map 160")
 
@@ -614,7 +614,7 @@
  * sap_he_rx_mcs_map_160 - configure SAP Rx HE-MCS Map for 160 MHz
  * @Min: 0
  * @Max: 0xFFFF
- * @Default: 0xFFFA
+ * @Default: 0xFFAA
  *
  * This ini is used to configure SAP Rx HE-MCS Map for 160 MHz
  * 0:1 Max HE-MCS For 1 SS
@@ -643,7 +643,7 @@
 				"sap_he_rx_mcs_map_160", \
 				0, \
 				0xFFFF, \
-				0xFFFA, \
+				0xFFAA, \
 				CFG_VALUE_OR_DEFAULT, \
 				"SAP He Rx Mcs Map 160")
 
@@ -653,7 +653,7 @@
  * he_tx_mcs_map_160 - configure Tx HE-MCS Map for 160 MHz
  * @Min: 0
  * @Max: 0xFFFF
- * @Default: 0xFFFA
+ * @Default: 0xFFAA
  *
  * This ini is used to configure Tx HE-MCS Map for 160 MHz
  * 0:1 Max HE-MCS For 1 SS
@@ -682,7 +682,7 @@
 				"he_tx_mcs_map_160", \
 				0, \
 				0xFFFF, \
-				0xFFFA, \
+				0xFFAA, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He Tx Mcs Map 160")
 
@@ -690,7 +690,7 @@
 				"he_rx_mcs_map_80_80", \
 				0, \
 				0xFFFF, \
-				0xFFF0, \
+				0xFF00, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He Rx Mcs Map 80 80")
 
@@ -698,7 +698,7 @@
 				"he_tx_mcs_map_80_80", \
 				0, \
 				0xFFFF, \
-				0xFFF0, \
+				0xFF00, \
 				CFG_VALUE_OR_DEFAULT, \
 				"He tx Mcs Map 80 80")
 

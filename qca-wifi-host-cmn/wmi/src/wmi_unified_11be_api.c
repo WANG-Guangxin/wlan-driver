@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -116,6 +116,41 @@ wmi_extract_mlo_link_state_switch_evt(struct wmi_unified *wmi,
 
 	return QDF_STATUS_SUCCESS;
 }
+
+QDF_STATUS
+wmi_send_mlo_link_recfg_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_link_recfg_complete_params *params)
+{
+	if (wmi->ops->send_mlo_link_recfg_complete_cmd)
+		return wmi->ops->send_mlo_link_recfg_complete_cmd(wmi, params);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+QDF_STATUS
+wmi_send_mlo_ttlm_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_ttlm_complete_params *params)
+{
+	if (wmi->ops->send_mlo_ttlm_complete_cmd)
+		return wmi->ops->send_mlo_ttlm_complete_cmd(wmi, params);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+QDF_STATUS
+wmi_extract_mlo_link_recfg_indication_evt(
+				wmi_unified_t wmi,
+				void *buf, uint8_t len,
+				struct wlan_mlo_link_recfg_ind_param *info)
+{
+	if (wmi->ops->extract_mlo_link_recfg_indication_event)
+		return wmi->ops->extract_mlo_link_recfg_indication_event(
+							wmi, buf, len, info);
+
+	return QDF_STATUS_SUCCESS;
+}
 #endif /* WLAN_FEATURE_11BE_MLO_ADV_FEATURE */
 
 QDF_STATUS wmi_send_mlo_link_state_request_cmd(
@@ -186,6 +221,16 @@ QDF_STATUS wmi_extract_mlo_link_disable_request_evt(
 
 	return QDF_STATUS_E_FAILURE;
 }
+
+QDF_STATUS wmi_send_link_reconfig_req_cmd(
+		struct wmi_unified *wmi,
+		struct wmi_link_reconfig_req_params *params)
+{
+	if (wmi->ops->send_link_reconfig_req_command)
+		return wmi->ops->send_link_reconfig_req_command(wmi, params);
+
+	return QDF_STATUS_E_FAILURE;
+}
 #endif /* WLAN_FEATURE_11BE */
 
 QDF_STATUS
@@ -225,6 +270,18 @@ QDF_STATUS wmi_extract_mlo_link_removal_evt_fixed_param(
 {
 	if (wmi->ops->extract_mlo_link_removal_evt_fixed_param)
 		return wmi->ops->extract_mlo_link_removal_evt_fixed_param(
+							wmi, buf, params);
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+QDF_STATUS wmi_extract_mlo_3_link_tlt_selection_fixed_param(
+		struct wmi_unified *wmi,
+		void *buf,
+		struct mlo_tlt_selection_evt_params *params)
+{
+	if (wmi->ops->extract_mlo_3_link_tlt_selection_fixed_param)
+		return wmi->ops->extract_mlo_3_link_tlt_selection_fixed_param(
 							wmi, buf, params);
 
 	return QDF_STATUS_E_FAILURE;

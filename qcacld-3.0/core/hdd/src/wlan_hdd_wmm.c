@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -27,7 +27,7 @@
  * QoS (QoS here refers to a TSPEC). The setup QoS comes in two flavors: an
  * explicit application invoked and an internal HDD invoked.  The implicit QoS
  * is for applications that do NOT call the custom QCT WLAN OIDs for QoS but
- * which DO mark their traffic for priortization. It also has logic to start,
+ * which DO mark their traffic for prioritization. It also has logic to start,
  * update and stop the U-APSD trigger frame generation. It also has logic to
  * read WMM related config parameters from the registry.
  *
@@ -140,20 +140,19 @@ config_tspec_policy[QCA_WLAN_VENDOR_ATTR_CONFIG_TSPEC_MAX + 1] = {
 #ifdef QCA_LL_TX_FLOW_CONTROL_V2
 void wlan_hdd_process_peer_unauthorised_pause(struct hdd_adapter *adapter)
 {
+	enum hdd_wmm_linuxac ac;
+	uint8_t num_queues_for_ac;
+	uint8_t ac_txq_idx;
 	uint8_t i;
 
-	netif_wake_subqueue(adapter->dev,
-			    HDD_LINUX_AC_HI_PRIO * TX_QUEUES_PER_AC);
+	netif_wake_subqueue(adapter->dev, TX_HI_PRIO_QUEUE_IDX);
 
-	for (i = 0; i < TX_QUEUES_PER_AC; i++) {
-		netif_stop_subqueue(adapter->dev,
-				    TX_GET_QUEUE_IDX(HDD_LINUX_AC_VO, i));
-		netif_stop_subqueue(adapter->dev,
-				    TX_GET_QUEUE_IDX(HDD_LINUX_AC_VI, i));
-		netif_stop_subqueue(adapter->dev,
-				    TX_GET_QUEUE_IDX(HDD_LINUX_AC_BE, i));
-		netif_stop_subqueue(adapter->dev,
-				    TX_GET_QUEUE_IDX(HDD_LINUX_AC_BK, i));
+	for (ac = HDD_LINUX_AC_VO; ac < HDD_LINUX_AC_MAX; ac++) {
+		wlan_hdd_get_txq_info_for_ac(adapter, ac,
+					     &ac_txq_idx, &num_queues_for_ac);
+
+		for (i = 0; i < num_queues_for_ac; i++)
+			netif_stop_subqueue(adapter->dev, ac_txq_idx++);
 	}
 }
 #else
@@ -2051,11 +2050,24 @@ void hdd_wmm_classify_pkt(struct hdd_adapter *adapter,
 			  enum sme_qos_wmmuptype *user_pri,
 			  bool *is_critical)
 {
+
 	hdd_wmm_classify_critical_pkt(skb, user_pri, is_critical);
 
 	if (false == *is_critical) {
-		hdd_wmm_get_user_priority_from_ip_tos(adapter, skb, user_pri);
-		hdd_check_and_upgrade_udp_qos(adapter, skb, user_pri);
+		ucfg_dp_fim_update_metadata((qdf_nbuf_t)skb,
+					    adapter->deflink->vdev);
+
+		if ((skb->mark & WLAN_DP_STC_CLASSIFIED_TAG) ==
+		    WLAN_DP_STC_CLASSIFIED_TAG) {
+			*user_pri = skb->mark & WLAN_DP_STC_UL_TID_MASK;
+			return;
+		}
+
+		if (!ucfg_dp_fpm_check_tid_override_tagged((qdf_nbuf_t)skb)) {
+			hdd_wmm_get_user_priority_from_ip_tos(adapter, skb,
+							      user_pri);
+			hdd_check_and_upgrade_udp_qos(adapter, skb, user_pri);
+		}
 	}
 }
 
@@ -2095,9 +2107,6 @@ uint16_t hdd_get_tx_queue_for_ac(struct hdd_adapter *adapter,
 	struct hdd_tx_rx_stats *stats =
 				&adapter->deflink->hdd_stats.tx_rx_stats;
 
-	if (qdf_unlikely(ac == HDD_LINUX_AC_HI_PRIO))
-		return TX_GET_QUEUE_IDX(HDD_LINUX_AC_HI_PRIO, 0);
-
 	if (!sk) {
 		/*
 		 * Neither valid socket nor skb_hash so default to the
@@ -2105,27 +2114,26 @@ uint16_t hdd_get_tx_queue_for_ac(struct hdd_adapter *adapter,
 		 */
 		if (qdf_unlikely(!skb->sw_hash && !skb->l4_hash)) {
 			++stats->per_cpu[cpu].inv_sk_and_skb_hash;
-
-			return TX_GET_QUEUE_IDX(ac, 0);
+			return TX_GET_NON_HI_PRIO_QUEUE_IDX(ac, 0);
 		}
+
 		++stats->per_cpu[cpu].qselect_existing_skb_hash;
 
-		return TX_GET_QUEUE_IDX(ac,
-					reciprocal_scale(skb->hash,
-							 TX_QUEUES_PER_AC));
+		return TX_GET_NON_HI_PRIO_QUEUE_IDX(ac,
+					    reciprocal_scale(skb->hash,
+							     TX_QUEUES_PER_AC));
 	}
 
 	if (sk->sk_tx_queue_mapping != NO_QUEUE_MAPPING &&
-	    sk->sk_tx_queue_mapping < NUM_TX_QUEUES) {
+	    sk->sk_tx_queue_mapping < adapter->dev->real_num_tx_queues) {
 		++stats->per_cpu[cpu].qselect_sk_tx_map;
 		return sk->sk_tx_queue_mapping;
 	}
 
 	++stats->per_cpu[cpu].qselect_skb_hash_calc;
-	new_index = TX_GET_QUEUE_IDX(ac,
-				     reciprocal_scale(skb_get_hash(skb),
-						      TX_QUEUES_PER_AC));
-
+	new_index = TX_GET_NON_HI_PRIO_QUEUE_IDX(ac,
+					 reciprocal_scale(skb_get_hash(skb),
+							  TX_QUEUES_PER_AC));
 	if (sk_fullsock(sk) && rcu_access_pointer(sk->sk_dst_cache))
 		sk_tx_queue_set(sk, new_index);
 
@@ -2134,8 +2142,91 @@ uint16_t hdd_get_tx_queue_for_ac(struct hdd_adapter *adapter,
 #else
 static inline
 uint16_t hdd_get_tx_queue_for_ac(struct hdd_adapter *adapter,
-				 struct sk_buff *skb, uint16_t ac) {
-	return ac;
+				 struct sk_buff *skb, uint16_t ac)
+{
+	return ac - !(NUM_HI_PRIO_TX_QUEUES);
+}
+#endif
+
+#ifdef NDP_TX_BW_FLOW_CTRL
+/**
+ * hdd_ndp_get_tx_queue_for_ac() - Get the netdev tx queue index
+ *  based on access category for NDP interface
+ * @adapter: adapter upon which the packet is being transmitted
+ * @skb: pointer to network buffer
+ * @ac: access category
+ *
+ * Return: tx queue index
+ */
+static
+uint16_t hdd_ndp_get_tx_queue_for_ac(struct hdd_adapter *adapter,
+				     struct sk_buff *skb, uint16_t ac)
+{
+	struct sock *sk = skb->sk;
+	int tx_queue_index;
+	uint16_t flowq_idx;
+	int cpu = qdf_get_smp_processor_id();
+	struct hdd_tx_rx_stats *stats =
+			&adapter->deflink->hdd_stats.tx_rx_stats;
+	int sk_queue_index;
+	int new_sk_queue_index;
+	uint8_t peer_bw;
+	uint8_t peer_idx = NDP_MAX_NUM_PEERS;
+
+	if (qdf_unlikely(!sk || !sk_fullsock(sk))) {
+		/*
+		 * We do not expect any forwarding traffic on NDP interface
+		 * so queue any skb without a socket to the default queues.
+		 */
+		++stats->per_cpu[cpu].inv_sk_and_skb_hash;
+		if (ac == HDD_LINUX_AC_BE)
+			return TX_BE_BASE_QUEUE_IDX;
+		else
+			return TX_GET_NON_HI_PRIO_QUEUE_IDX(ac, 0);
+	}
+
+	peer_bw = hdd_ndp_get_peer_bw(adapter, skb->data, &peer_idx);
+
+	sk_queue_index = sk_tx_queue_get(sk);
+	if (sk_queue_index == -1) {
+		++stats->per_cpu[cpu].qselect_skb_hash_calc;
+		flowq_idx = reciprocal_scale(skb_get_hash(skb), TX_QUEUES_PER_AC);
+
+		if (ac == HDD_LINUX_AC_BE) {
+			if (peer_idx >= NDP_MAX_NUM_PEERS)
+				tx_queue_index = TX_BE_BASE_QUEUE_IDX;
+			else
+				tx_queue_index =
+					NDP_TX_GET_BE_QUEUE_IDX(ac, flowq_idx,
+								peer_idx);
+		} else {
+			tx_queue_index =
+				TX_GET_NON_HI_PRIO_QUEUE_IDX(ac, flowq_idx);
+		}
+	} else {
+		tx_queue_index = sk_queue_index & NDP_TX_QUEUE_INDEX_MASK;
+	}
+
+	/*
+	 * Save the peer bandwidth in the higher bits of socket tx queue
+	 * to be reused for bandwidth based flow control in DP.
+	 */
+	new_sk_queue_index = tx_queue_index |
+			(peer_bw << NDP_TX_QUEUE_INDEX_PEER_BW_SHIFT);
+
+	if (new_sk_queue_index != sk_queue_index &&
+	    rcu_access_pointer(sk->sk_dst_cache))
+		sk_tx_queue_set(sk, new_sk_queue_index);
+
+	return tx_queue_index;
+}
+
+#else
+static inline
+uint16_t hdd_ndp_get_tx_queue_for_ac(struct hdd_adapter *adapter,
+				     struct sk_buff *skb, uint16_t ac)
+{
+	return hdd_get_tx_queue_for_ac(adapter, skb, ac);
 }
 #endif
 
@@ -2173,10 +2264,34 @@ uint16_t hdd_get_queue_index(uint16_t up, bool is_critical)
 static
 uint16_t hdd_get_queue_index(uint16_t up, bool is_critical)
 {
+	if (qdf_unlikely(is_critical))
+		return HDD_LINUX_AC_VO;
 	return __hdd_get_queue_index(up);
 }
 #endif
 
+#if defined(DP_TX_PACKET_INSPECT_FOR_ILP) || defined(WLAN_DP_FEATURE_STC)
+/**
+ * hdd_update_pkt_pure_ack_info() - update TX packets CB with pure TCP ack info
+ * @skb: network buffer
+ *
+ * Update TX packets CB with TCP pure ack info, this info is used later.
+ *
+ * Return: None
+ */
+static inline
+void hdd_update_pkt_pure_ack_info(struct sk_buff *skb)
+{
+	if (qdf_unlikely(qdf_nbuf_is_ipv4_v6_pure_tcp_ack(skb)))
+		QDF_NBUF_CB_GET_PACKET_TYPE(skb) =
+					QDF_NBUF_CB_PACKET_TYPE_TCP_ACK;
+}
+#else
+static inline
+void hdd_update_pkt_pure_ack_info(struct sk_buff *skb)
+{
+}
+#endif
 #ifdef DP_TX_PACKET_INSPECT_FOR_ILP
 /**
  * hdd_update_pkt_priority_with_inspection() - update TX packets priority
@@ -2194,9 +2309,10 @@ void hdd_update_pkt_priority_with_inspection(struct sk_buff *skb,
 {
 	skb->priority = up;
 
-	if (qdf_unlikely(qdf_nbuf_is_ipv4_v6_pure_tcp_ack(skb)))
-		qdf_nbuf_set_priority_pkt_type(
-				skb, QDF_NBUF_PRIORITY_PKT_TCP_ACK);
+	if (qdf_unlikely(QDF_NBUF_CB_GET_PACKET_TYPE(skb) ==
+					QDF_NBUF_CB_PACKET_TYPE_TCP_ACK))
+		qdf_nbuf_set_priority_pkt_type(skb,
+					       QDF_NBUF_PRIORITY_PKT_TCP_ACK);
 }
 #else
 static inline
@@ -2219,8 +2335,11 @@ static uint16_t __hdd_wmm_select_queue(struct net_device *dev,
 	if (qdf_unlikely(!hdd_ctx || cds_is_driver_transitioning())) {
 		hdd_debug_rl("driver is transitioning! Using default(BE) queue.");
 		skb->priority = SME_QOS_WMM_UP_BE;
-		return TX_GET_QUEUE_IDX(HDD_LINUX_AC_BE, 0);
+
+		return TX_BE_BASE_QUEUE_IDX;
 	}
+
+	hdd_update_pkt_pure_ack_info(skb);
 
 	/* Get the user priority from IP header */
 	hdd_wmm_classify_pkt(adapter, skb, &up, &is_critical);
@@ -2229,7 +2348,14 @@ static uint16_t __hdd_wmm_select_queue(struct net_device *dev,
 
 	index = hdd_get_queue_index(up, is_critical);
 
-	return hdd_get_tx_queue_for_ac(adapter, skb, index);
+	if (qdf_unlikely(index == HDD_LINUX_AC_HI_PRIO))
+		return TX_HI_PRIO_QUEUE_IDX;
+
+	if (adapter->device_mode == QDF_NDI_MODE &&
+	    ucfg_dp_is_ndp_bw_flow_ctrl_enabled(hdd_ctx->psoc))
+		return hdd_ndp_get_tx_queue_for_ac(adapter, skb, index);
+	else
+		return hdd_get_tx_queue_for_ac(adapter, skb, index);
 }
 
 uint16_t hdd_wmm_select_queue(struct net_device *dev,

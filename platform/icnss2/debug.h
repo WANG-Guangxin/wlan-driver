@@ -57,6 +57,18 @@ extern void *icnss_ipc_soc_wake_context;
 			     ##__VA_ARGS__);                            \
 	} while (0)
 
+#ifdef CONFIG_ICNSS_EMULATION
+#define icnss_pr_dbg(_fmt, ...) do {                                    \
+	pr_err(_fmt, ##__VA_ARGS__);                                  \
+	icnss_ipc_log_string(pr_fmt(_fmt), ##__VA_ARGS__);              \
+	} while (0)
+
+#define icnss_pr_vdbg(_fmt, ...) do {                                   \
+	pr_err(_fmt, ##__VA_ARGS__);                                  \
+	icnss_ipc_log_long_string(pr_fmt(_fmt), ##__VA_ARGS__);         \
+	} while (0)
+
+#else
 #define icnss_pr_dbg(_fmt, ...) do {                                    \
 	pr_debug(_fmt, ##__VA_ARGS__);                                  \
 	icnss_ipc_log_string(pr_fmt(_fmt), ##__VA_ARGS__);              \
@@ -66,6 +78,7 @@ extern void *icnss_ipc_soc_wake_context;
 	pr_debug(_fmt, ##__VA_ARGS__);                                  \
 	icnss_ipc_log_long_string(pr_fmt(_fmt), ##__VA_ARGS__);         \
 	} while (0)
+#endif
 
 #define icnss_pr_smp2p(_fmt, ...) do {                                  \
 	pr_debug(_fmt, ##__VA_ARGS__);                                  \
@@ -76,7 +89,6 @@ extern void *icnss_ipc_soc_wake_context;
 	pr_debug(_fmt, ##__VA_ARGS__);                                  \
 	icnss_ipc_soc_wake_string(pr_fmt(_fmt), ##__VA_ARGS__);         \
 	} while (0)
-
 #ifdef CONFIG_ICNSS2_DEBUG
 #define ICNSS_ASSERT(_condition) do {                                   \
 		if (!(_condition)) {                                    \
@@ -87,6 +99,13 @@ extern void *icnss_ipc_soc_wake_context;
 #else
 #define ICNSS_ASSERT(_condition) do { } while (0)
 #endif
+
+#define ICNSS_ASSERT_ALWAYS(_condition) do {                            \
+		if (!(_condition)) {                                    \
+			icnss_pr_err("ASSERT at line %d\n", __LINE__);  \
+			BUG();                                          \
+		}                                                       \
+	} while (0)
 
 #define icnss_fatal_err(_fmt, ...)                                      \
 	icnss_pr_err("fatal: "_fmt, ##__VA_ARGS__)

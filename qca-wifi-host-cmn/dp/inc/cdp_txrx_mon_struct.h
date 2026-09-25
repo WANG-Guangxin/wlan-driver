@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -388,6 +388,26 @@ enum cdp_mon_phyrx_abort_reason_code {
 };
 #endif
 
+#ifdef WLAN_FEATURE_LOCAL_PKT_CAPTURE
+/**
+ * struct cdp_mon_lpc_coc_stats
+ * @rx_header: RX_HEADER TLV processed
+ * @rx_mpdu_start: RX_MPDU_START TLV processed
+ * @rx_delivered: RX MPDUs delivered to stack
+ * @rx_dropped: RX MPDUs dropped
+ * @tx_delivered: TX MPDUs delivered
+ * @tx_dropped: TX MPDUs dropped
+ */
+struct cdp_mon_lpc_coc_stats {
+	uint32_t rx_header;
+	uint32_t rx_mpdu_start;
+	uint32_t rx_delivered;
+	uint32_t rx_dropped;
+	uint32_t tx_delivered;
+	uint32_t tx_dropped;
+};
+#endif
+
 #define MAX_PPDU_ID_HIST 128
 
 /**
@@ -407,6 +427,7 @@ enum cdp_mon_phyrx_abort_reason_code {
  * @dest_ppdu_done: destination ring PPDU count
  * @dest_mpdu_done: destination ring MPDU count
  * @dest_mpdu_drop:
+ * @dest_mpdu_deliver_fail: number of MPDUs failed to deliver
  * @dup_mon_linkdesc_cnt: duplicate link descriptor indications from HW
  * @dup_mon_buf_cnt: duplicate buffer indications from HW
  * @dup_mon_sw_desc: Duplicate sw desc from HW
@@ -420,9 +441,9 @@ enum cdp_mon_phyrx_abort_reason_code {
  * @mon_rx_bufs_replenished_dest: Rx buffers replenish count
  * @mon_rx_bufs_reaped_dest: Rx buffer reap count
  * @ppdu_id_mismatch: counter to track ppdu id mismatch in
- *  mointor status and monitor destination ring
+ *  monitor status and monitor destination ring
  * @ppdu_id_match: counter to track ppdu id match in
- *  mointor status and monitor destination ring
+ *  monitor status and monitor destination ring
  * @status_ppdu_drop: Number of ppdu dropped from monitor status ring
  * @dest_ppdu_drop: Number of ppdu dropped from monitor destination ring
  * @mon_link_desc_invalid: msdu link desc invalid count
@@ -455,6 +476,7 @@ enum cdp_mon_phyrx_abort_reason_code {
  * @desc_magic_mismatch: desc magic number mismatch count;
  * @null_pkt_addr: NULL packet address count;
  * @pending_desc_count: Pending desc_count during pdev deinit
+ * @nbuf_alloc_fail_cnt: nbuf alloc failure count
  */
 struct cdp_pdev_mon_stats {
 #ifndef REMOVE_MON_DBG_STATS
@@ -476,6 +498,7 @@ struct cdp_pdev_mon_stats {
 	uint32_t dest_ppdu_done;
 	uint32_t dest_mpdu_done;
 	uint32_t dest_mpdu_drop;
+	uint32_t dest_mpdu_deliver_fail;
 	uint32_t dup_mon_linkdesc_cnt;
 	uint32_t dup_mon_buf_cnt;
 	uint32_t dup_mon_sw_desc;
@@ -522,6 +545,7 @@ struct cdp_pdev_mon_stats {
 	uint32_t desc_magic_mismatch;
 	uint32_t null_pkt_addr;
 	uint32_t pending_desc_count;
+	uint32_t nbuf_alloc_fail_cnt;
 };
 
 #ifdef QCA_SUPPORT_LITE_MONITOR

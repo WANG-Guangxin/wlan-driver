@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2018, 2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022, 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -29,12 +29,14 @@
  * num_tx_chains_2g - Config Param to change number of tx
  * chains per vdev for 2.4ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of chains for eg:-
  * 0x01249249 - change all vdev's num tx chains for 2.4ghz connection to 1 each
  * 0x02492492 - change all vdev's num tx chains for 2.4ghz connection to 2 each
+ * 0x036DB6DB - Change all VDEVs Tx num chains for 2.4 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Tx num chains for 2.4 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -58,7 +60,7 @@
 #define CFG_NUM_TX_CHAINS_2G CFG_INI_UINT( \
 				"num_tx_chains_2g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"num tx chains 2g")
@@ -68,12 +70,14 @@
  * num_tx_chains_5g - Config Param to change number of tx
  * chains per vdev for 5 ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of chains for eg:-
  * 0x01249249- change all vdev's tx num chains for 5ghz connection to 1 each
  * 0x02492492 - change all vdev's tx num chains for 5ghz connection to 2 each
+ * 0x036DB6DB - Change all VDEVs Tx num chains for 5 GHz to 3 each
+ * 0x04924924 - Change ALL VDEV's Tx num chains for 5 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -97,7 +101,7 @@
 #define CFG_NUM_TX_CHAINS_5G CFG_INI_UINT( \
 				"num_tx_chains_5g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"num tx chains 5g")
@@ -107,12 +111,14 @@
  * num_rx_chains_2g - Config Param to change number of rx
  * chains per vdev for 2.4 ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of chains for eg:-
  * 0x01249249 - change all vdev's rx num chains for 2.4ghz connections to 1 each
  * 0x02492492 - change all vdev's rx num chains for 2.4ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Rx num chains for 2.4 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Rx num chains for 2.4 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -136,7 +142,7 @@
 #define CFG_NUM_RX_CHAINS_2G CFG_INI_UINT( \
 				"num_rx_chains_2g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"num rx chains 2g")
@@ -146,12 +152,14 @@
  * num_rx_chains_5g - Config Param to change number of rx
  * chains per vdev for 5 ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of chains for eg:-
  * 0x01249249 - change all vdev's rx num chains for 5ghz connections to 1 each
  * 0x02492492 - change all vdev's rx num chains for 5ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Rx num chains for 5 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Rx num chains for 5 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -175,7 +183,7 @@
 #define CFG_NUM_RX_CHAINS_5G CFG_INI_UINT( \
 				"num_rx_chains_5g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"num rx chains 5g")
@@ -185,12 +193,14 @@
  * tx_nss_2g - Config Param to change tx nss
  * per vdev for 2.4ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of tx spatial streams for eg:-
  * 0x01249249 - change all vdev's tx nss for 2.4ghz connections to 1 each
  * 0x02492492 - change all vdev's tx nss for 2.4ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Tx NSS for 2.4 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Tx NSS for 2.4 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -214,7 +224,7 @@
 #define CFG_TX_NSS_2G CFG_INI_UINT( \
 				"tx_nss_2g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"tx nss 2.4ghz")
@@ -224,12 +234,14 @@
  * tx_nss_5g - Config Param to change tx nss
  * per vdev for 5ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of tx spatial streams for eg:-
  * 0x01249249 - change all vdev's tx nss for 5ghz connections to 1 each
  * 0x02492492 - change all vdev's tx nss for 5ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Tx NSS for 5 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Tx NSS for 5 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -253,7 +265,7 @@
 #define CFG_TX_NSS_5G CFG_INI_UINT( \
 				"tx_nss_5g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"tx nss 5ghz")
@@ -264,12 +276,14 @@
  * per vdev for 2.4ghz frequency connections
  *
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of rx spatial streams for eg:-
  * 0x01249249 - change all vdev's rx nss for 2.4ghz connections to 1 each
  * 0x02492492 - change all vdev's rx nss for 2.4ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Rx NSS for 2.4 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Rx NSS for 2.4 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -293,7 +307,7 @@
 #define CFG_RX_NSS_2G CFG_INI_UINT( \
 				"rx_nss_2g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"rx nss 2.4ghz")
@@ -303,12 +317,14 @@
  * rx_nss_5g - Config Param to change rx nss
  * per vdev for 5ghz frequency connections
  * @Min: 0x01249249
- * @Max: 0x02492492
+ * @Max: 0x04924924
  * @Default: 0x02492492
  *
  * This ini is used to change the num of rx spatial streams for eg:-
  * 0x01249249 - change all vdev's rx nss for 5ghz connections to 1 each
  * 0x02492492 - change all vdev's rx nss for 5ghz connections to 2 each
+ * 0x036DB6DB - Change all VDEVs Rx NSS for 5 GHz to 3 each
+ * 0x04924924 - Change all VDEVs Rx NSS for 5 GHz to 4 each
  * Bits          VDEV Type
  * BIT[0:2]        STA
  * BIT[3:5]        SAP
@@ -332,7 +348,7 @@
 #define CFG_RX_NSS_5G CFG_INI_UINT( \
 				"rx_nss_5g", \
 				0x01249249, \
-				0x02492492, \
+				0x04924924, \
 				0x02492492, \
 				CFG_VALUE_OR_DEFAULT, \
 				"rx nss 5ghz")
@@ -575,6 +591,48 @@
 				"restart_sap_on_dynamic_nss_chains_config", \
 				0, \
 				"Restart SAP on dynamic nss chain config")
+/*
+ * <ini>
+ * fast_chain_selection - Whether fast chain selection is needed
+ * when TX chain num is 1
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * Related: STA.
+ *
+ * Supported Feature: Dynamic chainmask
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_FAST_CHAIN_SELECTION_CONFIG CFG_INI_BOOL( \
+				"FastChainSelection", \
+				0, \
+				"Enable fast chain selection when num Tx chains is 1")
+/*
+ * <ini>
+ * better_chain_rssi_threshold - RSSI delta threshold to determine better chain
+ * @Min: 0
+ * @Max: 10
+ * @Default: 0
+ *
+ * Related: STA.
+ *
+ * Supported Feature: Dynamic chainmask
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_BETTER_CHAIN_RSSI_THRESHOLD_CONFIG CFG_INI_UINT( \
+				"BetterChainRssiThreshold", \
+				0, \
+				10, \
+				0, \
+				CFG_VALUE_OR_DEFAULT, \
+				"RSSI delta threshold to determine better chain")
 
 #define CFG_NSS_CHAINS_ALL \
 	CFG(CFG_NUM_TX_CHAINS_2G) \
@@ -593,7 +651,9 @@
 	CFG(CFG_DISABLE_TX_MRC_5G) \
 	CFG(CFG_DISABLE_RX_MRC_5G) \
 	CFG(CFG_ENABLE_DYNAMIC_NSS_CHAIN_CONFIG) \
-	CFG(CFG_RESTART_SAP_ON_DYNAMIC_NSS_CHAINS_CONFIG)
+	CFG(CFG_RESTART_SAP_ON_DYNAMIC_NSS_CHAINS_CONFIG) \
+	CFG(CFG_FAST_CHAIN_SELECTION_CONFIG) \
+	CFG(CFG_BETTER_CHAIN_RSSI_THRESHOLD_CONFIG)
 
 #endif /* __CFG_MLME_NSS_CHAINS */
 

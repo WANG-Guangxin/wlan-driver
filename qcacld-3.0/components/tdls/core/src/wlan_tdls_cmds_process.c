@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -90,6 +90,9 @@ void tdls_set_mlme_ch_power(struct wlan_objmgr_vdev *vdev,
 	if (REG_VERY_LOW_POWER_AP == reg_power_info->power_type_6g)
 		tx_power = tdls_get_6g_pwr_for_power_type(vdev, freq,
 							  REG_CLI_DEF_VLP);
+	else if (REG_INDOOR_ENABLED_AP == reg_power_info->power_type_6g)
+		tx_power = tdls_get_6g_pwr_for_power_type(vdev, freq,
+							  REG_CLI_DEF_C2C);
 	else
 		tx_power = tdls_soc_obj->bss_sta_power;
 
@@ -152,18 +155,24 @@ void tdls_update_6g_power(struct wlan_objmgr_vdev *vdev,
 	}
 
 	if (enable_link) {
-		tdls_soc_obj->bss_sta_power_type = REG_VERY_LOW_POWER_AP;
-		/*
-		 * No need to update power if BSS-STA link is already configured
-		 * as VLP
-		 */
-		if (tdls_soc_obj->bss_sta_power_type ==
-		    mlme_obj->reg_tpc_obj.power_type_6g)
-			return;
-
 		tdls_soc_obj->bss_sta_power_type =
 					mlme_obj->reg_tpc_obj.power_type_6g;
-		mlme_obj->reg_tpc_obj.power_type_6g = REG_VERY_LOW_POWER_AP;
+
+		/*
+		 * No need to update power if BSS-STA link is already configured
+		 * as VLP or indoor enabled AP power
+		 */
+		if (tdls_soc_obj->bss_sta_power_type == REG_VERY_LOW_POWER_AP ||
+		    tdls_soc_obj->bss_sta_power_type == REG_INDOOR_ENABLED_AP)
+			return;
+
+
+		if (wlan_reg_is_indoor_ap_detected(pdev))
+			mlme_obj->reg_tpc_obj.power_type_6g =
+						REG_INDOOR_ENABLED_AP;
+		else
+			mlme_obj->reg_tpc_obj.power_type_6g =
+						REG_VERY_LOW_POWER_AP;
 		tdls_soc_obj->bss_sta_power = tdls_get_mlme_ch_power(mlme_obj,
 								     freq);
 		tdls_debug("Updated power_type from %d to %d bss link power %d",
@@ -171,7 +180,8 @@ void tdls_update_6g_power(struct wlan_objmgr_vdev *vdev,
 			   mlme_obj->reg_tpc_obj.power_type_6g,
 			   tdls_soc_obj->bss_sta_power);
 	} else {
-		if (REG_VERY_LOW_POWER_AP == tdls_soc_obj->bss_sta_power_type)
+		if (tdls_soc_obj->bss_sta_power_type == REG_VERY_LOW_POWER_AP ||
+		    tdls_soc_obj->bss_sta_power_type == REG_INDOOR_ENABLED_AP)
 			return;
 
 		tdls_debug("Updated power_type_6g from %d to %d",
@@ -183,6 +193,9 @@ void tdls_update_6g_power(struct wlan_objmgr_vdev *vdev,
 	tdls_set_mlme_ch_power(vdev, mlme_obj, tdls_soc_obj, freq);
 
 	tx_ops = wlan_reg_get_tx_ops(psoc);
+	if (!tx_ops)
+		return;
+
 	if (tx_ops->set_tpc_power)
 		tx_ops->set_tpc_power(psoc,
 				      wlan_vdev_get_id(vdev),
@@ -889,8 +902,7 @@ int tdls_validate_mgmt_request(struct tdls_action_frame_request *tdls_mgmt_req)
 	 * STA or P2P client should be connected and authenticated before
 	 *  sending any TDLS frames
 	 */
-	if ((wlan_vdev_is_up(vdev) != QDF_STATUS_SUCCESS) ||
-	    !tdls_is_vdev_authenticated(vdev)) {
+	if (!tdls_is_vdev_allowed_to_tx(vdev)) {
 		tdls_err("STA is not connected or not authenticated.");
 		return -EAGAIN;
 	}
@@ -1264,6 +1276,18 @@ QDF_STATUS tdls_process_update_peer(struct tdls_update_peer_request *req)
 	}
 
 	vdev = req->vdev;
+	if (!tdls_check_is_tdls_allowed(vdev)) {
+		tdls_err("TDLS not allowed, reject update station for vdev: %d",
+			 wlan_vdev_get_id(vdev));
+		goto error;
+	}
+
+	if (mlo_mgr_is_link_switch_in_progress(vdev)) {
+		tdls_err("Link Switch in progress, reject update sta for vdev: %d",
+			 wlan_vdev_get_id(vdev));
+		goto error;
+	}
+
 	cmd.cmd_type = WLAN_SER_CMD_TDLS_ADD_PEER;
 	cmd.cmd_id = 0;
 	cmd.cmd_cb = tdls_update_peer_serialize_callback;
@@ -1328,6 +1352,11 @@ tdls_del_peer_serialize_callback(struct wlan_serialization_command *cmd,
 		/* command moved to active list
 		 */
 		status = tdls_activate_del_peer(req);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			status = tdls_internal_del_peer_rsp(req);
+			tdls_release_serialization_command(
+					req->vdev, WLAN_SER_CMD_TDLS_DEL_PEER);
+		}
 		break;
 
 	case WLAN_SER_CB_CANCEL_CMD:
@@ -1780,8 +1809,9 @@ QDF_STATUS tdls_process_del_peer_rsp(struct tdls_del_sta_rsp *rsp)
 		 * To avoid that set the tdls_support as not supported for that
 		 * peer
 		 */
-		if (curr_peer->sta_kickout_count >=
-				WLAN_TDLS_STA_KICKOUT_THRESHOLD) {
+		if (curr_peer &&
+		    curr_peer->sta_kickout_count >=
+					WLAN_TDLS_STA_KICKOUT_THRESHOLD) {
 			curr_peer->tdls_support = TDLS_CAP_NOT_SUPPORTED;
 			tdls_debug("Sta Kickout Threshold reached, set cap to unsupported");
 		}
@@ -1831,6 +1861,10 @@ tdls_wma_update_peer_state(struct tdls_soc_priv_obj *soc_obj,
 	struct scheduler_msg msg = {0,};
 	QDF_STATUS status;
 
+	status = tdls_validate_current_mode(soc_obj);
+	if (QDF_IS_STATUS_ERROR(status))
+		return status;
+
 	tdls_debug("update TDLS peer " QDF_MAC_ADDR_FMT " vdev %d, state %d",
 		   QDF_MAC_ADDR_REF(peer_state->peer_macaddr),
 		   peer_state->vdev_id, peer_state->peer_state);
@@ -1847,6 +1881,68 @@ tdls_wma_update_peer_state(struct tdls_soc_priv_obj *soc_obj,
 	}
 
 	return status;
+}
+
+static QDF_STATUS
+tdls_wma_update_off_chan_mode(struct wlan_objmgr_vdev *vdev)
+{
+	struct tdls_channel_switch_params *chan_switch_params;
+	struct tdls_vdev_priv_obj *tdls_vdev;
+	struct tdls_soc_priv_obj *tdls_soc;
+	struct tdls_peer *conn_peer = NULL;
+	struct scheduler_msg msg = {0,};
+	QDF_STATUS status;
+
+	status = tdls_get_vdev_objects(vdev, &tdls_vdev, &tdls_soc);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		tdls_err("vdev:%d Unable to fetch vdev objects",
+			 wlan_vdev_get_id(vdev));
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	conn_peer = tdls_find_first_connected_peer(tdls_vdev);
+	if (!conn_peer) {
+		tdls_debug("vdev:%d No TDLS Connected Peer",
+			   wlan_vdev_get_id(vdev));
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	chan_switch_params = qdf_mem_malloc(sizeof(*chan_switch_params));
+	if (!chan_switch_params)
+		return QDF_STATUS_E_FAILURE;
+
+	qdf_mem_zero(chan_switch_params, sizeof(*chan_switch_params));
+	chan_switch_params->vdev_id = tdls_vdev->session_id;
+	chan_switch_params->tdls_sw_mode = DISABLE_ACTIVE_CHANSWITCH;
+	chan_switch_params->is_responder = conn_peer->is_responder;
+	qdf_mem_copy(&chan_switch_params->peer_mac_addr,
+		     &conn_peer->peer_mac.bytes, QDF_MAC_ADDR_SIZE);
+
+	tdls_notice("Peer " QDF_MAC_ADDR_FMT " vdevId: %d, off channel: %d, offset: %d, num_allowed_off_chan:%d mode:%d, is_responder: %d",
+		    QDF_MAC_ADDR_REF(chan_switch_params->peer_mac_addr),
+		    chan_switch_params->vdev_id,
+		    chan_switch_params->tdls_off_ch,
+		    chan_switch_params->tdls_off_ch_bw_offset,
+		    chan_switch_params->num_off_channels,
+		    chan_switch_params->tdls_sw_mode,
+		    chan_switch_params->is_responder);
+
+	tdls_soc->tdls_fw_off_chan_mode = DISABLE_ACTIVE_CHANSWITCH;
+
+	msg.type = tdls_soc->tdls_update_offchan_mode;
+	msg.reserved = 0;
+	msg.bodyptr = chan_switch_params;
+
+	status = scheduler_post_message(QDF_MODULE_ID_TDLS,
+					QDF_MODULE_ID_WMA,
+					QDF_MODULE_ID_WMA, &msg);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		qdf_mem_free(chan_switch_params);
+		tdls_err("scheduler_post_msg failed");
+		status = QDF_STATUS_E_FAILURE;
+	}
+
+	return QDF_STATUS_SUCCESS;
 }
 
 QDF_STATUS tdls_process_enable_link(struct tdls_oper_request *req)
@@ -1940,6 +2036,10 @@ QDF_STATUS tdls_process_enable_link(struct tdls_oper_request *req)
 
 	tdls_update_6g_power(vdev, soc_obj, true);
 	tdls_increment_peer_count(soc_obj);
+
+	if (!tdls_check_if_offchannel_allowed(vdev))
+		tdls_wma_update_off_chan_mode(vdev);
+
 	/* Need to update osif params when first peer gets connected */
 	if (soc_obj->connected_peer_count == 1 &&
 	    soc_obj->tdls_osif_update_cb.tdls_osif_conn_update)
@@ -2440,8 +2540,7 @@ int tdls_process_set_responder(struct tdls_set_responder_req *set_req)
 	}
 
 	status = policy_mgr_update_nss_req(psoc,
-					   wlan_vdev_get_id(tdls_vdev->vdev),
-					   HW_MODE_SS_2x2, HW_MODE_SS_2x2);
+					   wlan_vdev_get_id(tdls_vdev->vdev));
 	if (QDF_IS_STATUS_ERROR(status)) {
 		tdls_err("Unable to process NSS request");
 		return -EINVAL;

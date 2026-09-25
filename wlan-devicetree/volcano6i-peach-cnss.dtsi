@@ -160,7 +160,6 @@
 			"{class: wlan_pdc, ss: rf, res: l1b.m, enable: 1}",
 			"{class: wlan_pdc, ss: rf, res: s3b.m, enable: 0}",
 			"{class: wlan_pdc, ss: bb, res: pdc, enable: 1}";
-
 	};
 };
 

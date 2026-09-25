@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -47,27 +47,6 @@ QDF_STATUS mlme_vdev_sm_deliver_event(struct vdev_mlme_obj *vdev_mlme,
 				      uint16_t event_data_len,
 				      void *event_data);
 
-/**
- * mlme_vdev_sm_print_state_event() - Prints the state/substate, event
- * @vdev_mlme: MLME VDEV comp object
- * @event: MLME event
- *
- * API to print current state/substate, events in readable format
- *
- * Return: void
- */
-void mlme_vdev_sm_print_state_event(struct vdev_mlme_obj *vdev_mlme,
-				    enum wlan_vdev_sm_evt event);
-
-/**
- * mlme_vdev_sm_print_state() - Prints the state/substate
- * @vdev_mlme: MLME VDEV comp object
- *
- * API to print current state/substate
- *
- * Return: void
- */
-void mlme_vdev_sm_print_state(struct vdev_mlme_obj *vdev_mlme);
 #ifdef SM_ENG_HIST_ENABLE
 /**
  * mlme_vdev_sm_history_print() - Prints SM history
@@ -645,6 +624,19 @@ static inline QDF_STATUS mlme_vdev_chan_switch_disable_notify_dfs(
 {
 	return utils_dfs_radar_enable(wlan_vdev_get_pdev(vdev_mlme->vdev));
 }
+
+/*
+ * mlme_vdev_init_down() - Notifies Event down received on INIT state
+ * @vdev_mlme: VDEV MLME comp object
+ *
+ * Return: None
+ */
+static inline void mlme_vdev_init_down(struct vdev_mlme_obj *vdev_mlme)
+{
+	if (vdev_mlme->ops && vdev_mlme->ops->mlme_vdev_init_down)
+		vdev_mlme->ops->mlme_vdev_init_down(vdev_mlme);
+}
+
 #ifdef WLAN_FEATURE_11BE_MLO
 /**
  * mlme_vdev_up_notify_mlo_mgr() - notify mlo link is ready to up
@@ -741,6 +733,40 @@ static inline void mlme_vdev_up_active_notify_mlo_mgr(
 
 static inline QDF_STATUS mlme_vdev_notify_mlo_sync_wait_entry(
 				struct vdev_mlme_obj *vdev_mlme)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * mlme_vdev_link_reconfig_remove() - Send link removal request in SS_UP_REMOVE
+ * @vdev_mlme:  VDEV MLME comp object
+ * @event_data_len: data size
+ * @event_data: event data
+ *
+ * after vdev state change to SS_UP_REMOVE, send link reconfig remove to FW
+ *
+ * Return: QDF_STATUS
+ */
+static inline
+QDF_STATUS mlme_vdev_link_reconfig_remove(struct vdev_mlme_obj *vdev_mlme,
+					  uint16_t event_data_len,
+					  void *event_data)
+{
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+
+	if (vdev_mlme->ops && vdev_mlme->ops->mlme_vdev_link_reconfig_remove)
+		ret = vdev_mlme->ops->mlme_vdev_link_reconfig_remove(
+				vdev_mlme, event_data_len, event_data);
+
+	return ret;
+}
+#else
+static inline
+QDF_STATUS mlme_vdev_link_reconfig_remove(struct vdev_mlme_obj *vdev_mlme,
+					  uint16_t event_data_len,
+					  void *event_data)
 {
 	return QDF_STATUS_SUCCESS;
 }

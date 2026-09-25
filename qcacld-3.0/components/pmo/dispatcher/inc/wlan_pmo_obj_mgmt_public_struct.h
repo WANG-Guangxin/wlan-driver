@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -114,6 +114,16 @@ typedef int (*pmo_pld_auto_suspend_cb)(void);
 typedef int (*pmo_pld_auto_resume_cb)(void);
 
 /**
+ * typedef pmo_wow_deferred_wakeup_cb() - callback to log deferred WOW wakeup
+ * @psoc: objmgr psoc handle
+ *
+ * Called from PMO after the host wakeup indication is sent to FW and the
+ * target has resumed, so that the WMA layer can emit the cached wakeup
+ * reason that was recorded during the WOW wakeup host event.
+ */
+typedef void (*pmo_wow_deferred_wakeup_cb)(struct wlan_objmgr_psoc *psoc);
+
+/**
  * struct wlan_pmo_tx_ops - structure of tx function
  *					pointers for pmo component
  * @send_arp_offload_req: fp to send arp offload request
@@ -163,6 +173,7 @@ typedef int (*pmo_pld_auto_resume_cb)(void);
  * idle roam  trigger to firmware.
  * @send_icmp_offload_req: fp to send icmp offload request
  * @psoc_set_wow_enable_ack_failed: fp to set wow enable ack failure status
+ * @send_apf_mode_req: fp to send apf mode
  */
 struct wlan_pmo_tx_ops {
 	QDF_STATUS (*send_arp_offload_req)(struct wlan_objmgr_vdev *vdev,
@@ -279,6 +290,9 @@ struct wlan_pmo_tx_ops {
 			struct pmo_icmp_offload *pmo_icmp_req);
 #endif
 	void (*psoc_set_wow_enable_ack_failed)(struct wlan_objmgr_psoc *psoc);
+	QDF_STATUS (*send_apf_mode_req)(struct wlan_objmgr_psoc *psoc,
+					uint32_t apf_mode,
+					uint32_t vdev_id);
 };
 
 #endif /* end  of _WLAN_PMO_OBJ_MGMT_PUBLIC_STRUCT_H_ */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -99,6 +99,8 @@ uint8_t *action_oui_token_string(enum action_oui_token_type token_id)
 		CASE_RETURN_STRING(ACTION_OUI_MAC_ADDR_TOKEN);
 		CASE_RETURN_STRING(ACTION_OUI_MAC_MASK_TOKEN);
 		CASE_RETURN_STRING(ACTION_OUI_CAPABILITY_TOKEN);
+		CASE_RETURN_STRING(ACTION_OUI_DATA_BIT_MASK_TOKEN);
+		CASE_RETURN_STRING(ACTION_OUI_MAC_BIT_MASK_TOKEN);
 		CASE_RETURN_STRING(ACTION_OUI_END_TOKEN);
 	}
 
@@ -469,41 +471,42 @@ validate_and_convert_capability(uint8_t *token,
 	return true;
 }
 
-/**
- * action_oui_extension_store() - store action oui extension
- * @psoc_priv: pointer to action_oui priv obj
- * @oui_priv: type of the action
- * @ext: oui extension to store in sme
- *
- * This function stores the parsed oui extension
- *
- * Return: QDF_STATUS
- *
- */
-static QDF_STATUS
+QDF_STATUS
 action_oui_extension_store(struct action_oui_psoc_priv *psoc_priv,
 			   struct action_oui_priv *oui_priv,
-			   struct action_oui_extension ext)
+			   struct action_oui_extension *ext,
+			   uint8_t oui_ext_num)
 {
 	struct action_oui_extension_priv *ext_priv;
+	uint32_t total_num, max_num, i;
+
+	max_num = wlan_action_oui_max_ext_num(oui_priv->id);
 
 	qdf_mutex_acquire(&oui_priv->extension_lock);
-	if (qdf_list_size(&oui_priv->extension_list) ==
-			  ACTION_OUI_MAX_EXTENSIONS) {
+	total_num = qdf_list_size(&oui_priv->extension_list) + oui_ext_num;
+	if (total_num > max_num) {
 		qdf_mutex_release(&oui_priv->extension_lock);
-		action_oui_err("Reached maximum OUI extensions");
+		action_oui_err("Reached maximum OUI ext num %d/%d",
+			       total_num, max_num);
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	ext_priv = qdf_mem_malloc(sizeof(*ext_priv));
-	if (!ext_priv) {
-		qdf_mutex_release(&oui_priv->extension_lock);
-		return QDF_STATUS_E_NOMEM;
+	for (i = 0; i < oui_ext_num; i++) {
+		ext_priv = qdf_mem_malloc(sizeof(*ext_priv));
+		if (!ext_priv) {
+			qdf_mutex_release(&oui_priv->extension_lock);
+			action_oui_fatal("malloc %zu B fail for %d/%d oui ext",
+					 sizeof(*ext_priv), i + 1, oui_ext_num);
+			return QDF_STATUS_E_NOMEM;
+		}
+
+		ext_priv->extension = ext[i];
+		qdf_list_insert_back(&oui_priv->extension_list,
+				     &ext_priv->item);
+		psoc_priv->total_extensions++;
+		wlan_action_oui_extension_dump(&ext[i]);
 	}
 
-	ext_priv->extension = ext;
-	qdf_list_insert_back(&oui_priv->extension_list, &ext_priv->item);
-	psoc_priv->total_extensions++;
 	qdf_mutex_release(&oui_priv->extension_lock);
 
 	return QDF_STATUS_SUCCESS;
@@ -520,7 +523,7 @@ action_oui_parse(struct action_oui_psoc_priv *psoc_priv,
 	char *token;
 	bool valid = true;
 	bool oui_count_exceed = false;
-	uint32_t oui_index = 0;
+	uint32_t oui_index = 0, and_oui_index = 0;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	struct action_oui_priv *oui_priv;
 
@@ -622,7 +625,9 @@ action_oui_parse(struct action_oui_psoc_priv *psoc_priv,
 		if (action_token != ACTION_OUI_END_TOKEN)
 			continue;
 
-		status = action_oui_extension_store(psoc_priv, oui_priv, ext);
+		ext.and_oui_index = and_oui_index;
+		status = action_oui_extension_store(psoc_priv, oui_priv, &ext,
+						    1);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
 			valid = false;
 			action_oui_err("sme set of extension: %u for action oui: %u failed",
@@ -637,10 +642,25 @@ action_oui_parse(struct action_oui_psoc_priv *psoc_priv,
 		}
 
 		oui_index++;
-		if (oui_index == ACTION_OUI_MAX_EXTENSIONS) {
+		if (oui_index == wlan_action_oui_max_ext_num(action_id)) {
 			if (str1)
 				oui_count_exceed = true;
 			break;
+		}
+
+		if (psoc_priv->is_action_oui_v2_used[action_id] &&
+		    str2 && *str2 != '\0') {
+			str1 = (char *)qdf_str_left_trim(str2);
+
+			if (!qdf_mem_cmp(str1, ACTION_OUI_OPERATOR_AND, 2)) {
+				token = strsep(&str1, " ");
+				and_oui_index++;
+			} else if (!qdf_mem_cmp(str1, ACTION_OUI_OPERATOR_OR, 2)) {
+				token = strsep(&str1, " ");
+				and_oui_index = 0;
+			} else {
+				and_oui_index = 0;
+			}
 		}
 
 		/* reset the params for next action OUI parse */
@@ -650,7 +670,8 @@ action_oui_parse(struct action_oui_psoc_priv *psoc_priv,
 
 	if (oui_count_exceed) {
 		action_oui_err("Reached Maximum extensions: %u in action_oui: %u, ignoring the rest",
-			ACTION_OUI_MAX_EXTENSIONS, action_id);
+			       wlan_action_oui_max_ext_num(action_id),
+			       action_id);
 		return QDF_STATUS_SUCCESS;
 	}
 
@@ -760,12 +781,12 @@ QDF_STATUS action_oui_send(struct action_oui_psoc_priv *psoc_priv,
 	extension_list = &oui_priv->extension_list;
 	qdf_mutex_acquire(&oui_priv->extension_lock);
 
-	if (psoc_priv->max_extensions -
-	    (psoc_priv->total_extensions - psoc_priv->host_only_extensions) < 0) {
-		action_oui_err("total_extensions: %d exceeds max_extensions: %d, do not update",
-			       psoc_priv->max_extensions,
+	if ((psoc_priv->total_extensions - psoc_priv->host_only_extensions) >
+	    psoc_priv->max_extensions) {
+		action_oui_err("total configured extensions: %d exceeds max_extensions: %d, do not update",
 			       (psoc_priv->total_extensions -
-				psoc_priv->host_only_extensions));
+				psoc_priv->host_only_extensions),
+			       psoc_priv->max_extensions);
 		qdf_mutex_release(&oui_priv->extension_lock);
 		return QDF_STATUS_E_FAILURE;
 	}
@@ -781,6 +802,8 @@ QDF_STATUS action_oui_send(struct action_oui_psoc_priv *psoc_priv,
 	req->action_id = oui_priv->id;
 	req->no_oui_extensions = no_oui_extensions;
 	req->total_no_oui_extensions = psoc_priv->max_extensions;
+	req->is_action_oui_v2_enabled =
+		psoc_priv->is_action_oui_v2_enabled;
 
 	extension = req->extension;
 	qdf_list_peek_front(extension_list, &node);
@@ -865,6 +888,9 @@ check_for_vendor_ap_mac(struct action_oui_extension *extension,
 	uint8_t i;
 	uint8_t mac_mask = 0x80;
 	uint8_t *mac_addr = attr->mac_addr;
+
+	if (!mac_addr)
+		return false;
 
 	for (i = 0; i < QDF_MAC_ADDR_SIZE; i++) {
 		if ((*extension->mac_mask & mac_mask) &&
@@ -1024,6 +1050,7 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 	QDF_STATUS qdf_status;
 	const uint8_t *oui_ptr;
 	bool wildcard_oui = false;
+	bool oui_matched = false;
 
 	oui_priv = psoc_priv->oui_priv[action_id];
 	if (!oui_priv) {
@@ -1045,7 +1072,15 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 					   struct action_oui_extension_priv,
 					   item);
 		extension = &priv_ext->extension;
+		if (oui_matched) {
+			if (!extension->and_oui_index)
+				goto found;
+		} else {
+			if (extension->and_oui_index)
+				goto next;
+		}
 
+		oui_matched = false;
 		/*
 		 * If a wildcard OUI bit is not set in the info_mask, proceed
 		 * to other checks skipping the OUI and vendor data checks
@@ -1070,17 +1105,22 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 		if (!check_for_vendor_ap_capabilities(extension, attr))
 			goto next;
 
-		action_oui_debug("Vendor AP/STA found for OUI");
+		action_oui_debug("action id %d vendor AP/STA found for OUI", action_id);
 		QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE, QDF_TRACE_LEVEL_DEBUG,
 				   extension->oui, extension->oui_length);
+		oui_matched = true;
+		goto next;
+found:
 		qdf_mutex_release(&oui_priv->extension_lock);
 		return true;
 next:
 		qdf_status = qdf_list_peek_next(extension_list,
 						node, &next_node);
-		if (!QDF_IS_STATUS_SUCCESS(qdf_status))
+		if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
+			if (qdf_status == QDF_STATUS_E_EMPTY && oui_matched)
+				goto found;
 			break;
-
+		}
 		node = next_node;
 		next_node = NULL;
 		wildcard_oui = false;

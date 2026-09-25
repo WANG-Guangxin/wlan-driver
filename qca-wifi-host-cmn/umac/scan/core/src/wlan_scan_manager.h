@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
  * Copyright (c) 2017-2018, 2020-2021 The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,11 +33,11 @@
 /**
  * struct scan_event_listeners - listeners interested in a particular scan event
  * @count: number of listeners
- * @cb: callback handler
+ * @cb: callback handler pointers
  */
 struct scan_event_listeners {
 	uint32_t count;
-	struct cb_handler cb[MAX_SCAN_EVENT_LISTENERS];
+	struct cb_handler *cb[MAX_SCAN_EVENT_LISTENERS];
 };
 
 /**
@@ -137,4 +137,11 @@ QDF_STATUS scm_scan_cancel_flush_callback(struct scheduler_msg *msg);
 void scm_disable_obss_pdev_scan(struct wlan_objmgr_psoc *psoc,
 				struct wlan_objmgr_pdev *pdev);
 
+/**
+ * scm_set_obss_scan_enable() - Public API to set obss scan enable
+ * @vdev: vdev pointer
+ *
+ * Return: void
+ */
+void scm_set_obss_scan_enable(struct wlan_objmgr_vdev *vdev);
 #endif

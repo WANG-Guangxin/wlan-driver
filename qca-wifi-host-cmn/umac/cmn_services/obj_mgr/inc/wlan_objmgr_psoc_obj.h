@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
  * above copyright notice and this permission notice appear in all
@@ -264,6 +264,14 @@
 /* ch width notify support */
 #define WLAN_VDEV_PARAM_CHWIDTH_WITH_NOTIFY_SUPPORT    0x00000800
 
+/* Firmware capability to use STA vdev for P2P device */
+#define WLAN_SOC_USE_STA_VDEV_FOR_P2P_DEVICE   0x00001000
+
+/* Firmare capability to handle roam triggers for
+ * host based EAPOL 4-way handshake
+ */
+#define WLAN_ROAM_4WAY_HS_OFFLOAD_DISABLE   0x00002000
+
 /* PSOC op flags */
 
 	/* Invalid VHT cap */
@@ -418,6 +426,10 @@ struct wlan_soc_timer {
  * @dp_handle:             DP module handle
  * @psoc_lock:             psoc lock
  * @skip_mlo_pumac:        skip this psoc as MLO primary umac
+ * @wsi_remap_add:    WSI remap add is performed
+ * @wsi_remap_remove: WSI remap remove is performed
+ * @wsi_remap_fw_up_in_progress: Remap FW UP in progress
+ * @wsi_remap_recovery_in_progress: Recovery post wsi remap
  */
 struct wlan_objmgr_psoc {
 	struct wlan_objmgr_psoc_regulatory soc_reg;
@@ -433,6 +445,10 @@ struct wlan_objmgr_psoc {
 	void *dp_handle;
 	qdf_spinlock_t psoc_lock;
 	bool skip_mlo_pumac;
+	bool wsi_remap_add;
+	bool wsi_remap_remove;
+	bool wsi_remap_fw_up_in_progress;
+	bool wsi_remap_recovery_in_progress;
 };
 
 /**

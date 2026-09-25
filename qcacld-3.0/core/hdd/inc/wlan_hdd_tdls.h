@@ -142,7 +142,8 @@ int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 				uint16_t status_code, uint32_t peer_capability,
 				bool initiator, const uint8_t *buf,
 				size_t len, int link_id);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) || \
+	defined(CFG80211_TDLS_MGMT_LINK_AWARE)
 int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 				struct net_device *dev, const u8 *peer,
 				int link_id, u8 action_code,
@@ -308,6 +309,17 @@ void hdd_init_tdls_config(struct tdls_start_params *tdls_cfg);
  * Return: none
  */
 void hdd_config_tdls_with_band_switch(struct hdd_context *hdd_ctx);
+
+/*
+ * wlan_hdd_is_tdls_allowed() - Check if TDLS is allowed
+ * @hdd_ctx: Pointer to the HDD context
+ * @vdev:    pointer to vdev object
+ *
+ * Return: True or False
+ */
+bool wlan_hdd_is_tdls_allowed(struct hdd_context *hdd_ctx,
+			      struct wlan_objmgr_vdev *vdev);
+
 #else
 
 #define FEATURE_TDLS_VENDOR_COMMANDS
@@ -356,6 +368,13 @@ hdd_check_and_set_tdls_conn_params(struct wlan_objmgr_vdev *vdev)
 static inline void
 hdd_check_and_set_tdls_disconn_params(struct wlan_objmgr_vdev *vdev)
 {
+}
+
+static inline
+bool wlan_hdd_is_tdls_allowed(struct hdd_context *hdd_ctx,
+			      struct wlan_objmgr_vdev *vdev)
+{
+	return true;
 }
 #endif /* End of FEATURE_WLAN_TDLS */
 #endif /* __HDD_TDLS_H */

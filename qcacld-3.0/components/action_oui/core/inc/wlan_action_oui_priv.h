@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2018 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,30 +35,6 @@
 #include "wlan_action_oui_objmgr.h"
 
 /**
- * enum action_oui_token_type - String token types expected.
- * @ACTION_OUI_TOKEN: oui string
- * @ACTION_OUI_DATA_LENGTH_TOKEN: data length string
- * @ACTION_OUI_DATA_TOKEN: OUI data string
- * @ACTION_OUI_DATA_MASK_TOKEN: data mask string
- * @ACTION_OUI_INFO_MASK_TOKEN: info mask string
- * @ACTION_OUI_MAC_ADDR_TOKEN: mac addr string
- * @ACTION_OUI_MAC_MASK_TOKEN: mac mask string
- * @ACTION_OUI_CAPABILITY_TOKEN: capability string
- * @ACTION_OUI_END_TOKEN: end of one oui extension
- */
-enum action_oui_token_type {
-	ACTION_OUI_TOKEN = 1 << 0,
-	ACTION_OUI_DATA_LENGTH_TOKEN = 1 << 1,
-	ACTION_OUI_DATA_TOKEN = 1 << 2,
-	ACTION_OUI_DATA_MASK_TOKEN = 1 << 3,
-	ACTION_OUI_INFO_MASK_TOKEN = 1 << 4,
-	ACTION_OUI_MAC_ADDR_TOKEN = 1 << 5,
-	ACTION_OUI_MAC_MASK_TOKEN = 1 << 6,
-	ACTION_OUI_CAPABILITY_TOKEN = 1 << 7,
-	ACTION_OUI_END_TOKEN = 1 << 8,
-};
-
-/**
  * struct action_oui_extension_priv - Private contents of extension.
  * @item: list element
  * @extension: Extension contents
@@ -88,23 +64,27 @@ struct action_oui_priv {
 /**
  * struct action_oui_psoc_priv - Private object to be stored in psoc
  * @psoc: pointer to psoc object
- * @action_oui_enable: action oui enable
+ * @action_oui_enable: action oui enable config
  * @action_oui_str: oui configuration strings
  * @total_extensions: total count of extensions from all actions
  * @host_only_extensions: total host only only extensions from all actions
  * @max_extensions: Max no. of extensions that can be configured to the firmware
  * @oui_priv: array of pointers used to refer each action info
  * @tx_ops: call-back functions to send OUIs to firmware
+ * @is_action_oui_v2_enabled: Is action oui v2 enabled
+ * @is_action_oui_v2_used: Is action oui v2 used per action id
  */
 struct action_oui_psoc_priv {
 	struct wlan_objmgr_psoc *psoc;
-	bool action_oui_enable;
+	uint8_t action_oui_enable;
 	uint8_t action_oui_str[ACTION_OUI_MAXIMUM_ID][ACTION_OUI_MAX_STR_LEN];
 	uint32_t total_extensions;
 	uint32_t host_only_extensions;
 	uint32_t max_extensions;
 	struct action_oui_priv *oui_priv[ACTION_OUI_MAXIMUM_ID];
 	struct action_oui_tx_ops tx_ops;
+	bool is_action_oui_v2_enabled;
+	bool is_action_oui_v2_used[ACTION_OUI_MAXIMUM_ID];
 };
 
 /**
@@ -182,4 +162,23 @@ action_oui_search(struct action_oui_psoc_priv *psoc_priv,
 bool
 action_oui_is_empty(struct action_oui_psoc_priv *psoc_priv,
 		    enum action_oui_id action_id);
+
+/**
+ * action_oui_extension_store() - store action oui extension
+ * @psoc_priv: pointer to action_oui priv obj
+ * @oui_priv: type of the action
+ * @ext: pointer to oui extension to store in psoc
+ * @oui_ext_num: number of action oui extension to be stored
+ *
+ * This function stores oui extension to psoc private object of
+ * action oui component.
+ *
+ * Return: QDF_STATUS
+ *
+ */
+QDF_STATUS
+action_oui_extension_store(struct action_oui_psoc_priv *psoc_priv,
+			   struct action_oui_priv *oui_priv,
+			   struct action_oui_extension *ext,
+			   uint8_t oui_ext_num);
 #endif /* End  of _WLAN_ACTION_OUI_PRIV_STRUCT_H_ */

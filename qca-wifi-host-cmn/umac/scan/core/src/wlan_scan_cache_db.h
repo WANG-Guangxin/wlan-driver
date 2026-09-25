@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -55,6 +55,7 @@ struct scan_dbs {
  * @rx_data: mgmt rx data
  * @psoc: psoc pointer
  * @save_rnr_info: save the RNR entries into RNR db
+ * @is_gen_entry: is generated scan entry
  * @buf: rx frame
  */
 struct scan_bcn_probe_event {
@@ -62,6 +63,7 @@ struct scan_bcn_probe_event {
 	struct mgmt_rx_event_params *rx_data;
 	struct wlan_objmgr_psoc *psoc;
 	bool save_rnr_info;
+	bool is_gen_entry;
 	qdf_nbuf_t buf;
 };
 
@@ -118,18 +120,6 @@ qdf_list_t *scm_get_scan_result(struct wlan_objmgr_pdev *pdev,
  * Return: QDF_STATUS
  */
 QDF_STATUS scm_purge_scan_results(qdf_list_t *scan_result);
-
-/**
- * scm_update_scan_mlme_info() - updates scan entry with mlme data
- * @pdev: pdev object
- * @scan_entry: source scan entry to read mlme info
- *
- * This function updates scan db with scan_entry->mlme_info
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS scm_update_scan_mlme_info(struct wlan_objmgr_pdev *pdev,
-	struct scan_cache_entry *scan_entry);
 
 /**
  * scm_flush_results() - flush scan entries matching the filter
@@ -236,6 +226,9 @@ struct channel_list_db *scm_get_rnr_channel_db(struct wlan_objmgr_psoc *psoc);
  * @psoc: psoc
  * @chan_freq: channel frequency
  *
+ * This API needs to be called while holding the mutex lock "rnr_db_lock"
+ * defined in the struct channel_list_db.
+ *
  * Return: channel meta information
  */
 struct meta_rnr_channel *scm_get_chan_meta(struct wlan_objmgr_psoc *psoc,
@@ -318,6 +311,25 @@ scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
 #endif
 
 /**
+ * scm_update_assoc_state_con_for_bss() - Update assoc_state to
+ *                                         SCAN_ENTRY_CON_STATE_ASSOC for
+ *                                         the given BSS
+ * @pdev: pdev object
+ * @bssid: BSSID of the BSS
+ * @ssid: SSID of the BSS
+ * @freq: operating frequency of the BSS
+ *
+ * Helper to mark a specific scan entry as connected by setting its
+ * assoc_state to SCAN_ENTRY_CON_STATE_ASSOC.
+ *
+ * Return: void
+ */
+void scm_update_assoc_state_con_for_bss(struct wlan_objmgr_pdev *pdev,
+					struct qdf_mac_addr *bssid,
+					struct wlan_ssid *ssid,
+					uint32_t freq);
+
+/**
  * scm_scan_update_mlme_by_bssinfo() - updates scan entry with mlme data
  * @pdev: pdev object
  * @bss_info: BSS information
@@ -374,6 +386,24 @@ struct scan_cache_entry *
 scm_scan_get_entry_by_bssid(struct wlan_objmgr_pdev *pdev,
 			    struct qdf_mac_addr *bssid);
 
+/*
+ * scm_scan_get_entry_by_bssid_and_security() - function to get scan entry
+ * from bssid and the crypto params of the vdev
+ * @pdev: pdev object
+ * @bssid: bssid to be fetched from scan db
+ * @vdev_id: vdev id
+ * @ch_freq: channel frequency
+ *
+ * This API returns the scan entry with proper security_info.
+ *
+ * Return : scan entry if found, else NULL
+ */
+struct scan_cache_entry *
+scm_scan_get_entry_by_bssid_and_security(struct wlan_objmgr_pdev *pdev,
+					 struct qdf_mac_addr *bssid,
+					 uint8_t vdev_id,
+					 qdf_freq_t ch_freq);
+
 #ifdef WLAN_FEATURE_11BE_MLO
 /**
  * scm_get_mld_addr_by_link_addr() - function to fetch the peer mld address from
@@ -411,4 +441,21 @@ scm_get_mld_addr_by_link_addr(struct wlan_objmgr_pdev *pdev,
  */
 bool scm_scan_entries_contain_cmn_akm(struct scan_cache_entry *entry1,
 				      struct scan_cache_entry *entry2);
+
+#ifdef CONFIG_BAND_6GHZ
+/**
+ * util_scan_get_he_6g_params() - Function provides HE 6GHz params from HE ops
+ * @he_ops: HE ops
+ *
+ * Return: HE 6GHz params
+ */
+struct he_oper_6g_param *util_scan_get_he_6g_params(uint8_t *he_ops);
+#else
+static inline struct
+he_oper_6g_param *util_scan_get_he_6g_params(uint8_t *he_ops)
+{
+	return NULL;
+}
+#endif
+
 #endif

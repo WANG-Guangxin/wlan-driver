@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
  * Copyright (c) 2002-2010, Atheros Communications Inc.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -89,6 +89,11 @@ void dfs_nol_attach(struct wlan_dfs *dfs)
 	TAILQ_INIT(&dfs->dfs_nol_free_list);
 	dfs->dfs_use_nol = 1;
 	WLAN_DFSNOL_LOCK_CREATE(dfs);
+
+	if (dfs->is_retain_nol_cfg_enabled)
+		dfs->dfs_mm_nolinfo = dfs_mlme_nol_alloc_nol(dfs->dfs_pdev_obj);
+	else
+		dfs->dfs_mm_nolinfo = NULL;
 }
 
 void dfs_nol_detach(struct wlan_dfs *dfs)
@@ -328,6 +333,25 @@ void dfs_get_nol(struct wlan_dfs *dfs,
 	}
 }
 
+void dfs_get_radar_status(struct wlan_dfs *dfs,
+			  uint8_t *nchan)
+{
+	struct dfs_nolelem *nol;
+
+	*nchan = 0;
+
+	if (!dfs) {
+		dfs_err(dfs, WLAN_DEBUG_DFS_ALWAYS,  "dfs is NULL");
+		return;
+	}
+
+	nol = dfs->dfs_nol;
+	while (nol) {
+		++(*nchan);
+		nol = nol->nol_next;
+	}
+}
+
 #ifdef CONFIG_CHAN_FREQ_API
 void dfs_set_nol(struct wlan_dfs *dfs,
 		 struct dfsreq_nolelem *dfs_nol,
@@ -356,6 +380,11 @@ void dfs_set_nol(struct wlan_dfs *dfs,
 
 			DFS_NOL_ADD_CHAN_LOCKED(dfs, chan.dfs_ch_freq,
 						(nol_time_lft_ms / TIME_IN_MS));
+
+			utils_dfs_deliver_event(dfs->dfs_pdev_obj,
+						chan.dfs_ch_freq,
+						WLAN_EV_NOL_STARTED);
+
 			utils_dfs_reg_update_nol_chan_for_freq(
 						dfs->dfs_pdev_obj,
 						&chan.dfs_ch_freq,
@@ -581,6 +610,11 @@ void dfs_getnol(struct wlan_dfs *dfs, void *dfs_nolinfo)
 	struct dfsreq_nolinfo *nolinfo = (struct dfsreq_nolinfo *)dfs_nolinfo;
 
 	DFS_GET_NOL_LOCKED(dfs, nolinfo->dfs_nol, &(nolinfo->dfs_ch_nchans));
+}
+
+void dfs_getnol_status(struct wlan_dfs *dfs, uint8_t *nchans)
+{
+	DFS_GET_NOL_LOCKED_STATUS(dfs, nchans);
 }
 
 #if !defined(MOBILE_DFS_SUPPORT)

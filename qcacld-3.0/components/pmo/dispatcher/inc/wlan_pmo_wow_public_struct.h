@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -150,6 +150,12 @@
 #define DROP_PUBLIC_ACTION_FRAME_BITMAP \
 		(1 << PMO_MAC_ACTION_MEASUREMENT_PILOT)
 
+/* Bitmask to drop BTM action frames */
+#define DROP_WNM_ACTION_FRAME_BITMAP \
+		((1 << WNM_BSS_TM_QUERY) | \
+		 (1 << WNM_BSS_TM_REQUEST) |\
+		 (1 << WNM_BSS_TM_RESPONSE))
+
 #ifndef ANI_SUPPORT_11H
 /*
  * DROP_SPEC_MGMT_ACTION_FRAME_BITMAP
@@ -236,7 +242,7 @@ enum pmo_wow_state {
  * @lphb_cache: lphb cache
  * @lphb_cb_ctx: callback context for lphb, kept as void* as
  *                        osif structures are opaque to pmo.
- * @lphb_cb: registered os if calllback function
+ * @lphb_cb: registered os if callback function
  * @ptrn_id_def: default pattern id counter for legacy firmware
  * @ptrn_id_usr: user pattern id counter for legacy firmware
  * @txrx_suspended: flag to determine if TX/RX is suspended

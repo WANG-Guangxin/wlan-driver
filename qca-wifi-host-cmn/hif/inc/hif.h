@@ -50,7 +50,7 @@ typedef void __iomem *A_target_id_t;
 typedef void *hif_handle_t;
 
 #if defined(HIF_IPCI) && defined(FEATURE_HAL_DELAYED_REG_WRITE)
-#define HIF_WORK_DRAIN_WAIT_CNT 50
+#define HIF_WORK_DRAIN_WAIT_CNT 200
 
 #define HIF_EP_WAKE_RESET_WAIT_CNT 10
 #endif
@@ -87,6 +87,10 @@ typedef void *hif_handle_t;
 #define HIF_TYPE_PEACH 32
 #define HIF_TYPE_WCN6450 33
 #define HIF_TYPE_QCN6432 34
+#define HIF_TYPE_WCN7750 35
+#define HIF_TYPE_QCA5424 36
+#define HIF_TYPE_QCC2072 37
+#define HIF_TYPE_FIG 38
 
 #define DMA_COHERENT_MASK_DEFAULT   37
 
@@ -550,6 +554,7 @@ struct hif_direct_link_ce_info {
  * @HIF_EVENT_BH_COMPLETE: NAPI POLL completion event
  * @HIF_EVENT_BH_FORCE_BREAK: NAPI POLL force break event
  * @HIF_EVENT_IRQ_DISABLE_EXPIRED: IRQ disable expired event
+ * @HIF_EVENT_IRQ_REENABLED: IRQ re-enabled event
  */
 enum hif_event_type {
 	HIF_EVENT_IRQ_TRIGGER,
@@ -561,6 +566,7 @@ enum hif_event_type {
 	HIF_EVENT_BH_COMPLETE,
 	HIF_EVENT_BH_FORCE_BREAK,
 	HIF_EVENT_IRQ_DISABLE_EXPIRED,
+	HIF_EVENT_IRQ_REENABLED,
 	/* Do check hif_hist_skip_event_record when adding new events */
 };
 
@@ -779,7 +785,14 @@ static inline void hif_event_history_deinit(struct hif_opaque_softc *hif_ctx,
 }
 #endif /* WLAN_FEATURE_DP_EVENT_HISTORY */
 
+#ifndef HIF_SDIO
 void hif_display_ctrl_traffic_pipes_state(struct hif_opaque_softc *hif_ctx);
+#else
+static inline void
+hif_display_ctrl_traffic_pipes_state(struct hif_opaque_softc *hif_ctx)
+{
+}
+#endif
 
 #if defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) ||\
 	defined(RECORD_DP_CE_EVTS)
@@ -1028,7 +1041,8 @@ QDF_STATUS hif_diag_write_access(struct hif_opaque_softc *hif_ctx,
 QDF_STATUS hif_diag_write_mem(struct hif_opaque_softc *hif_ctx,
 			uint32_t address, uint8_t *data, int nbytes);
 
-typedef void (*fastpath_msg_handler)(void *, qdf_nbuf_t *, uint32_t);
+typedef void (*fastpath_msg_handler)(void *, qdf_nbuf_t *, uint32_t,
+				     unsigned int);
 
 void hif_enable_polled_mode(struct hif_opaque_softc *hif_ctx);
 bool hif_is_polled_mode_enabled(struct hif_opaque_softc *hif_ctx);
@@ -1258,6 +1272,7 @@ int hif_check_soc_status(struct hif_opaque_softc *hif_ctx);
 #endif
 void hif_get_hw_info(struct hif_opaque_softc *hif_ctx, u32 *version,
 			u32 *revision, const char **target_name);
+const char *hif_get_hw_name(struct hif_target_info *info);
 
 #ifdef RECEIVE_OFFLOAD
 /**
@@ -1404,6 +1419,8 @@ enum hif_ep_vote_access {
  * @HIF_RTPM_ID_FORCE_WAKE: Force wake request
  * @HIF_RTPM_ID_PM_QOS_NOTIFY:
  * @HIF_RTPM_ID_WIPHY_SUSPEND:
+ * @HIF_RTPM_ID_DP_STC: Datapath ML STC module
+ * @HIF_RTPM_ID_OPT_DP: optional datapath
  * @HIF_RTPM_ID_MAX: Max id
  */
 enum  hif_rtpm_client_id {
@@ -1417,6 +1434,8 @@ enum  hif_rtpm_client_id {
 	HIF_RTPM_ID_FORCE_WAKE,
 	HIF_RTPM_ID_PM_QOS_NOTIFY,
 	HIF_RTPM_ID_WIPHY_SUSPEND,
+	HIF_RTPM_ID_DP_STC,
+	HIF_RTPM_ID_OPT_DP,
 	HIF_RTPM_ID_MAX
 };
 
@@ -2049,6 +2068,7 @@ int ol_copy_ramdump(struct hif_opaque_softc *scn);
 void hif_crash_shutdown(struct hif_opaque_softc *hif_ctx);
 void hif_get_hw_info(struct hif_opaque_softc *hif_ctx, u32 *version,
 		     u32 *revision, const char **target_name);
+const char *hif_get_hw_name(struct hif_target_info *info);
 enum qdf_bus_type hif_get_bus_type(struct hif_opaque_softc *hif_hdl);
 struct hif_target_info *hif_get_target_info_handle(struct hif_opaque_softc *
 						   scn);
@@ -2261,6 +2281,25 @@ int hif_prevent_l1(struct hif_opaque_softc *hif);
  */
 void hif_allow_l1(struct hif_opaque_softc *hif);
 
+/**
+ * hif_disable_rtpm() - Disable runtime PM
+ * @hif: HIF opaque context
+ * @id: rtpm client id
+ *
+ * Return: 0 on success. Error code on failure.
+ */
+QDF_STATUS hif_disable_rtpm(struct hif_opaque_softc *hif,
+			    uint32_t id);
+
+/**
+ * hif_enable_rtpm() - Enable runtime PM
+ * @hif: HIF opaque context
+ * @id: rtpm client id
+ * Return: 0 on success. Error code on failure.
+ */
+QDF_STATUS hif_enable_rtpm(struct hif_opaque_softc *hif,
+			   uint32_t id);
+
 #else
 
 static inline
@@ -2272,6 +2311,20 @@ int hif_prevent_l1(struct hif_opaque_softc *hif)
 static inline
 void hif_allow_l1(struct hif_opaque_softc *hif)
 {
+}
+
+static inline
+QDF_STATUS hif_disable_rtpm(struct hif_opaque_softc *hif,
+			    uint32_t id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS hif_enable_rtpm(struct hif_opaque_softc *hifi,
+			   uint32_t id)
+{
+	return QDF_STATUS_SUCCESS;
 }
 #endif
 
@@ -2400,7 +2453,16 @@ QDF_STATUS hif_try_complete_dp_tasks(struct hif_opaque_softc *hif_ctx);
 
 #if defined(HIF_IPCI) && defined(FEATURE_HAL_DELAYED_REG_WRITE)
 QDF_STATUS hif_try_prevent_ep_vote_access(struct hif_opaque_softc *hif_ctx);
-void hif_set_ep_intermediate_vote_access(struct hif_opaque_softc *hif_ctx);
+
+/**
+ * hif_set_ep_intermediate_vote_access() - Set intermediate EP vote access
+ * @hif_ctx: opaque softc handle
+ *
+ * Return: QDF_STATUS of operation
+ */
+QDF_STATUS
+hif_set_ep_intermediate_vote_access(struct hif_opaque_softc *hif_ctx);
+
 void hif_allow_ep_vote_access(struct hif_opaque_softc *hif_ctx);
 void hif_set_ep_vote_access(struct hif_opaque_softc *hif_ctx,
 			    uint8_t type, uint8_t access);
@@ -2413,9 +2475,10 @@ hif_try_prevent_ep_vote_access(struct hif_opaque_softc *hif_ctx)
 	return QDF_STATUS_SUCCESS;
 }
 
-static inline void
+static inline QDF_STATUS
 hif_set_ep_intermediate_vote_access(struct hif_opaque_softc *hif_ctx)
 {
+	return QDF_STATUS_SUCCESS;
 }
 
 static inline void
@@ -2465,10 +2528,25 @@ void hif_srng_init_phase(struct hif_opaque_softc *hif_ctx,
  * Return:  None
  */
 void hif_shutdown_notifier_cb(void *ctx);
+
+/**
+ * hif_target_recovery_in_progress - Return true if target is in recovery
+ *				     in the event of firmware crash.
+ * @hif_ctx: hif handle
+ *
+ * Return:  True if target recovery is in progress else false
+ */
+bool hif_target_recovery_in_progress(struct hif_opaque_softc *hif_ctx);
 #else
 static inline
 void hif_shutdown_notifier_cb(void *ctx)
 {
+}
+
+static inline bool
+hif_target_recovery_in_progress(struct hif_opaque_softc *hif_ctx)
+{
+	return false;
 }
 #endif /* HIF_IPCI */
 
@@ -2739,16 +2817,19 @@ static inline int hif_system_pm_state_check(struct hif_opaque_softc *hif)
  * @scn: hif handle
  * @grp_intr_bitmask: grp intrs for which perf affinity should be
  *  applied
+ * @cpumask: cpu mask to which grp intrs should be affined
  * @perf: affine to perf or non-perf cluster
  *
  * Return: None
  */
 void hif_set_grp_intr_affinity(struct hif_opaque_softc *scn,
-			       uint32_t grp_intr_bitmask, bool perf);
+			       uint32_t grp_intr_bitmask,
+			       uint32_t cpumask, bool perf);
 #else
 static inline
 void hif_set_grp_intr_affinity(struct hif_opaque_softc *scn,
-			       uint32_t grp_intr_bitmask, bool perf)
+			       uint32_t grp_intr_bitmask,
+			       uint32_t cpumask, bool perf)
 {
 }
 #endif
@@ -2953,6 +3034,14 @@ hif_affinity_mgr_set_ce_irq_affinity(struct hif_softc *scn, uint32_t irq,
  * Return: None
  */
 void hif_affinity_mgr_affine_irq(struct hif_softc *scn);
+
+/**
+ * hif_affinity_mgr_supported() - checks for affinity mgr support
+ * @hif_ctx: hif opaque handle
+ *
+ * Return: true if affinity mgr supported else return flase
+ */
+bool hif_affinity_mgr_supported(struct hif_opaque_softc *hif_ctx);
 #else
 static inline void
 hif_affinity_mgr_init_ce_irq(struct hif_softc *scn, int id, int irq)
@@ -2984,6 +3073,12 @@ static inline
 void hif_affinity_mgr_affine_irq(struct hif_softc *scn)
 {
 }
+
+static inline bool
+hif_affinity_mgr_supported(struct hif_opaque_softc *hif_ctx)
+{
+	return false;
+}
 #endif
 
 /**
@@ -3014,4 +3109,17 @@ hif_flush_delayed_reg_write_work(struct hif_softc *scn)
 }
 #endif
 void hif_ce_print_ring_stats(struct hif_opaque_softc *hif_ctx);
+
+#ifdef WLAN_DP_LOAD_BALANCE_SUPPORT
+void hif_set_load_balance_enabled_flag(struct hif_opaque_softc *hif_ctx);
+void hif_get_wlan_rx_time_stats(struct hif_opaque_softc *hif_ctx,
+				uint64_t *wlan_irq_time,
+				uint64_t *wlan_ksoftirqd_time);
+void hif_check_and_apply_irq_affinity(struct hif_opaque_softc *hif_ctx,
+				      uint8_t grp_id, uint32_t cpu_id);
+#endif
+QDF_STATUS hif_bus_get_device_handle(struct hif_opaque_softc *hif_ctx,
+				     void **handle);
+
+void hif_set_target_access_allowed(bool access_allowed);
 #endif /* _HIF_H_ */

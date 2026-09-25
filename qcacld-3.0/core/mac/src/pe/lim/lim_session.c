@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -129,7 +129,7 @@ static void pe_init_beacon_params(struct mac_context *mac,
  * @ptr:        pointer to pe_session
  *
  * This function resets protection structs so that when an AP causing use of
- * protection goes away, corresponding protection bit can be reset. This allowes
+ * protection goes away, corresponding protection bit can be reset. This allows
  * protection bits to be reset once legacy overlapping APs are gone.
  *
  * Return: void
@@ -561,7 +561,7 @@ struct pe_session *pe_create_session(struct mac_context *mac,
 
 	/* Copy the BSSID to the session table */
 	sir_copy_mac_addr(session_ptr->bssId, bssid);
-	if (bssType == eSIR_MONITOR_MODE)
+	if (bssType == eSIR_MONITOR_MODE || bssType == eSIR_PASSTHRU_MODE)
 		sir_copy_mac_addr(mac->lim.gpSession[i].self_mac_addr, bssid);
 	session_ptr->valid = true;
 	/* Initialize the SME and MLM states to IDLE */
@@ -628,6 +628,9 @@ struct pe_session *pe_create_session(struct mac_context *mac,
 		lim_get_peer_idxpool_size(numSta, bssType)))
 		goto free_session_attrs;
 
+	if (eSIR_PASSTHRU_MODE == bssType)
+		session_ptr->limSystemRole = eLIM_PASSTHRU_ROLE;
+
 	if (eSIR_INFRASTRUCTURE_MODE == bssType)
 		lim_ft_open(mac, &mac->lim.gpSession[i]);
 
@@ -659,6 +662,10 @@ struct pe_session *pe_create_session(struct mac_context *mac,
 					   (void *)&mac->lim.gpSession[i]);
 		if (status != QDF_STATUS_SUCCESS)
 			pe_err("cannot create ap_ecsa_timer");
+
+		status = lim_post_csa_ocv_sa_query_timer_init(session_ptr);
+		if (status != QDF_STATUS_SUCCESS)
+			pe_err("cannot create post csa ocv sa query timer");
 	}
 	if (session_ptr->opmode == QDF_STA_MODE)
 		session_ptr->is_session_obss_color_collision_det_enabled =
@@ -832,6 +839,17 @@ static void lim_clear_mbssid_info(struct wlan_objmgr_vdev *vdev)
 	mlme_set_mbssid_info(vdev, &mbssid_info, INVALID_CHANNEL_NUM);
 }
 
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+static void lim_cleanup_log_instance_id(struct pe_session *session)
+{
+	if (!session->bRoamSynchInProgress)
+		lim_clear_log_instance_id(session);
+}
+#else
+static inline void lim_cleanup_log_instance_id(struct pe_session *session)
+{}
+#endif
+
 /**
  * pe_delete_session() - deletes the PE session given the session ID.
  * @mac_ctx: pointer to global adapter context
@@ -862,6 +880,7 @@ void pe_delete_session(struct mac_context *mac_ctx, struct pe_session *session)
 	lim_sae_auth_cleanup_retry(mac_ctx, session->vdev_id);
 	lim_cleanup_power_change(mac_ctx, session);
 	lim_clear_mbssid_info(session->vdev);
+	lim_cleanup_log_instance_id(session);
 
 	/* Restore default failure timeout */
 	if (session->defaultAuthFailureTimeout) {
@@ -891,6 +910,7 @@ void pe_delete_session(struct mac_context *mac_ctx, struct pe_session *session)
 		qdf_mc_timer_stop(&session->ap_ecsa_timer);
 		qdf_mc_timer_destroy(&session->ap_ecsa_timer);
 		lim_del_pmf_sa_query_timer(mac_ctx, session);
+		lim_post_csa_ocv_sa_query_timer_destroy(session);
 	}
 
 	/* Delete FT related information */

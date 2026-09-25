@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -42,6 +42,12 @@
  * @twt_stats_enabled: twt stats enabled
  * @twt_ack_supported: twt ack supported
  * @restricted_twt_support: Restricted TWT supported
+ * @p2p_go_concurrency_support: P2P GO concurrency support
+ * @min_wake_dur: minimum twt wake_dur supported by firmware in micro sec
+ * @max_wake_dur: maximum twt wake_dur supported by firmware in micro sec
+ * @min_wake_intvl: minimum twt wake_intvl supported by firmware in micro sec
+ * @max_wake_intvl: maximum twt wake_intvl supported by firmware in micro sec
+ * @twt_resp_disable_per_vdev: TWT responder disable per VDEV SVC
  */
 struct twt_tgt_caps {
 	bool twt_requestor;
@@ -54,6 +60,12 @@ struct twt_tgt_caps {
 	bool twt_stats_enabled;
 	bool twt_ack_supported;
 	bool restricted_twt_support;
+	bool p2p_go_concurrency_support;
+	uint16_t min_wake_dur;
+	uint16_t max_wake_dur;
+	uint16_t min_wake_intvl;
+	uint16_t max_wake_intvl;
+	bool twt_resp_disable_per_vdev;
 };
 
 /**
@@ -63,6 +75,9 @@ struct twt_tgt_caps {
  * @enable_context: enable context
  * @disable_context: disable context
  * @twt_pmo_disabled: twt pmo disabled
+ * @twt_requestor_enable_pending: If TWT requestor enable command is pending
+ * @twt_resp_flag: flag to check the TWT responder enable/disable per MAC
+ * BIT0: MAC0 and BIT1: MAC1
  */
 struct twt_psoc_priv_obj {
 	psoc_twt_ext_cfg_params_t cfg_params;
@@ -70,6 +85,8 @@ struct twt_psoc_priv_obj {
 	struct twt_en_dis_context enable_context;
 	struct twt_en_dis_context disable_context;
 	uint32_t twt_pmo_disabled;
+	qdf_atomic_t twt_requestor_enable_pending;
+	uint8_t twt_resp_flag;
 };
 
 /**

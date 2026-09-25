@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,6 +35,7 @@
 #include <cdp_txrx_misc.h>
 #include "wlan_dp_objmgr.h"
 #include "wlan_qmi_public_struct.h"
+#include <cdp_txrx_stats_struct.h>
 
 #define DP_IGNORE_NUD_FAIL                      0
 #define DP_DISCONNECT_AFTER_NUD_FAIL            1
@@ -123,6 +124,15 @@ void ucfg_dp_set_hif_handle(struct wlan_objmgr_psoc *psoc,
 			    struct hif_opaque_softc *hif_handle);
 void ucfg_dp_set_cmn_dp_handle(struct wlan_objmgr_psoc *psoc,
 			       ol_txrx_soc_handle soc);
+#ifdef WLAN_DP_FLOW_BALANCE_SUPPORT
+void ucfg_dp_update_num_rx_rings(struct wlan_objmgr_psoc *psoc);
+#else
+static inline void
+ucfg_dp_update_num_rx_rings(struct wlan_objmgr_psoc *psoc)
+{
+}
+#endif
+
 /**
  * ucfg_dp_init() - DP module initialization API
  *
@@ -464,6 +474,23 @@ QDF_STATUS ucfg_dp_mon_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
 }
 #endif
 
+#ifdef DRIVER_PASSTHRU_MODE
+/**
+ * ucfg_dp_passthrough_register_txrx_ops() - Register ops for Passthrough
+ *  TX/RX operations
+ * @vdev: vdev mapped to Passthrough mode DP interface
+ *
+ * Return: 0 on success and non zero on failure.
+ */
+QDF_STATUS ucfg_dp_passthrough_register_txrx_ops(struct wlan_objmgr_vdev *vdev);
+#else
+static inline
+QDF_STATUS ucfg_dp_passthrough_register_txrx_ops(struct wlan_objmgr_vdev *vdev)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
+
 /**
  * ucfg_dp_softap_register_txrx_ops() - Register ops for TX/RX operations
  * @vdev: vdev mapped to SAP mode DP interface
@@ -775,6 +802,15 @@ uint8_t ucfg_dp_nud_tracking_enabled(struct wlan_objmgr_psoc *psoc);
  * Return: None
  */
 void ucfg_dp_nud_indicate_roam(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * ucfg_dp_get_haps_config - get the haps config
+ *
+ * @psoc: PSOC Handle
+ *
+ * Return : HAPS config value.
+ */
+uint32_t ucfg_dp_get_haps_config(struct wlan_objmgr_psoc *psoc);
 
 /**
  * ucfg_dp_clear_arp_stats() - Clear ARP Stats
@@ -1176,6 +1212,27 @@ void ucfg_dp_runtime_disable_rx_thread(struct wlan_objmgr_vdev *vdev,
 				       bool value);
 
 /**
+ * ucfg_dp_fisa_route_to_latency_sensitive_reo() - Enable route to latency
+ *						   sensitive reo
+ * @vdev: vdev handle
+ * @value : value to be set (true/false)
+ *
+ * Return: None
+ */
+void ucfg_dp_fisa_route_to_latency_sensitive_reo(struct wlan_objmgr_vdev *vdev,
+						 bool value);
+
+/**
+ * ucfg_dp_runtime_disable_rx_fisa_aggr() - Disable FISA aggregation
+ * @vdev: vdev handle
+ * @value : value to be set (true/false)
+ *
+ * Return: None
+ */
+void ucfg_dp_runtime_disable_rx_fisa_aggr(struct wlan_objmgr_vdev *vdev,
+					  bool value);
+
+/**
  * ucfg_dp_get_napi_enabled() - Get NAPI enabled/disabled info
  * @psoc: psoc handle mapped to DP context
  *
@@ -1264,6 +1321,39 @@ void ucfg_dp_rx_skip_fisa(uint32_t value)
 {
 }
 #endif
+
+/**
+ * ucfg_dp_spm_dump_tx_aft() - Dump TX active flow table
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: None
+ */
+void ucfg_dp_spm_dump_tx_aft(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_stc_print_classified_table() - Print classified flow table
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: NULL
+ */
+void ucfg_dp_stc_print_classified_table(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_stc_print_sampling_table() - Print sampling flow table
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: NULL
+ */
+void ucfg_dp_stc_print_sampling_table(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_stc_print_active_traffic_map() - Print active traffic map
+ *					    for all the peers
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: NULL
+ */
+void ucfg_dp_stc_print_active_traffic_map(struct wlan_objmgr_psoc *psoc);
 
 #ifdef DP_TRAFFIC_END_INDICATION
 /**
@@ -1450,6 +1540,36 @@ void ucfg_dp_wfds_del_server(void);
 QDF_STATUS ucfg_dp_config_direct_link(qdf_netdev_t dev,
 				      bool config_direct_link,
 				      bool enable_low_latency);
+
+/**
+ * ucfg_dp_set_lpass_ssr_notif_hdl() - Set lpass ssr notifier handle in DP
+ *  direct link context
+ * @psoc: psoc handle
+ * @handle: lpass ssr notifier handle to be set
+ *
+ * Return: QDF status
+ */
+QDF_STATUS
+ucfg_dp_set_lpass_ssr_notif_hdl(struct wlan_objmgr_psoc *psoc, void *handle);
+
+/**
+ * ucfg_dp_get_lpass_ssr_notif_hdl() - Get lpass ssr notifier handle
+ *  direct link context
+ * @psoc: psoc handle
+ *
+ * Return: pointer to handle
+ */
+void *ucfg_dp_get_lpass_ssr_notif_hdl(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_direct_link_handle_lpass_ssr_notif() - Handle LPASS SSR notification
+ *  in the context of direct link
+ * @psoc: psoc handle
+ *
+ * Return: QDF status
+ */
+QDF_STATUS
+ucfg_dp_direct_link_handle_lpass_ssr_notif(struct wlan_objmgr_psoc *psoc);
 #else
 static inline
 QDF_STATUS ucfg_dp_direct_link_init(struct wlan_objmgr_psoc *psoc)
@@ -1490,6 +1610,24 @@ QDF_STATUS ucfg_dp_config_direct_link(qdf_netdev_t dev,
 {
 	return QDF_STATUS_SUCCESS;
 }
+
+static inline QDF_STATUS
+ucfg_dp_set_lpass_ssr_notif_hdl(struct wlan_objmgr_psoc *psoc, void *handle)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+void *ucfg_dp_get_lpass_ssr_notif_hdl(struct wlan_objmgr_psoc *psoc)
+{
+	return NULL;
+}
+
+static inline QDF_STATUS
+ucfg_dp_direct_link_handle_lpass_ssr_notif(struct wlan_objmgr_psoc *psoc)
+{
+	return QDF_STATUS_SUCCESS;
+}
 #endif
 
 /**
@@ -1500,6 +1638,15 @@ QDF_STATUS ucfg_dp_config_direct_link(qdf_netdev_t dev,
  * Return: QDF_STATUS
  */
 QDF_STATUS ucfg_dp_bus_suspend(ol_txrx_soc_handle soc, uint8_t pdev_id);
+
+/**
+ * ucfg_dp_fisa_suspend() - FISA suspend DP handler
+ * @soc: CDP SoC handle
+ * @pdev_id: DP PDEV ID
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_dp_fisa_suspend(ol_txrx_soc_handle soc, uint8_t pdev_id);
 
 /**
  * ucfg_dp_bus_resume() - BUS resume DP handler
@@ -1527,6 +1674,15 @@ void *ucfg_dp_txrx_soc_attach(struct dp_txrx_soc_attach_params *params,
  * Return: None
  */
 void ucfg_dp_txrx_soc_detach(ol_txrx_soc_handle soc);
+
+/**
+ * ucfg_dp_txrx_set_default_affinity() - Set default affinity for
+ * dp rx interrupts
+ * @psoc: psoc handle
+ *
+ * Return: None
+ */
+void ucfg_dp_txrx_set_default_affinity(struct wlan_objmgr_psoc *psoc);
 
 /**
  * ucfg_dp_txrx_attach_target() - DP target attach
@@ -1584,6 +1740,23 @@ QDF_STATUS ucfg_dp_txrx_deinit(ol_txrx_soc_handle soc);
  */
 QDF_STATUS ucfg_dp_txrx_ext_dump_stats(ol_txrx_soc_handle soc,
 				       uint8_t stats_id);
+
+/**
+ * ucfg_dp_haps_dump_stats() - print haps stats
+ * @psoc: pointer to psoc object
+ *
+ * Return: QDF_STATUS_SUCCESS on success, error qdf status on failure
+ */
+QDF_STATUS ucfg_dp_haps_dump_stats(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_haps_clear_stats() - clear haps stats
+ * @psoc: pointer to psoc object
+ *
+ * Return: none
+ */
+void ucfg_dp_haps_clear_stats(struct wlan_objmgr_psoc *psoc);
+
 /**
  * ucfg_dp_txrx_set_cpu_mask() - set CPU mask for RX threads
  * @soc: ol_txrx_soc_handle object
@@ -1594,12 +1767,14 @@ QDF_STATUS ucfg_dp_txrx_ext_dump_stats(ol_txrx_soc_handle soc,
 QDF_STATUS ucfg_dp_txrx_set_cpu_mask(ol_txrx_soc_handle soc,
 				     qdf_cpu_mask *new_mask);
 
+#define DP_STAT_NUM_SINGLE_LINK 1
+#define DP_STAT_NUM_ALL_LINKS WLAN_MAX_MLD
 /**
  * ucfg_dp_get_per_link_peer_stats() - Call to get per link peer stats
  * @soc: soc handle
  * @vdev_id: vdev_id of vdev object
  * @peer_mac: mac address of the peer
- * @peer_stats: destination buffer
+ * @peer_stats: destination buffer, num_link * size of cdp_peer_stats
  * @peer_type: Peer type
  * @num_link: Number of ML links
  *
@@ -1614,6 +1789,24 @@ ucfg_dp_get_per_link_peer_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
 				struct cdp_peer_stats *peer_stats,
 				enum cdp_peer_type peer_type,
 				uint8_t num_link);
+
+/**
+ * ucfg_dp_ipa_ctrl_debug_supported() - get ini for opt_dp_ctrl debugging
+ * in IPA module
+ * @psoc: pointer to psoc object
+ *
+ * Return: true if ctrl debugging enabled from ini false otherwise
+ */
+bool ucfg_dp_ipa_ctrl_debug_supported(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * enum wlan_ipa_debug_value - ipa debug code
+ * @IPA_DEBUG_OPT_DP_CTRL: debug opt_dp_ctrl feature
+ *
+ */
+enum wlan_ipa_debug_value {
+	IPA_DEBUG_OPT_DP_CTRL = 1
+};
 
 #ifdef WLAN_FEATURE_LOCAL_PKT_CAPTURE
 /**
@@ -1644,6 +1837,243 @@ ucfg_dp_is_local_pkt_capture_enabled(struct wlan_objmgr_psoc *psoc)
 QDF_STATUS ucfg_dp_get_vdev_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
 				  struct cdp_vdev_stats *buf);
 
+#ifdef WLAN_SUPPORT_SERVICE_CLASS
+/*
+ * ucfg_dp_svc_add() - Add service class
+ * @data: pointer to svc data
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_dp_svc_add(struct dp_svc_data *data);
+
+/*
+ * ucfg_dp_svc_remove() - Remove service class
+ * @svc_id: service class id
+ *
+ * Return: Zero in case of successful deletion
+ */
+QDF_STATUS ucfg_dp_svc_remove(uint8_t svc_id);
+
+/*
+ * ucfg_dp_svc_get() - Get service class
+ * @svc_id: service class id
+ * @svc_table: pointer to service claass table
+ * @table_size: size of svc table
+ *
+ * Return: number of service class in a svc table
+ */
+uint8_t ucfg_dp_svc_get(uint8_t svc_id,	struct dp_svc_data *svc_table,
+			uint16_t table_size);
+#else
+static inline QDF_STATUS
+ucfg_dp_svc_add(struct dp_svc_data *data)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+ucfg_dp_svc_remove(uint8_t svc_id)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline uint8_t
+ucfg_dp_svc_get(uint8_t svc_id, struct dp_svc_data *svc_table,
+		uint16_t table_size)
+{
+	return 0;
+}
+#endif
+
+
+#ifdef WLAN_SUPPORT_FLOW_PRIORTIZATION
+/*
+ * ucfg_dp_fim_display_hash_table() - Display FIM node from hash table
+ * @vdev: vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fim_display_hash_table(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_dp_fim_clear_hash_table() - Clear FIM nodes from hash table
+ * @vdev: vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fim_clear_hash_table(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_dp_fim_display_stats() - Display FIM stats
+ * @vdev: vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fim_display_stats(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_dp_fim_clear_stats() - Clear FIM stats
+ * @vdev: vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fim_clear_stats(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_dp_fpm_check_tid_override_tagged() - Check skb marked with tid override
+ * @nbuf: skb
+ *
+ * Return: True if skb marked with tid override
+ */
+bool ucfg_dp_fpm_check_tid_override_tagged(qdf_nbuf_t nbuf);
+
+/*
+ * ucfg_dp_fpm_display_policy() - Display FPM policies
+ * @vdev: vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fpm_display_policy(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_fpm_policy_get_ctx_by_vdev() - Fet FPM context from vdev
+ * @vdev: vdev
+ *
+ * Return: Return fpm context
+ */
+struct fpm_table *
+ucfg_fpm_policy_get_ctx_by_vdev(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * ucfg_fpm_policy_add() - Add FPM policy
+ * @fpm: FPM context
+ * @policy: Flow policy
+ *
+ * Return: 0 if FPM policy added successfully
+ */
+QDF_STATUS ucfg_fpm_policy_add(struct fpm_table *fpm, struct dp_policy *policy);
+
+/*
+ * ucfg_fpm_policy_update() - Update FPM policy
+ * @fpm: FPM context
+ * @policy: Flow policy
+ *
+ * Return: 0 if FPM policy updated successfully
+ */
+QDF_STATUS ucfg_fpm_policy_update(struct fpm_table *fpm,
+				  struct dp_policy *policy);
+
+/*
+ * ucfg_fpm_policy_rem() - Remove FPM policy
+ * @fpm: FPM context
+ * @cookie: Cookie to get associated policy
+ *
+ * Return: 0 if FPM policy removed successfully
+ */
+QDF_STATUS ucfg_fpm_policy_rem(struct fpm_table *fpm, uint64_t cookie);
+
+/*
+ * ucfg_fpm_policy_get() - Get FPM policy array
+ * @fpm: FPM context
+ * @policy: Flow policy array to be filled
+ *
+ * Return: Policy count
+ */
+uint8_t ucfg_fpm_policy_get(struct fpm_table *fpm, struct dp_policy *policy,
+			    uint8_t max_count);
+#else
+static inline
+void ucfg_dp_fim_display_hash_table(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+void ucfg_dp_fim_clear_hash_table(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+void ucfg_dp_fim_display_stats(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+void ucfg_dp_fim_clear_stats(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+bool ucfg_dp_fpm_check_tid_override_tagged(qdf_nbuf_t nbuf)
+{
+	return false;
+}
+
+static inline
+void ucfg_dp_fpm_display_policy(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+struct fpm_table *ucfg_fpm_policy_get_ctx_by_vdev(struct wlan_objmgr_vdev *vdev)
+{
+	return NULL;
+}
+
+static inline
+QDF_STATUS ucfg_fpm_policy_add(struct fpm_table *fpm, struct dp_policy *policy)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS ucfg_fpm_policy_update(struct fpm_table *fpm,
+				  struct dp_policy *policy)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS ucfg_fpm_policy_rem(struct fpm_table *fpm, uint64_t cookie)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+uint8_t ucfg_fpm_policy_get(struct fpm_table *fpm, struct dp_policy *policy,
+			    uint8_t max_count)
+{
+	return 0;
+}
+#endif
+
+#ifdef WLAN_SUPPORT_LAPB
+/*
+ * ucfg_dp_lapb_handle_app_ind() - Handle LAPB application traffic end
+ *				   indication
+ * @nbuf: skb
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_dp_lapb_handle_app_ind(qdf_nbuf_t nbuf);
+#else
+static inline
+QDF_STATUS ucfg_dp_lapb_handle_app_ind(qdf_nbuf_t nbuf)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
+
+/**
+ * ucfg_dp_ml_mon_supported() - API to get ML mon support
+ *
+ * Return: Return true if ML mon mode supported
+ */
+bool ucfg_dp_ml_mon_supported(void);
+#ifdef WLAN_FEATURE_FILS_SK_SAP
+QDF_STATUS ucfg_dp_hlp_state_update(struct wlan_objmgr_vdev *vdev,
+				    struct qdf_mac_addr *peer_addr);
+#endif
+
 /*
  * ucfg_dp_set_mon_conf_flags(): Set monitor configuration flags
  * @psoc: psoc handle
@@ -1652,4 +2082,191 @@ QDF_STATUS ucfg_dp_get_vdev_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
  * Return: None
  */
 void ucfg_dp_set_mon_conf_flags(struct wlan_objmgr_psoc *psoc, uint32_t flags);
+
+/*
+ * ucfg_dp_recover_mon_conf_flags(): Set monitor configuration flags
+ *                                   from the one saved in dp_ctx
+ * @psoc: psoc handle
+ *
+ * Return: None
+ */
+void ucfg_dp_recover_mon_conf_flags(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_rx_aggr_dis_req() -  Request Rx aggregation  disable
+ * @vdev: vdev mapped to DP interface
+ * @id: Client ID
+ * @disable: Disable aggregation
+ *
+ * Return: None
+ */
+void
+ucfg_dp_rx_aggr_dis_req(struct wlan_objmgr_vdev *vdev,
+			enum ctrl_rx_aggr_client_id id, bool disable);
+
+#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
+/**
+ * ucfg_dp_dump_periodic_custom_stats_enable_req() - Request dump periodic
+ *						     custom stats enable/disable
+ * @vdev: vdev mapped to DP interface
+ * @enable: Enable or disable dump periodic custom stats
+ *
+ * Return: None
+ */
+void
+ucfg_dp_dump_periodic_custom_stats_enable_req(struct wlan_objmgr_vdev *vdev,
+					      bool enable);
+
+/**
+ * ucfg_dp_get_dump_periodic_custom_stats_enable() - Get dump periodic custom
+ *						     stats enable status
+ * @vdev: vdev mapped to DP interface
+ *
+ * Return: true if dump periodic custom stats is enabled, false otherwise
+ */
+bool
+ucfg_dp_get_dump_periodic_custom_stats_enable(struct wlan_objmgr_vdev *vdev);
+#endif
+
+#ifdef WLAN_DP_FEATURE_STC
+/**
+ * ucfg_dp_flow_classify_result() - Indicate Flow classify result
+ * @flow_classify_result: Flow classify result
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_dp_flow_classify_result(struct wlan_dp_stc_flow_classify_result *flow_classify_result);
+
+QDF_STATUS ucfg_dp_flow_stats_policy(enum qca_async_stats_type type,
+				     enum qca_async_stats_action);
+
+/**
+ * ucfg_dp_stc_get_logmask() - Get STC log mask
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: logmask configured in STC
+ */
+uint32_t ucfg_dp_stc_get_logmask(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_dp_stc_update_logmask() - Set STC log mask
+ * @psoc: Objmgr psoc handle
+ * @mask: new log mask to be set
+ *
+ * Return: None
+ */
+void ucfg_dp_stc_update_logmask(struct wlan_objmgr_psoc *psoc, uint32_t mask);
+
+QDF_STATUS
+ucfg_telemetry_start_opm_stats(struct wlan_objmgr_vdev *vdev,
+			       uint32_t periodicity);
+QDF_STATUS
+ucfg_telemetry_stop_opm_stats(struct wlan_objmgr_vdev *vdev);
+#else
+static inline QDF_STATUS
+ucfg_telemetry_start_opm_stats(struct wlan_objmgr_vdev *vdev,
+			       uint32_t periodicity)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+ucfg_telemetry_stop_opm_stats(struct wlan_objmgr_vdev *vdev)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif /* WLAN_DP_FEATURE_STC */
+
+#if defined(WLAN_SUPPORT_FLOW_PRIORTIZATION) || defined(WLAN_FEATURE_SAWFISH) \
+						|| defined(WLAN_DP_FEATURE_STC)
+/*
+ * ucfg_dp_fim_update_metadata() - Update skb with metadata
+ * @nbuf: skb
+ * @vdev:vdev
+ *
+ * Return: None
+ */
+void ucfg_dp_fim_update_metadata(qdf_nbuf_t nbuf,
+				 struct wlan_objmgr_vdev *vdev);
+#else
+static inline void ucfg_dp_fim_update_metadata(qdf_nbuf_t nbuf,
+					       struct wlan_objmgr_vdev *vdev)
+{
+}
+#endif
+
+#ifdef IPA_WDI3_VLAN_SUPPORT
+/**
+ * ucfg_dp_send_pdev_pkt_routing_vlan() - Send pdev update packet routing cmd
+ * @psoc: psoc handle
+ * @pdev_id: DP pdev id
+ *
+ * Return: void
+ */
+void ucfg_dp_send_pdev_pkt_routing_vlan(struct wlan_objmgr_psoc *psoc,
+					uint8_t pdev_id);
+#else /* !IPA_WDI3_VLAN_SUPPORT */
+static inline void
+ucfg_dp_send_pdev_pkt_routing_vlan(struct wlan_objmgr_psoc *psoc,
+				   uint8_t pdev_id)
+{
+}
+#endif /* IPA_WDI3_VLAN_SUPPORT */
+
+/**
+ * ucfg_dp_set_def_tidmap_prty() - Set default tidmap priority
+ * @vdev: vdev
+ * @pri: tidmap priority value
+ *
+ * Return: int
+ */
+int ucfg_dp_set_def_tidmap_prty(struct wlan_objmgr_vdev *vdev,
+				uint32_t pri);
+/**
+ * ucfg_dp_set_ipv4_addr() - Set IPv4 address
+ * @vdev: vdev
+ * @ip_addr: IPv4 address
+ *
+ * Return: void
+ */
+void ucfg_dp_set_ipv4_addr(struct wlan_objmgr_vdev *vdev, uint8_t *ip_addr);
+
+#ifdef NDP_TX_BW_FLOW_CTRL
+/**
+ * ucfg_dp_is_ndp_bw_flow_ctrl_enabled() - Get NDP bw flow control
+ *  enable/disable info
+ * @psoc: Objmgr psoc handle
+ *
+ * Return: true if ndp bw flow control is enabled else falses
+ */
+bool ucfg_dp_is_ndp_bw_flow_ctrl_enabled(struct wlan_objmgr_psoc *psoc);
+#else
+static inline
+bool ucfg_dp_is_ndp_bw_flow_ctrl_enabled(struct wlan_objmgr_psoc *psoc)
+{
+	return false;
+}
+#endif
+
+/**
+ * ucfg_dp_qos_latency_stats_request() - latency stats request
+ * @vdev: vdev handle
+ * @req: request pointer
+ *
+ * Return: QDF_STATUS
+ *
+ */
+QDF_STATUS ucfg_dp_qos_latency_stats_request(struct wlan_objmgr_vdev *vdev,
+					     struct cdp_qos_latency_stats *req);
+
+/**
+ * ucfg_dp_qos_latency_get_stats() - Get QoS latency stats
+ * @vdev: vdev handle
+ * @stats: Latency stats pointer
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+ucfg_dp_qos_latency_get_stats(struct wlan_objmgr_vdev *vdev,
+			      struct cdp_qos_latency_stats_req *stats);
 #endif /* _WLAN_DP_UCFG_API_H_ */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -112,6 +112,7 @@ void wlan_cfg80211_translate_key(struct wlan_objmgr_vdev *vdev,
 		   QDF_MAC_ADDR_REF(crypto_key->macaddr));
 }
 
+#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
 int wlan_cfg80211_store_link_key(struct wlan_objmgr_psoc *psoc,
 				 uint8_t key_index,
 				 enum wlan_crypto_key_type key_type,
@@ -123,6 +124,7 @@ int wlan_cfg80211_store_link_key(struct wlan_objmgr_psoc *psoc,
 	enum wlan_crypto_cipher_type cipher;
 	int cipher_len;
 	QDF_STATUS status;
+	bool is_crypto_key_malloc = false;
 
 	if (!psoc) {
 		osif_err("psoc is NULL");
@@ -166,6 +168,7 @@ int wlan_cfg80211_store_link_key(struct wlan_objmgr_psoc *psoc,
 		crypto_key = qdf_mem_malloc(sizeof(*crypto_key));
 		if (!crypto_key)
 			return -EINVAL;
+		is_crypto_key_malloc = true;
 		wlan_crypto_aquire_lock();
 	}
 
@@ -177,12 +180,15 @@ int wlan_cfg80211_store_link_key(struct wlan_objmgr_psoc *psoc,
 	if (QDF_IS_STATUS_ERROR(status)) {
 		wlan_crypto_release_lock();
 		osif_err("Failed to save key");
-		qdf_mem_free(crypto_key);
+		if (is_crypto_key_malloc)
+			qdf_mem_free(crypto_key);
+
 		return -EINVAL;
 	}
 	wlan_crypto_release_lock();
 	return 0;
 }
+#endif
 
 int wlan_cfg80211_store_key(struct wlan_objmgr_vdev *vdev, uint8_t key_index,
 			    enum wlan_crypto_key_type key_type,
@@ -192,6 +198,7 @@ int wlan_cfg80211_store_key(struct wlan_objmgr_vdev *vdev, uint8_t key_index,
 	enum wlan_crypto_cipher_type cipher;
 	int cipher_len;
 	QDF_STATUS status;
+	bool is_crypto_key_malloc = false;
 
 	if (!vdev) {
 		osif_err("vdev is NULL");
@@ -234,6 +241,7 @@ int wlan_cfg80211_store_key(struct wlan_objmgr_vdev *vdev, uint8_t key_index,
 		crypto_key = qdf_mem_malloc(sizeof(*crypto_key));
 		if (!crypto_key)
 			return -EINVAL;
+		is_crypto_key_malloc = true;
 		wlan_crypto_aquire_lock();
 	}
 
@@ -244,7 +252,8 @@ int wlan_cfg80211_store_key(struct wlan_objmgr_vdev *vdev, uint8_t key_index,
 	if (QDF_IS_STATUS_ERROR(status)) {
 		wlan_crypto_release_lock();
 		osif_err("Failed to save key");
-		qdf_mem_free(crypto_key);
+		if (is_crypto_key_malloc)
+			qdf_mem_free(crypto_key);
 		return -EINVAL;
 	}
 	wlan_crypto_release_lock();

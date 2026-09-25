@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -387,6 +387,15 @@ typedef QDF_STATUS (*md_host_evt_cb)(void *hdd_ctx, struct sir_md_evt *event);
 typedef QDF_STATUS (*md_bl_evt_cb)(void *hdd_ctx, struct sir_md_bl_evt *event);
 #endif /* WLAN_FEATURE_MOTION_DETECTION */
 
+#if defined(WLAN_FEATURE_MULTI_LINK_SAP)
+#define TSF_MAC_HEADER_TIME_2GHZ 192
+#define TSF_MAC_HEADER_TIME_5GHZ 32
+#define TSF_MAC_HEADER_TIME_6GHZ 32
+#define TSF_PHY_HEADER_TIME_2GHZ 192
+#define TSF_PHY_HEADER_TIME_5GHZ 20
+#define TSF_PHY_HEADER_TIME_6GHZ 20
+#endif /* WLAN_FEATURE_MULTI_LINK_SAP */
+
 struct sme_context {
 	eSmeState state;
 	qdf_mutex_t sme_global_lock;
@@ -505,6 +514,10 @@ struct sme_context {
 	/* async oem event callback */
 	void (*oem_data_async_event_handler_cb)
 			(const struct oem_data *oem_event_data);
+#ifdef FEATURE_SMEM_MAILBOX
+	void (*oem_data_smem_event_handler_cb)
+			(const struct oem_data *oem_event_data);
+#endif
 #endif
 
 	QDF_STATUS (*pagefault_action_cb)(void *buf, uint32_t data);
@@ -518,13 +531,18 @@ struct sme_context {
 	sme_get_raom_scan_ch_callback roam_scan_ch_callback;
 	void *roam_scan_ch_get_context;
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
-	void (*monitor_mode_cb)(uint8_t vdev_id);
+	void (*monitor_mode_cb)(uint8_t vdev_id, bool is_up);
 #endif
 #if defined(CLD_PM_QOS) && defined(WLAN_FEATURE_LL_MODE)
 	void (*beacon_latency_event_cb)(uint32_t latency_level);
 #endif
 	QDF_STATUS (*sme_vdev_del_cb)(mac_handle_t mac_handle,
 				      struct wlan_objmgr_vdev *vdev);
+	void (*set_disconnect_link_info_cb)(uint8_t vdev_id,
+					    bool is_disconnect_sent);
+#ifdef DRIVER_PASSTHRU_MODE
+	void (*passthrough_mode_cb)(uint8_t vdev_id, bool is_up);
+#endif
 };
 
 #endif /* #if !defined( __SMEINTERNAL_H ) */

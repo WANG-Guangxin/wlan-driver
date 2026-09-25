@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -54,6 +54,33 @@ uint32_t ucfg_pmo_get_apf_instruction_size(struct wlan_objmgr_psoc *psoc)
 		return 0;
 
 	return pmo_get_apf_instruction_size(psoc);
+}
+
+uint32_t ucfg_pmo_get_apf_mode(struct wlan_objmgr_psoc *psoc)
+{
+	if (!psoc)
+		return 0;
+
+	return pmo_get_apf_mode(psoc);
+}
+
+QDF_STATUS ucfg_pmo_set_apf_mode(struct wlan_objmgr_psoc *psoc,
+				 uint32_t apf_mode,
+				 uint32_t vdev_id)
+{
+	if (!psoc)
+		return QDF_STATUS_E_INVAL;
+
+	return pmo_set_apf_mode(psoc, apf_mode, vdev_id);
+}
+
+QDF_STATUS ucfg_pmo_store_apf_mode(struct wlan_objmgr_psoc *psoc,
+				   uint32_t apf_mode)
+{
+	if (!psoc)
+		return QDF_STATUS_E_INVAL;
+
+	return pmo_store_apf_mode(psoc, apf_mode);
 }
 
 uint8_t ucfg_pmo_get_num_wow_filters(struct wlan_objmgr_psoc *psoc)
@@ -195,6 +222,12 @@ ucfg_pmo_disable_ns_offload_in_fwr(struct wlan_objmgr_vdev *vdev,
 	return pmo_core_disable_ns_offload_in_fwr(vdev, trigger);
 }
 #endif /* WLAN_NS_OFFLOAD */
+
+bool
+ucfg_pmo_tgt_psoc_get_runtime_pm_in_progress(struct wlan_objmgr_psoc *psoc)
+{
+	return pmo_tgt_psoc_get_runtime_pm_inprogress(psoc);
+}
 
 #ifdef FEATURE_WLAN_DYNAMIC_ARP_NS_OFFLOAD
 QDF_STATUS
@@ -723,15 +756,17 @@ bool ucfg_pmo_is_apf_enabled(struct wlan_objmgr_psoc *psoc)
 
 	return pmo_intersect_apf(pmo_psoc_ctx);
 }
-#endif
 
-bool
-ucfg_pmo_is_ssdp_enabled(struct wlan_objmgr_psoc *psoc)
+uint32_t ucfg_pmo_get_apfv6_offload_bitmap(struct wlan_objmgr_psoc *psoc)
 {
-	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
-
-	return pmo_psoc_ctx->psoc_cfg.ssdp;
+	return pmo_get_apfv6_offload_bitmap(psoc);
 }
+
+bool ucfg_pmo_is_apf_mode_enabled(struct wlan_objmgr_psoc *psoc)
+{
+	return pmo_is_apf_mode_enabled(psoc);
+}
+#endif
 
 #ifdef FEATURE_RUNTIME_PM
 uint32_t
@@ -760,6 +795,40 @@ ucfg_pmo_get_sta_dynamic_dtim(struct wlan_objmgr_psoc *psoc)
 	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
 
 	return pmo_psoc_ctx->psoc_cfg.sta_dynamic_dtim;
+}
+
+uint8_t
+ucfg_pmo_get_sta_teles_dtim(struct wlan_objmgr_psoc *psoc)
+{
+	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
+
+	return pmo_psoc_ctx->psoc_cfg.sta_teles_dtim;
+}
+
+void
+ucfg_pmo_set_sta_teles_dtim(struct wlan_objmgr_psoc *psoc,
+			    uint8_t val)
+{
+	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
+
+	pmo_psoc_ctx->psoc_cfg.sta_teles_dtim = val;
+}
+
+uint8_t
+ucfg_pmo_get_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc)
+{
+	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
+
+	return pmo_psoc_ctx->psoc_cfg.min_teles_dtim;
+}
+
+void
+ucfg_pmo_set_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc,
+				uint8_t val)
+{
+	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
+
+	pmo_psoc_ctx->psoc_cfg.min_teles_dtim = val;
 }
 
 uint8_t
@@ -1111,4 +1180,24 @@ QDF_STATUS ucfg_pmo_get_vdev_bridge_addr(struct wlan_objmgr_vdev *vdev,
 					 struct qdf_mac_addr *bridgeaddr)
 {
 	return pmo_get_vdev_bridge_addr(vdev, bridgeaddr);
+}
+
+bool ucfg_pmo_is_fw_debug_enable(struct wlan_objmgr_psoc *psoc)
+{
+	return cfg_get(psoc, CFG_PMO_FW_DEBUG_ENABLE);
+}
+
+bool
+ucfg_pmo_get_ns_offload_enable_dynamic(struct wlan_objmgr_vdev *vdev)
+{
+	return pmo_core_get_ns_offload_enable_dynamic(vdev);
+}
+
+void
+ucfg_pmo_set_ns_offload_enable_dynamic(struct wlan_objmgr_vdev *vdev,
+				       enum pmo_offload_trigger trigger,
+				       bool ns_offload_enable_dyn)
+{
+	return pmo_core_set_ns_offload_enable_dynamic(vdev, trigger,
+						      ns_offload_enable_dyn);
 }

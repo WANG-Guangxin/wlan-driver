@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -177,7 +177,7 @@ QDF_STATUS pmo_core_update_psoc_config(struct wlan_objmgr_psoc *psoc,
 /**
  * pmo_psoc_set_caps() - overwrite configured device capability flags
  * @psoc: the psoc for which the capabilities apply
- * @caps: the cabability information to configure
+ * @caps: the capability information to configure
  *
  * Return: None
  */
@@ -370,6 +370,20 @@ static inline bool pmo_intersect_apf(struct pmo_psoc_priv_obj *psoc_ctx)
 }
 
 /**
+ * pmo_get_apfv6_offload_bitmap() - API to get Offload bitmap in APFv6 mode
+ * @psoc: PSOC object manager pointer.
+ *
+ * Return: Offload bitmap in APFv6 mode
+ */
+static inline uint32_t
+pmo_get_apfv6_offload_bitmap(struct wlan_objmgr_psoc *psoc)
+{
+	struct pmo_psoc_priv_obj *pmo_psoc_ctx = pmo_psoc_get_priv(psoc);
+
+	return pmo_psoc_ctx->psoc_cfg.apfv6_disable_offload_bitmap;
+}
+
+/**
  * pmo_intersect_packet_filter() - intersect config and firmware capability for
  *	the APF feature
  * @psoc_ctx: A PMO psoc context
@@ -488,5 +502,13 @@ pmo_core_is_configure_apf_per_screen_state(struct wlan_objmgr_psoc *psoc)
 
 	return pmo_psoc_ctx->psoc_cfg.is_apf_configure_per_screen_state;
 }
+
+/**
+ * pmo_is_apf_mode_enabled() - API to get config of APF mode
+ * @psoc: PSOC object manager pointer.
+ *
+ * Return: True if apf mode can be configured
+ */
+bool pmo_is_apf_mode_enabled(struct wlan_objmgr_psoc *psoc);
 #endif
 #endif /* end  of _WLAN_PMO_MAIN_H_ */

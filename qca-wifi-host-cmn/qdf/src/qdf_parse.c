@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -65,7 +65,7 @@ static QDF_STATUS qdf_ini_read_values(char **main_cursor,
 				 * Subsequent '=' are valid value characters.
 				 */
 				if (!value && !comment) {
-					value = cursor + 1;
+					value = qdf_str_trim(cursor + 1);
 					*cursor = '\0';
 				}
 
@@ -129,11 +129,13 @@ static QDF_STATUS qdf_ini_read_values(char **main_cursor,
 			cursor++;
 	}
 
-	return QDF_STATUS_E_INVAL;
+	return QDF_STATUS_E_FAILURE;
 }
 
 QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
-			 qdf_ini_item_cb item_cb, qdf_ini_section_cb section_cb)
+			 qdf_ini_item_cb item_cb,
+			 qdf_ini_section_cb section_cb,
+			 qdf_ini_buf_cb ini_buf_cb)
 {
 	QDF_STATUS status;
 	char *read_key;
@@ -142,11 +144,15 @@ QDF_STATUS qdf_ini_parse(const char *ini_path, void *context,
 	int ini_read_count = 0;
 	char *fbuf;
 	char *cursor;
+	unsigned int size = 0;
 
-	if (qdf_str_eq(QDF_WIFI_MODULE_PARAMS_FILE, ini_path))
+	if (qdf_str_eq(QDF_WIFI_MODULE_PARAMS_FILE, ini_path)) {
 		status = qdf_module_param_file_read(ini_path, &fbuf);
-	else
-		status = qdf_file_read(ini_path, &fbuf);
+	} else {
+		status = qdf_file_read(ini_path, &fbuf, &size);
+		if (ini_buf_cb && QDF_IS_STATUS_SUCCESS(status))
+			ini_buf_cb(context, fbuf, size);
+	}
 	if (QDF_IS_STATUS_ERROR(status)) {
 		qdf_err("Failed to read *.ini file @ %s", ini_path);
 		return status;
@@ -213,7 +219,7 @@ QDF_STATUS qdf_ini_section_parse(const char *ini_path, void *context,
 	if (qdf_str_eq(QDF_WIFI_MODULE_PARAMS_FILE, ini_path))
 		status = qdf_module_param_file_read(ini_path, &fbuf);
 	else
-		status = qdf_file_read(ini_path, &fbuf);
+		status = qdf_file_read(ini_path, &fbuf, NULL);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		qdf_err("Failed to read *.ini file @ %s", ini_path);
 		return status;
@@ -305,7 +311,8 @@ static QDF_STATUS qdf_validate_value(char *value)
 		    (value[i] >= 'A' && value[i] <= 'Z') ||
 		    (value[i] >= 'a' && value[i] <= 'z') ||
 		    value[i] == ',' || value[i] == ':' ||
-		    value[i] == '-' || value[i] == '+')
+		    value[i] == '-' || value[i] == '+' ||
+		    value[i] == '&' || value[i] == '|')
 			continue;
 		else
 			return QDF_STATUS_E_INVAL;
@@ -367,21 +374,27 @@ static bool qdf_check_ini_validity(char **main_cursor)
 				return true;
 			status = qdf_validate_key(read_key);
 			if (QDF_IS_STATUS_ERROR(status)) {
-				status = QDF_STATUS_E_INVAL;
-				goto out;
+				qdf_err("Invalid INI: %s", read_key);
+				return false;
 			}
 			status = qdf_validate_value(read_value);
 			if (QDF_IS_STATUS_ERROR(status)) {
-				status = QDF_STATUS_E_INVAL;
-				goto out;
+				qdf_err("Invalid INI value: %s", read_value);
+				return false;
 			}
 		}
 	}
 
-out:
-	if (QDF_IS_STATUS_ERROR(status))
-		return false;
-	return true;
+	/* After parsing ini file, to break above loop qdf_ini_read_values()
+	 * returns the status as QDF_STATUS_E_FAILURE. In such case, the ini
+	 * file is valid and we return true. But if the status returned is
+	 * QDF_STATUS_E_INVAL then it is a genuine error and the ini file is
+	 * invalid. So, we return false in such case.
+	 */
+	if (status == QDF_STATUS_E_FAILURE)
+		return true;
+
+	return false;
 }
 
 bool qdf_valid_ini_check(const char  *ini_path)
@@ -394,7 +407,7 @@ bool qdf_valid_ini_check(const char  *ini_path)
 	if (qdf_str_eq(QDF_WIFI_MODULE_PARAMS_FILE, ini_path))
 		status = qdf_module_param_file_read(ini_path, &fbuf);
 	else
-		status = qdf_file_read(ini_path, &fbuf);
+		status = qdf_file_read(ini_path, &fbuf, NULL);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		qdf_err("Failed to read *.ini file @ %s", ini_path);
 		return false;

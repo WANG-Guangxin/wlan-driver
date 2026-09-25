@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -51,8 +51,8 @@
  * @low_band_oce_boost: Flag to assign higher alpha weightage low band oce
  * @reserved: reserved/unused bits
  * @wlm_indication_weightage: WLM indication weightage
- * @emlsr_weightage: eMLSR weightage
  * @security_weightage: Security weightage
+ * @sta_sap_mcc_weightage: STA + SAP MCC weightage
  */
 struct weight_cfg {
 	uint8_t rssi_weightage;
@@ -71,7 +71,7 @@ struct weight_cfg {
 	uint8_t sae_pk_ap_weightage;
 #ifdef WLAN_FEATURE_11BE_MLO
 	uint8_t eht_caps_weightage;
-	uint8_t mlo_weightage;
+	uint32_t mlo_weightage;
 	uint8_t joint_rssi_alpha;
 	uint8_t joint_esp_alpha;
 	uint8_t joint_oce_alpha;
@@ -80,9 +80,9 @@ struct weight_cfg {
 		low_band_oce_boost:1,
 		reserved:5;
 	uint8_t wlm_indication_weightage;
-	uint8_t emlsr_weightage;
 #endif
 	uint8_t security_weightage;
+	uint8_t sta_sap_mcc_weightage;
 };
 
 /**
@@ -235,11 +235,14 @@ enum cm_security_idx {
  * @vendor_roam_score_algorithm: Preferred ETP vendor roam score algorithm
  * @check_6ghz_security: check security for 6 GHz candidate
  * @standard_6ghz_conn_policy: check for 6 GHz standard connection policy
- * @disable_vlp_sta_conn_to_sp_ap: check for disable vlp sta conn to sp ap
  * @key_mgmt_mask_6ghz: user configurable mask for 6 GHz AKM
  * @mlsr_link_selection: MLSR link selection config
+ * @scan_nontx_search_thresh: Num of entries from the top of the sorted
+ * candidate list to check for candidates without partner link scan entry with
+ * non-Tx BSSID in MBSSID set as assoc link.
  * @roam_tgt_score_cap: Roam score capability
  * @security_weight_per_index: security weight per index
+ * @relaxed_lpi_conn_policy: Relaxed lpi conn policy flag
  */
 struct scoring_cfg {
 	struct weight_cfg weight_config;
@@ -254,11 +257,11 @@ struct scoring_cfg {
 		 vendor_roam_score_algorithm:1,
 		 check_6ghz_security:1,
 		 standard_6ghz_conn_policy:1,
-		 disable_vlp_sta_conn_to_sp_ap:1;
-
+		 relaxed_lpi_conn_policy:1;
 	uint32_t key_mgmt_mask_6ghz;
 #ifdef WLAN_FEATURE_11BE_MLO
 	uint8_t mlsr_link_selection;
+	uint8_t scan_nontx_search_thresh;
 #endif
 	uint32_t roam_tgt_score_cap;
 	uint32_t security_weight_per_index;
@@ -330,6 +333,7 @@ wlan_denylist_action_on_bssid(struct wlan_objmgr_pdev *pdev,
  *             func it will have sorted list
  * @bssid_hint: bssid hint
  * @self_mac: connecting vdev self mac address
+ * @allow_scan: Is scan allowed for this connection
  *
  * Return: void
  */
@@ -337,7 +341,38 @@ void wlan_cm_calculate_bss_score(struct wlan_objmgr_pdev *pdev,
 				 struct pcl_freq_weight_list *pcl_lst,
 				 qdf_list_t *scan_list,
 				 struct qdf_mac_addr *bssid_hint,
-				 struct qdf_mac_addr *self_mac);
+				 struct qdf_mac_addr *self_mac,
+				 bool allow_scan);
+
+#if defined(WLAN_FEATURE_11BE_MLO_ADV_FEATURE) && defined(FEATURE_DENYLIST_MGR)
+/**
+ * cm_update_dlm_mlo_score() - Update dlm score
+ * @pdev: pointer to pdev object
+ * @scan_list: scan list, contains the input list and after the
+ *             func it will have sorted list with dlm entries
+ * @prev_node: prev node
+ * @dlm_entry_updated: is dlm entry updated
+ *
+ * This API will update score of the pending ML candidates
+ * acrroding to the previous candidate failures.
+ * Example: For a particular link if host needs to reject all
+ * combination including that link. So score needs to be updated
+ * for all the entries with minimum score.
+ *
+ * Return: void
+ */
+void cm_update_dlm_mlo_score(struct wlan_objmgr_pdev *pdev,
+			     qdf_list_t *scan_list,
+			     qdf_list_node_t *prev_node,
+			     bool *dlm_entry_updated);
+#else
+static inline
+void cm_update_dlm_mlo_score(struct wlan_objmgr_pdev *pdev,
+			     qdf_list_t *scan_list,
+			     qdf_list_node_t *prev_node,
+			     bool *dlm_entry_updated)
+{}
+#endif
 
 #ifdef WLAN_FEATURE_11BE
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
@@ -383,6 +418,47 @@ void cm_print_candidate_list(qdf_list_t *candidate_list);
 #else
 static inline void cm_print_candidate_list(qdf_list_t *candidate_list)
 {
+}
+#endif
+
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * wlan_cm_set_mlo_allowed_bss_links() - Set the allowed BSS links for MLO STA
+ * using BSS link mac addresses
+ * @psoc: psoc object
+ * @num_links: Number of allowed BSS links
+ * @allowed_bss_link_addr: list of allowed BSS link addresses
+ *
+ * Return: None
+ */
+void
+wlan_cm_set_mlo_allowed_bss_links(struct wlan_objmgr_psoc *psoc,
+				  uint8_t num_links,
+				  struct qdf_mac_addr *allowed_bss_link_addr);
+
+/**
+ * wlan_cm_get_mlo_allowed_bss_links() - Get the allowed BSS links for MLO STA
+ * using BSS link mac addresses
+ * @psoc: psoc object
+ * @allowed_bss_link_addr: list of allowed BSS link addresses
+ *
+ * Return: Number of configured allowed BSS links
+ */
+uint8_t
+wlan_cm_get_mlo_allowed_bss_links(struct wlan_objmgr_psoc *psoc,
+				  struct qdf_mac_addr *allowed_bss_link_addr);
+#else
+static inline void
+wlan_cm_set_mlo_allowed_bss_links(struct wlan_objmgr_psoc *psoc,
+				  uint8_t num_links,
+				  struct qdf_mac_addr *allowed_bss_link_addr)
+{}
+
+static inline uint8_t
+wlan_cm_get_mlo_allowed_bss_links(struct wlan_objmgr_psoc *psoc,
+				  struct qdf_mac_addr *allowed_bss_link_addr)
+{
+	return 0;
 }
 #endif
 
@@ -460,25 +536,6 @@ void wlan_cm_set_6ghz_key_mgmt_mask(struct wlan_objmgr_psoc *psoc,
 uint32_t wlan_cm_get_6ghz_key_mgmt_mask(struct wlan_objmgr_psoc *psoc);
 
 /**
- * wlan_cm_get_disable_vlp_sta_conn_to_sp_ap() - Set disable vlp sta connection
- *                                               to sp ap
- * @psoc: pointer to psoc object
- *
- * Return: value
- */
-bool wlan_cm_get_disable_vlp_sta_conn_to_sp_ap(struct wlan_objmgr_psoc *psoc);
-
-/**
- * wlan_cm_set_disable_vlp_sta_conn_to_sp_ap() - Set disable vlp sta connection
- *                                               to sp ap
- * @psoc: pointer to psoc object
- * @value: value to be set
- *
- * Return: void
- */
-void wlan_cm_set_disable_vlp_sta_conn_to_sp_ap(struct wlan_objmgr_psoc *psoc,
-					       bool value);
-/**
  * wlan_cm_set_standard_6ghz_conn_policy() - Set 6 GHz standard connection
  *					     policy
  * @psoc: pointer to psoc object
@@ -498,6 +555,25 @@ void wlan_cm_set_standard_6ghz_conn_policy(struct wlan_objmgr_psoc *psoc,
  */
 bool wlan_cm_get_standard_6ghz_conn_policy(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * wlan_cm_set_relaxed_lpi_conn_policy() - Set relaxed lpi connection
+ *					     policy
+ * @psoc: pointer to psoc object
+ * @value: value to be set
+ *
+ * Return: void
+ */
+void wlan_cm_set_relaxed_lpi_conn_policy(struct wlan_objmgr_psoc *psoc,
+					 bool value);
+
+/**
+ * wlan_cm_get_relaxed_lpi_conn_policy() - Get relaxed lpi connection
+ *					     policy
+ * @psoc: pointer to psoc object
+ *
+ * Return: value
+ */
+bool wlan_cm_get_relaxed_lpi_conn_policy(struct wlan_objmgr_psoc *psoc);
 #else
 static inline bool
 wlan_cm_6ghz_allowed_for_akm(struct wlan_objmgr_psoc *psoc,
@@ -534,17 +610,6 @@ bool wlan_cm_get_standard_6ghz_conn_policy(struct wlan_objmgr_psoc *psoc)
 }
 
 static inline
-void wlan_cm_set_disable_vlp_sta_conn_to_sp_ap(struct wlan_objmgr_psoc *psoc,
-					       bool value)
-{}
-
-static inline
-bool wlan_cm_get_disable_vlp_sta_conn_to_sp_ap(struct wlan_objmgr_psoc *psoc)
-{
-	return false;
-}
-
-static inline
 void wlan_cm_set_6ghz_key_mgmt_mask(struct wlan_objmgr_psoc *psoc,
 				    uint32_t value) {}
 
@@ -553,9 +618,20 @@ uint32_t wlan_cm_get_6ghz_key_mgmt_mask(struct wlan_objmgr_psoc *psoc)
 {
 	return DEFAULT_KEYMGMT_6G_MASK;
 }
+
+static inline
+void wlan_cm_set_relaxed_lpi_conn_policy(struct wlan_objmgr_psoc *psoc,
+					 uint32_t value)
+{
+}
+
+static inline
+bool wlan_cm_get_relaxed_lpi_conn_policy(struct wlan_objmgr_psoc *psoc)
+{
+	return false;
+}
 #endif
 
-#ifdef CONN_MGR_ADV_FEATURE
 /**
  * wlan_cm_set_check_assoc_disallowed() - Set check assoc disallowed param
  * @psoc: pointer to psoc object
@@ -575,15 +651,45 @@ void wlan_cm_set_check_assoc_disallowed(struct wlan_objmgr_psoc *psoc,
  */
 void wlan_cm_get_check_assoc_disallowed(struct wlan_objmgr_psoc *psoc,
 					bool *value);
-#endif
+
+/**
+ * cm_is_slo_candidate_allowed() - check slo allowed OUI for scan entry
+ * @psoc: pointer to psoc object
+ * @scan_entry: scan entry
+ *
+ * Return: bool
+ */
+bool cm_is_slo_candidate_allowed(struct wlan_objmgr_psoc *psoc,
+				 struct scan_cache_entry *scan_entry);
 
 /**
  * cm_get_entry() - Get bss scan entry by link mac address
  * @scan_list: Scan entry list of bss candidates after filtering
  * @link_addr: link mac address
+ * @mld_addr: MLD address to match
  *
  * Return: Pointer to bss scan entry
  */
 struct scan_cache_entry *cm_get_entry(qdf_list_t *scan_list,
-				      struct qdf_mac_addr *link_addr);
+				      struct qdf_mac_addr *link_addr,
+				      struct qdf_mac_addr *mld_addr);
+/*
+ * cm_is_better_bss() - API to check the better BSS
+ * @bss1: Scan entry of candidate 1
+ * @bss2: Scan entry of candidate 2
+ *
+ * Return: BSS1 has better scaore than BSS2.
+ */
+bool cm_is_better_bss(struct scan_cache_entry *bss1,
+		      struct scan_cache_entry *bss2);
+/*
+ * cm_list_insert_sorted() -API to insert the scan entry to scan list
+ * based on the score
+ * @scan_list: Candidate list
+ * @scan_entry: Scan entry to be added to the list
+ *
+ * Return: None
+ */
+void cm_list_insert_sorted(qdf_list_t *scan_list,
+			   struct scan_cache_node *scan_entry);
 #endif

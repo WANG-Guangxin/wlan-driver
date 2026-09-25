@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -28,6 +28,15 @@
 #include "cdp_txrx_mlo.h"
 #endif
 #include "wlan_mlo_mgr_peer.h"
+#include "wlan_mlo_mgr_setup.h"
+
+#ifdef WLAN_FEATURE_11BE_MLO
+#include <cdp_txrx_ctrl.h>
+#endif
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+#include "osif_link_reconfig.h"
+#include "target_if_mlo_mgr.h"
+#endif
 
 #ifdef WLAN_MLO_MULTI_CHIP
 bool mlo_ap_vdev_attach(struct wlan_objmgr_vdev *vdev,
@@ -59,7 +68,7 @@ bool mlo_ap_vdev_attach(struct wlan_objmgr_vdev *vdev,
 		 * and they should provide the same vdev_count.
 		 */
 		mlo_dev_lock_acquire(dev_ctx);
-		dev_ctx->ap_ctx->num_ml_vdevs = vdev_count;
+		dev_ctx->ap_ctx->vdev_up_candidate_count = vdev_count;
 		mlo_dev_lock_release(dev_ctx);
 	}
 
@@ -82,6 +91,78 @@ bool mlo_ap_vdev_attach(struct wlan_objmgr_vdev *vdev,
 	return true;
 }
 #else
+
+#if defined(WLAN_FEATURE_MULTI_LINK_SAP) && defined(WLAN_MCAST_MLO_SAP)
+/**
+ * wlan_mlme_mlo_set_mcast_vdev() - Set mcast flag for link VDEVs of MLD
+ * @vdev: vdev pointer
+ * @mcast_vdev: mcast flag
+ *
+ * Return: None.
+ */
+static void
+wlan_mlme_mlo_set_mcast_vdev(struct wlan_objmgr_vdev *vdev,
+			     bool mcast_vdev)
+{
+	ol_txrx_soc_handle soc_txrx_handle;
+	struct wlan_objmgr_psoc *psoc;
+	uint8_t vdev_id;
+	cdp_config_param_type val = {0};
+
+	vdev_id = wlan_vdev_get_id(vdev);
+	psoc = wlan_vdev_get_psoc(vdev);
+	soc_txrx_handle = wlan_psoc_get_dp_handle(psoc);
+
+	if (mcast_vdev)
+		wlan_vdev_mlme_feat_ext2_cap_set(vdev,
+						 WLAN_VDEV_FEXT2_MLO_MCAST);
+	else
+		wlan_vdev_mlme_feat_ext2_cap_clear(vdev,
+						   WLAN_VDEV_FEXT2_MLO_MCAST);
+
+	val.cdp_vdev_param_mcast_vdev = mcast_vdev;
+	cdp_txrx_set_vdev_param(soc_txrx_handle, vdev_id,
+				CDP_SET_MCAST_VDEV, val);
+}
+
+/**
+ * wlan_mlme_mlo_get_mcast_vdev() - Get mcast flag of link VDEVs of MLD
+ * @vdev: vdev pointer
+ *
+ * Return: True if mcast set otherwise false.
+ */
+static bool
+wlan_mlme_mlo_get_mcast_vdev(struct wlan_objmgr_vdev *vdev)
+{
+	ol_txrx_soc_handle soc_txrx_handle;
+	struct wlan_objmgr_psoc *psoc;
+	uint8_t vdev_id;
+	cdp_config_param_type val = {0};
+
+	vdev_id = wlan_vdev_get_id(vdev);
+	psoc = wlan_vdev_get_psoc(vdev);
+	soc_txrx_handle = wlan_psoc_get_dp_handle(psoc);
+
+	cdp_txrx_get_vdev_param(soc_txrx_handle, vdev_id,
+				CDP_SET_MCAST_VDEV, &val);
+	mlo_debug("mcast vdev flag is %d for vdev_id %d",
+		  val.cdp_vdev_param_mcast_vdev, vdev_id);
+	return val.cdp_vdev_param_mcast_vdev;
+}
+#else
+static void
+wlan_mlme_mlo_set_mcast_vdev(struct wlan_objmgr_vdev *vdev,
+			     bool mcast_vdev)
+{
+}
+
+static bool
+wlan_mlme_mlo_get_mcast_vdev(struct wlan_objmgr_vdev *vdev)
+{
+	return true;
+}
+#endif
+
 bool mlo_ap_vdev_attach(struct wlan_objmgr_vdev *vdev,
 			uint8_t link_id,
 			uint16_t vdev_count)
@@ -102,8 +183,19 @@ bool mlo_ap_vdev_attach(struct wlan_objmgr_vdev *vdev,
 	 * and they should provide the same vdev_count.
 	 */
 	mlo_dev_lock_acquire(dev_ctx);
-	dev_ctx->ap_ctx->num_ml_vdevs = vdev_count;
+	dev_ctx->ap_ctx->vdev_up_candidate_count = vdev_count;
 	mlo_dev_lock_release(dev_ctx);
+
+	/*
+	 * Need to always set the mcast flag for first link.
+	 * Consider below two cases:
+	 * for normal link start up, set the flag only for first link.
+	 * for ssr case, since the wlan_vdev_count will be max supported
+	 * link number when come here when attach first link. So do not
+	 * use the count as the condition to set the flag.
+	 */
+	if (!wlan_mlme_mlo_get_mcast_vdev(dev_ctx->wlan_vdev_list[0]))
+		wlan_mlme_mlo_set_mcast_vdev(dev_ctx->wlan_vdev_list[0], true);
 
 	return true;
 }
@@ -202,6 +294,75 @@ void mlo_ap_get_vdev_list_no_flag(struct wlan_objmgr_vdev *vdev,
 }
 #endif
 
+struct wlan_objmgr_vdev *mlo_get_first_vdev_by_ml_peer(
+				struct wlan_mlo_peer_context *mlo_peer_ctx)
+{
+	struct wlan_mlo_link_peer_entry *peer_entry;
+	struct wlan_objmgr_peer *link_peer;
+	int i;
+	struct wlan_objmgr_vdev *vdev = NULL;
+	QDF_STATUS status;
+
+	mlo_peer_lock_acquire(mlo_peer_ctx);
+	for (i = 0; i < MAX_MLO_LINK_PEERS; i++) {
+		peer_entry = &mlo_peer_ctx->peer_list[i];
+		link_peer = peer_entry->link_peer;
+		if (!link_peer)
+			continue;
+
+		status = wlan_objmgr_vdev_try_get_ref(
+					wlan_peer_get_vdev(link_peer),
+					WLAN_MLO_MGR_ID);
+		if (QDF_IS_STATUS_ERROR(status))
+			continue;
+
+		vdev = wlan_peer_get_vdev(link_peer);
+		goto release;
+	}
+
+release:
+	mlo_peer_lock_release(mlo_peer_ctx);
+
+	return vdev;
+}
+
+struct wlan_objmgr_vdev *mlo_get_first_active_vdev_by_ml_dev_ctx(
+		struct wlan_mlo_dev_context *dev_ctx)
+{
+	struct wlan_objmgr_vdev *vdev = NULL;
+	struct wlan_objmgr_vdev *tmp_vdev = NULL;
+	QDF_STATUS status;
+	int i;
+
+	if (!dev_ctx) {
+		mlo_err("Invalid input");
+		return NULL;
+	}
+
+	mlo_dev_lock_acquire(dev_ctx);
+
+	for (i = 0; i < QDF_ARRAY_SIZE(dev_ctx->wlan_vdev_list); i++) {
+		tmp_vdev = dev_ctx->wlan_vdev_list[i];
+
+		if (tmp_vdev && wlan_vdev_mlme_is_mlo_vdev(tmp_vdev)) {
+			if (wlan_vdev_mlme_is_active(tmp_vdev) !=
+						 QDF_STATUS_SUCCESS)
+				continue;
+
+			status = wlan_objmgr_vdev_try_get_ref(tmp_vdev,
+							      WLAN_MLO_MGR_ID);
+			if (QDF_IS_STATUS_SUCCESS(status)) {
+				vdev = tmp_vdev;
+				break;
+			}
+		}
+	}
+
+	mlo_dev_lock_release(dev_ctx);
+
+	return vdev;
+}
+
 void mlo_peer_get_vdev_list(struct wlan_objmgr_peer *peer,
 			    uint16_t *vdev_count,
 			    struct wlan_objmgr_vdev **wlan_vdev_list)
@@ -240,6 +401,8 @@ void mlo_peer_get_vdev_list(struct wlan_objmgr_peer *peer,
 	mlo_peer_lock_release(peer->mlo_peer_ctx);
 }
 
+qdf_export_symbol(mlo_peer_get_vdev_list);
+
 void mlo_ap_get_vdev_list(struct wlan_objmgr_vdev *vdev,
 			  uint16_t *vdev_count,
 			  struct wlan_objmgr_vdev **wlan_vdev_list)
@@ -274,6 +437,8 @@ void mlo_ap_get_vdev_list(struct wlan_objmgr_vdev *vdev,
 	}
 	mlo_dev_lock_release(dev_ctx);
 }
+
+qdf_export_symbol(mlo_ap_get_vdev_list);
 
 void mlo_ap_get_active_vdev_list(struct wlan_objmgr_vdev *vdev,
 				 uint16_t *vdev_count,
@@ -423,7 +588,7 @@ static bool mlo_is_ap_vdev_up_allowed(struct wlan_objmgr_vdev *vdev)
 	dev_ctx = vdev->mlo_dev_ctx;
 
 	vdev_count = wlan_mlo_ap_get_active_links(vdev);
-	if (vdev_count == dev_ctx->ap_ctx->num_ml_vdevs)
+	if (vdev_count == dev_ctx->ap_ctx->vdev_up_candidate_count)
 		up_allowed = true;
 
 	return up_allowed;
@@ -573,18 +738,10 @@ void mlo_ap_link_start_rsp_notify(struct wlan_objmgr_vdev *vdev)
 
 void mlo_ap_vdev_detach(struct wlan_objmgr_vdev *vdev)
 {
-	struct wlan_mlo_dev_context *dev_ctx;
-
 	if (!vdev || !vdev->mlo_dev_ctx) {
 		mlo_err("Invalid input");
 		return;
 	}
-
-	dev_ctx = vdev->mlo_dev_ctx;
-
-	mlo_dev_lock_acquire(dev_ctx);
-	dev_ctx->ap_ctx->num_ml_vdevs--;
-	mlo_dev_lock_release(dev_ctx);
 
 	wlan_vdev_mlme_clear_mlo_vdev(vdev);
 }
@@ -599,6 +756,11 @@ mlo_ap_update_max_ml_peer_ids(uint32_t pdev_id, uint32_t max_ml_peer_ids)
 {
 	struct mlo_mgr_context *mlo_mgr_ctx = wlan_objmgr_get_mlo_ctx();
 	uint16_t max_mlo_peer_id_stale;
+
+	if (!mlo_mgr_ctx) {
+		mlo_err("MLO context is NULL");
+		return QDF_STATUS_E_INVAL;
+	}
 
 	max_mlo_peer_id_stale = mlo_mgr_ctx->max_mlo_peer_id;
 
@@ -626,6 +788,11 @@ uint16_t mlo_ap_ml_peerid_alloc(void)
 	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
 	uint16_t i;
 	uint16_t mlo_peer_id;
+
+	if (!mlo_ctx) {
+		mlo_err("MLO context is NULL");
+		return MLO_INVALID_PEER_ID;
+	}
 
 	ml_peerid_lock_acquire(mlo_ctx);
 	mlo_peer_id = mlo_ctx->last_mlo_peer_id;
@@ -665,6 +832,11 @@ void mlo_ap_ml_ptqm_peerid_free(struct wlan_mlo_dev_context *ml_dev,
 void mlo_ap_ml_peerid_free(uint16_t mlo_peer_id)
 {
 	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
+
+	if (!mlo_ctx) {
+		mlo_err("MLO context is NULL");
+		return;
+	}
 
 	if ((mlo_peer_id == 0) || (mlo_peer_id == MLO_INVALID_PEER_ID)) {
 		mlo_err(" ML peer id %d is invalid", mlo_peer_id);
@@ -819,5 +991,133 @@ void mlo_peer_populate_mesh_params(
 		}
 	}
 	mlo_peer_lock_release(ml_peer);
+}
+#endif
+
+#if defined(WLAN_FEATURE_11BE_MLO) && !defined(WLAN_MLO_MULTI_CHIP)
+void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
+				 bool tsf_sync_enable)
+{
+	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
+
+	mlo_ctx->tsf_sync_enabled = tsf_sync_enable;
+}
+
+bool mlo_get_tsf_sync_support(void)
+{
+	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
+
+	return mlo_ctx->tsf_sync_enabled;
+}
+#endif
+
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+QDF_STATUS
+wlan_mlo_link_removal_cmd(struct wlan_objmgr_vdev *vdev,
+			  struct wlan_objmgr_psoc *psoc,
+			  uint8_t *ml_reconfig_ie,
+			  size_t elem_len)
+{
+	QDF_STATUS status;
+	struct mlo_link_removal_cmd_params params = {0};
+	struct wlan_lmac_if_mlo_tx_ops *mlo_tx_ops;
+
+	if (!vdev) {
+		mlo_err("vdev is NULL");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (!psoc) {
+		mlo_err("psoc is NULL");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (!ml_reconfig_ie || !elem_len) {
+		mlo_err("Invalid ML reconfiguration IE");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	mlo_tx_ops = &psoc->soc_cb.tx_ops->mlo_ops;
+	if (!mlo_tx_ops) {
+		mlo_err("Invalid parameters: tx_ops is NULL");
+		return QDF_STATUS_NOT_INITIALIZED;
+	}
+
+	if (!mlo_tx_ops->send_link_removal_cmd) {
+		mlo_err("send_link_removal_cmd is not registered");
+		return QDF_STATUS_E_NOSUPPORT;
+	}
+
+	params.vdev_id = wlan_vdev_get_id(vdev);
+	params.reconfig_ml_ie = ml_reconfig_ie;
+	params.reconfig_ml_ie_size = elem_len;
+
+	/* Set the vdev level link removal in progress flag */
+	wlan_vdev_mlme_op_flags_set(vdev,
+			WLAN_VDEV_OP_MLO_LINK_REMOVAL_IN_PROGRESS);
+
+	status = mlo_tx_ops->send_link_removal_cmd(psoc, &params);
+
+	if (QDF_IS_STATUS_ERROR(status)) {
+		mlo_err("Send WMI_MLO_LINK_REMOVAL_CMDID to fw fail:%d",
+			status);
+		wlan_vdev_mlme_op_flags_clear(vdev,
+				WLAN_VDEV_OP_MLO_LINK_REMOVAL_IN_PROGRESS);
+	}
+
+	return status;
+}
+
+QDF_STATUS
+wlan_mlo_link_remove_event_handler(struct wlan_objmgr_psoc *psoc,
+				   struct mlo_link_removal_evt_params *evt_params)
+{
+	struct wlan_objmgr_vdev *vdev;
+	QDF_STATUS status;
+	uint32_t tbtt_count;
+	uint64_t tsf;
+	uint16_t link_id;
+
+	if (!evt_params) {
+		mlo_err("evt_params is NULL");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, evt_params->vdev_id,
+						    WLAN_MLO_MGR_ID);
+	if (!vdev) {
+		mlo_err("vdev is NULL for vdev ID: %d", evt_params->vdev_id);
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	if (!wlan_vdev_mlme_is_mlo_link_removal_in_progress(vdev)) {
+		mlo_err("Received link removal event when link removal is not in progress");
+		status = QDF_STATUS_E_INVAL;
+		goto release_ref;
+	}
+
+	tbtt_count = evt_params->tbtt_info.tbtt_count;
+	tsf = evt_params->tbtt_info.tsf;
+	link_id = wlan_vdev_get_link_id(vdev);
+
+	mlo_debug("Received link removal event TBTT:%u tsf: %llu link_id:%u",
+		  tbtt_count, tsf, link_id);
+
+	status = osif_mlo_sap_link_removal_evt_handler(vdev, tbtt_count,
+						       tsf, link_id);
+
+	if (QDF_IS_STATUS_ERROR(status))
+		mlo_err("Couldn't inform link removal event for vdev %d, status:%d",
+			vdev->vdev_objmgr.vdev_id, status);
+
+release_ref:
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLO_MGR_ID);
+
+	return status;
+}
+
+bool wlan_mlo_ap_get_link_removal_cap(struct wlan_objmgr_psoc *psoc)
+{
+	return target_if_mlo_sap_link_removal_offload_support(psoc);
 }
 #endif

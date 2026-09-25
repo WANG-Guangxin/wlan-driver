@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -38,8 +38,6 @@
 #include "connection_mgr/core/src/wlan_cm_main_api.h"
 #include "wlan_roam_debug.h"
 #include "wlan_mlo_mgr_roam.h"
-
-#define FW_ROAM_SYNC_TIMEOUT 7000
 
 static QDF_STATUS
 cm_fw_roam_ser_cb(struct wlan_serialization_command *cmd,
@@ -499,22 +497,7 @@ QDF_STATUS cm_roam_sync_key_event_handler(struct wlan_objmgr_psoc *psoc,
 					  struct wlan_crypto_key_entry *keys,
 					  uint8_t num_keys)
 {
-	QDF_STATUS status = QDF_STATUS_SUCCESS;
-	uint8_t i;
-
-	for (i = 0; i < num_keys; i++) {
-		status = wlan_crypto_add_key_entry(psoc, &keys[i]);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			mlme_err("Failed to add key entry for link:%d",
-				 keys[i].link_id);
-			wlan_crypto_free_key(&keys[i].keys);
-			qdf_mem_zero(&keys[i],
-				     sizeof(struct wlan_crypto_key_entry));
-			qdf_mem_free(&keys[i]);
-		}
-	}
-
-	return status;
+	return wlan_crypto_key_event_handler(psoc, keys, num_keys);
 }
 #endif
 
@@ -528,6 +511,7 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 	struct rso_config *rso_cfg;
 	uint16_t ie_len = 0;
 	uint8_t vdev_id;
+	bool new_link_session = false;
 
 	sync_ind = (struct roam_offload_synch_ind *)event;
 	if (!sync_ind) {
@@ -614,15 +598,16 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	if (QDF_IS_STATUS_ERROR(cm_roam_pe_sync_callback(sync_ind, vdev_id,
-							 ie_len))) {
+	status = cm_roam_pe_sync_callback(sync_ind, vdev_id, ie_len,
+					  &new_link_session);
+	if (QDF_IS_STATUS_ERROR(status)) {
 		mlme_err("LFR3: vdev:%d PE roam synch cb failed", vdev_id);
-		return QDF_STATUS_E_BUSY;
+		goto err;
 	}
 
 	status = cm_roam_update_vdev(vdev, sync_ind);
 	if (QDF_IS_STATUS_ERROR(status))
-		return status;
+		goto err;
 
 	/*
 	 * update phy_mode in wma to avoid mismatch in phymode between host and
@@ -637,6 +622,48 @@ QDF_STATUS cm_roam_sync_event_handler_cb(struct wlan_objmgr_vdev *vdev,
 	status = cm_fw_roam_sync_propagation(psoc,
 					     vdev_id,
 					     sync_ind);
+err:
+	/* delete newly added pe session in case of failure */
+	if (new_link_session && QDF_IS_STATUS_ERROR(status))
+		status = cm_roam_delete_session_for_sl_to_ml_failure(vdev_id);
 
 	return status;
+}
+
+QDF_STATUS cm_roam_abort_event(struct wlan_objmgr_vdev *vdev)
+{
+	struct wlan_objmgr_psoc *psoc;
+	struct wlan_objmgr_pdev *pdev;
+	uint8_t vdev_id;
+	uint8_t rso_stop_req_bitmap;
+
+	if (!vdev) {
+		mlme_debug("Vdev is NULL");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	psoc = wlan_vdev_get_psoc(vdev);
+	if (!psoc) {
+		mlme_debug("Psoc is NULL");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	pdev = wlan_vdev_get_pdev(vdev);
+	if (!pdev) {
+		mlme_debug("Pdev is NULL");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	vdev_id = wlan_vdev_get_id(vdev);
+	rso_stop_req_bitmap = mlme_get_rso_pending_disable_req_bitmap(psoc,
+								      vdev_id);
+	if (rso_stop_req_bitmap) {
+		mlme_clear_rso_pending_disable_req_bitmap(psoc, vdev_id);
+		wlan_cm_disable_rso(pdev, vdev_id, rso_stop_req_bitmap,
+				    REASON_DRIVER_DISABLED);
+	}
+
+	mlme_cm_osif_reset_scan_reject_params(vdev);
+
+	return QDF_STATUS_SUCCESS;
 }

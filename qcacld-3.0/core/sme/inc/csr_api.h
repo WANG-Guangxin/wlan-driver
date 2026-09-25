@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -289,6 +289,8 @@ typedef enum {
 	eCSR_ROAM_CAC_COMPLETE_IND = 48,
 	eCSR_ROAM_SAE_COMPUTE = 49,
 	eCSR_ROAM_CHANNEL_INFO_EVENT_IND = 50,
+	/* Channel switch started indication from lower layers */
+	eCSR_ROAM_CHANNEL_SWITCH_STARTED_IND = 51,
 } eRoamCmdStatus;
 
 /* comment inside indicates what roaming callback gets */
@@ -300,22 +302,11 @@ typedef enum {
 	 * struct csr_roam_info's bss_desc may pass back
 	 */
 	eCSR_ROAM_RESULT_FAILURE,
-	/* Pass back pointer to struct csr_roam_info */
-	eCSR_ROAM_RESULT_ASSOCIATED,
-	eCSR_ROAM_RESULT_NOT_ASSOCIATED,
-	eCSR_ROAM_RESULT_MIC_FAILURE,
 	eCSR_ROAM_RESULT_FORCED,
 	eCSR_ROAM_RESULT_DISASSOC_IND,
-	eCSR_ROAM_RESULT_DEAUTH_IND,
-	eCSR_ROAM_RESULT_CAP_CHANGED,
-	eCSR_ROAM_RESULT_LOSTLINK,
 	eCSR_ROAM_RESULT_MIC_ERROR_UNICAST,
 	eCSR_ROAM_RESULT_MIC_ERROR_GROUP,
 	eCSR_ROAM_RESULT_AUTHENTICATED,
-	eCSR_ROAM_RESULT_NEW_RSN_BSS,
-#ifdef FEATURE_WLAN_WAPI
-	eCSR_ROAM_RESULT_NEW_WAPI_BSS,
-#endif /* FEATURE_WLAN_WAPI */
 	/* INFRA started successfully */
 	eCSR_ROAM_RESULT_INFRA_STARTED,
 	/* INFRA start failed */
@@ -326,47 +317,19 @@ typedef enum {
 	eCSR_ROAM_RESULT_INFRA_ASSOCIATION_IND,
 	/* A station joined INFRA AP */
 	eCSR_ROAM_RESULT_INFRA_ASSOCIATION_CNF,
-	/* INFRA disassociated */
-	eCSR_ROAM_RESULT_INFRA_DISASSOCIATED,
 	eCSR_ROAM_RESULT_WPS_PBC_PROBE_REQ_IND,
-	eCSR_ROAM_RESULT_SEND_ACTION_FAIL,
 	/* peer rejected assoc because max assoc limit reached */
 	eCSR_ROAM_RESULT_MAX_ASSOC_EXCEEDED,
-	/* Assoc rejected due to concurrent session running on a diff channel */
-	eCSR_ROAM_RESULT_ASSOC_FAIL_CON_CHANNEL,
-	/* TDLS events */
-	eCSR_ROAM_RESULT_ADD_TDLS_PEER,
-	eCSR_ROAM_RESULT_UPDATE_TDLS_PEER,
-	eCSR_ROAM_RESULT_DELETE_TDLS_PEER,
-	eCSR_ROAM_RESULT_TEARDOWN_TDLS_PEER_IND,
-	eCSR_ROAM_RESULT_DELETE_ALL_TDLS_PEER_IND,
-	eCSR_ROAM_RESULT_LINK_ESTABLISH_REQ_RSP,
-	eCSR_ROAM_RESULT_TDLS_SHOULD_DISCOVER,
-	eCSR_ROAM_RESULT_TDLS_SHOULD_TEARDOWN,
-	eCSR_ROAM_RESULT_TDLS_SHOULD_PEER_DISCONNECTED,
-	eCSR_ROAM_RESULT_TDLS_CONNECTION_TRACKER_NOTIFICATION,
 	eCSR_ROAM_RESULT_DFS_RADAR_FOUND_IND,
 	eCSR_ROAM_RESULT_CHANNEL_CHANGE_SUCCESS,
 	eCSR_ROAM_RESULT_CHANNEL_CHANGE_FAILURE,
 	eCSR_ROAM_RESULT_CSA_RESTART_RSP,
 	eCSR_ROAM_RESULT_DFS_CHANSW_UPDATE_SUCCESS,
 	eCSR_ROAM_EXT_CHG_CHNL_UPDATE_IND,
-
 	eCSR_ROAM_RESULT_NDI_CREATE_RSP,
 	eCSR_ROAM_RESULT_NDI_DELETE_RSP,
-	eCSR_ROAM_RESULT_NDP_INITIATOR_RSP,
-	eCSR_ROAM_RESULT_NDP_NEW_PEER_IND,
-	eCSR_ROAM_RESULT_NDP_CONFIRM_IND,
-	eCSR_ROAM_RESULT_NDP_INDICATION,
-	eCSR_ROAM_RESULT_NDP_SCHED_UPDATE_RSP,
-	eCSR_ROAM_RESULT_NDP_RESPONDER_RSP,
-	eCSR_ROAM_RESULT_NDP_END_RSP,
-	eCSR_ROAM_RESULT_NDP_PEER_DEPARTED_IND,
-	eCSR_ROAM_RESULT_NDP_END_IND,
 	eCSR_ROAM_RESULT_CAC_END_IND,
-	/* If Scan for SSID failed to found proper BSS */
-	eCSR_ROAM_RESULT_SCAN_FOR_SSID_FAILURE,
-	eCSR_ROAM_RESULT_INVOKE_FAILED,
+	eCSR_ROAM_RESULT_CHANNEL_SWITCH_STARTED_NOTIFY,
 } eCsrRoamResult;
 
 typedef enum {
@@ -391,27 +354,6 @@ typedef enum {
 	eCSR_OPERATING_CHANNEL_AUTO = eCSR_OPERATING_CHANNEL_ALL,
 	eCSR_OPERATING_CHANNEL_ANY = eCSR_OPERATING_CHANNEL_ALL,
 } eOperationChannel;
-
-typedef enum {
-	/*
-	 * Roaming because HDD requested for reassoc by changing one of the
-	 * fields in tCsrRoamModifyProfileFields. OR Roaming because SME
-	 * requested for reassoc by changing one of the fields in
-	 * tCsrRoamModifyProfileFields.
-	 */
-	eCsrRoamReasonStaCapabilityChanged,
-	/*
-	 * Roaming because SME requested for reassoc to a different AP,
-	 * as part of inter AP handoff.
-	 */
-	eCsrRoamReasonBetterAP,
-	/*
-	 * Roaming because SME requested it as the link is lost - placeholder,
-	 * will clean it up once handoff code gets in
-	 */
-	eCsrRoamReasonSmeIssuedForLostLink,
-
-} eCsrRoamReasonCodes;
 
 /*
  * Following fields might need modification dynamically once STA is up
@@ -602,6 +544,10 @@ struct csr_roam_info {
 #ifdef WLAN_FEATURE_SAP_ACS_OPTIMIZE
 	uint32_t chan_info_freq;
 #endif
+	struct switch_channel_ind *pSirSmeSwitchChInd;
+	bool is_fils_connection;
+	uint8_t vht_mcs_10_11_supp;
+	uint16_t he_mcs_12_13_map;
 };
 
 typedef struct sSirSmeAssocIndToUpperLayerCnf {
@@ -645,9 +591,12 @@ typedef struct sSirSmeAssocIndToUpperLayerCnf {
 	tSirMacCapabilityInfo capability_info;
 	bool he_caps_present;
 	bool eht_caps_present;
+	bool is_fils_connection;
 #ifdef WLAN_FEATURE_11BE_MLO
 	tSirMacAddr peer_mld_addr;
 #endif
+	uint8_t vht_mcs_10_11_supp;
+	uint16_t he_mcs_12_13_map;
 } tSirSmeAssocIndToUpperLayerCnf, *tpSirSmeAssocIndToUpperLayerCnf;
 
 typedef struct tagCsrSummaryStatsInfo {
@@ -673,7 +622,9 @@ typedef struct tagCsrSummaryStatsInfo {
 typedef struct tagCsrGlobalClassAStatsInfo {
 	uint8_t tx_nss;
 	uint8_t rx_nss;
+	uint8_t tx_preamble;
 	uint8_t rx_preamble;
+	uint8_t tx_bw;
 	uint8_t rx_bw;
 	uint32_t max_pwr;
 	uint32_t tx_rate;
@@ -689,7 +640,8 @@ typedef struct tagCsrGlobalClassAStatsInfo {
 	enum txrate_gi  rx_gi;
 	/* to diff between HT20 & HT40 rates;short & long guard interval */
 	enum tx_rate_info tx_rx_rate_flags;
-
+	uint8_t tx_rate_version;
+	uint8_t is_tx_rate_version_checked;
 } tCsrGlobalClassAStatsInfo;
 
 typedef struct tagCsrGlobalClassDStatsInfo {
@@ -990,4 +942,13 @@ csr_convert_mode_to_nw_type(enum csr_cfgdot11mode dot11_mode,
 enum csr_cfgdot11mode
 csr_roam_get_phy_mode_band_for_bss(struct mac_context *mac,
 				   struct bss_dot11_config *dot11_cfg);
+
+/**
+ * csr_send_csa_restart_req() - send csa restart req to lim
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS csr_send_csa_restart_req(uint8_t vdev_id);
+
 #endif

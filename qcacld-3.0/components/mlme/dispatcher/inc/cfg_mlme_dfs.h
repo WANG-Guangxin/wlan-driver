@@ -226,18 +226,41 @@
 
 /*
  * <ini>
+ * gIgnoreCAC - Used to enable SAP DFS puncture
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable SAP DFS puncture
+ *
+ * Related: None
+ *
+ * Supported Feature: DFS
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ENABLE_SAP_DFS_PUNCTURE CFG_INI_BOOL( \
+			"g_enable_sap_dfs_puncture", \
+			0, \
+			"ignore CAC on DFS channel")
+
+/*
+ * <ini>
  * discardDFSchannelforMode - discard DFS channels for
  * provided mode
  * @Min: 0
- * @Max: 10
+ * @Max: 7
  * @Default: 0
  *
- * customer can set this value from 0 to 3 which means
+ * customer can set this value from 0 to 7 which means
  * DFS channels will be discarded for mentioned mode while
  * getting usable channels even if gEnableDFSMasterCap ini
  * is enabled.
  * BIT 0 - SAP MODE
  * BIT 1 - P2P GO MODE
+ * BIT 2 - P2P CLI MODE
  *
  * Related: none
  *
@@ -248,10 +271,37 @@
 #define CFG_DISCARD_DFS_CHANNEL_FOR_MODE CFG_INI_UINT( \
 			"discardDFSchannelforMode", \
 			0, \
-			3, \
+			7, \
 			0, \
 			CFG_VALUE_OR_DEFAULT, \
 			"discard DFS channel")
+
+/*
+ * <ini>
+ * discardPassiveChannelforMode - discard PASSIVE channels for
+ * provided mode
+ * @Min: 0
+ * @Max: 0x3
+ * @Default: 0
+ *
+ * customer can set this value from 0 to 3 which means
+ * Passive channels will be discarded for mentioned mode.
+ * BIT 0 - SAP MODE
+ * BIT 1 - P2P GO MODE
+ *
+ * Related: none
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DISCARD_PASSIVE_CHANNEL_FOR_MODE CFG_INI_UINT( \
+			"discardPassiveChannelforMode", \
+			0, \
+			3, \
+			0, \
+			CFG_VALUE_OR_DEFAULT, \
+			"discard Passive channel")
 #define CFG_DFS_ALL \
 	CFG(CFG_IGNORE_CAC) \
 	CFG(CFG_DISABLE_DFS_CH_SWITCH) \
@@ -262,6 +312,8 @@
 	CFG(CFG_ENABLE_DFS_MASTER_CAPABILITY) \
 	CFG(CFG_DISABLE_DFS_JAPAN_W53) \
 	CFG(CFG_ENABLE_DFS_PHYERR_FILTEROFFLOAD) \
-	CFG(CFG_DISCARD_DFS_CHANNEL_FOR_MODE)
+	CFG(CFG_ENABLE_SAP_DFS_PUNCTURE) \
+	CFG(CFG_DISCARD_DFS_CHANNEL_FOR_MODE) \
+	CFG(CFG_DISCARD_PASSIVE_CHANNEL_FOR_MODE)
 
 #endif /* __CFG_MLME_DFS_H */

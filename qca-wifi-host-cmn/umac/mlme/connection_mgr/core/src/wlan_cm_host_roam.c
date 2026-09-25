@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,9 +24,7 @@
 #include <wlan_serialization_api.h>
 #include <wlan_utility.h>
 #include <wlan_cm_api.h>
-#ifdef WLAN_POLICY_MGR_ENABLE
 #include "wlan_policy_mgr_api.h"
-#endif
 
 static void
 cm_fill_roam_fail_resp_from_cm_id(struct cnx_mgr *cm_ctx,
@@ -114,7 +112,6 @@ cm_send_reassoc_start_fail(struct cnx_mgr *cm_ctx,
 	return status;
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 static QDF_STATUS
 cm_update_roam_scan_filter(
 		struct wlan_objmgr_vdev *vdev, struct cm_roam_req *cm_req,
@@ -122,45 +119,6 @@ cm_update_roam_scan_filter(
 {
 	return cm_update_advance_roam_scan_filter(vdev, filter);
 }
-#else
-static QDF_STATUS
-cm_update_roam_scan_filter(
-		struct wlan_objmgr_vdev *vdev, struct cm_roam_req *cm_req,
-		struct scan_filter *filter, bool security_valid_for_6ghz)
-{
-	uint16_t rsn_caps;
-
-	filter->num_of_ssid = 1;
-	wlan_vdev_mlme_get_ssid(vdev, filter->ssid_list[0].ssid,
-				&filter->ssid_list[0].length);
-
-	if (cm_req->req.chan_freq) {
-		filter->num_of_channels = 1;
-		filter->chan_freq_list[0] = cm_req->req.chan_freq;
-	}
-
-	/* Security is not valid for 6Ghz so ignore 6Ghz APs */
-	if (!security_valid_for_6ghz)
-		filter->ignore_6ghz_channel = true;
-
-	if (!QDF_HAS_PARAM(filter->authmodeset, WLAN_CRYPTO_AUTH_WAPI) &&
-	    !QDF_HAS_PARAM(filter->authmodeset, WLAN_CRYPTO_AUTH_RSNA) &&
-	    !QDF_HAS_PARAM(filter->authmodeset, WLAN_CRYPTO_AUTH_WPA)) {
-		filter->ignore_auth_enc_type = 1;
-	}
-
-	rsn_caps =
-		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_RSN_CAP);
-
-	if (rsn_caps & WLAN_CRYPTO_RSN_CAP_MFP_REQUIRED)
-		filter->pmf_cap = WLAN_PMF_REQUIRED;
-	else if (rsn_caps & WLAN_CRYPTO_RSN_CAP_MFP_ENABLED)
-		filter->pmf_cap = WLAN_PMF_CAPABLE;
-	else
-		filter->pmf_cap = WLAN_PMF_DISABLED;
-	return QDF_STATUS_SUCCESS;
-}
-#endif
 
 static QDF_STATUS cm_connect_prepare_scan_filter_for_roam(
 		struct cnx_mgr *cm_ctx, struct cm_roam_req *cm_req,
@@ -187,6 +145,8 @@ static QDF_STATUS cm_connect_prepare_scan_filter_for_roam(
 
 	filter->mgmtcipherset =
 		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_MGMT_CIPHER);
+
+	filter->mrsno_gen = wlan_vdev_get_rsno_gen_supported(vdev);
 
 	return cm_update_roam_scan_filter(vdev, cm_req, filter,
 					  security_valid_for_6ghz);
@@ -220,7 +180,8 @@ static QDF_STATUS cm_roam_get_candidates(struct wlan_objmgr_pdev *pdev,
 
 	op_mode = wlan_vdev_mlme_get_opmode(cm_ctx->vdev);
 	if (num_bss && op_mode == QDF_STA_MODE)
-		cm_calculate_scores(cm_ctx, pdev, filter, candidate_list);
+		cm_calculate_scores(cm_ctx, pdev, filter,
+				    candidate_list, false);
 
 	qdf_mem_free(filter);
 
@@ -275,6 +236,40 @@ QDF_STATUS cm_host_roam_start_fail(struct cnx_mgr *cm_ctx,
 	cm_send_preauth_start_fail(cm_ctx, cm_req->cm_id, reason);
 
 	return QDF_STATUS_SUCCESS;
+}
+
+void
+cm_update_per_peer_crypto_params_for_roam(struct wlan_objmgr_vdev *vdev,
+					  struct cm_roam_req *roam_req)
+{
+	struct security_info *neg_sec_info;
+	uint16_t rsn_caps;
+
+	/* Do only for WPA/WPA2/WPA3 */
+	if (!roam_req->req.crypto.wpa_versions)
+		return;
+
+	/*
+	 * Some non PMF AP misbehave if in assoc req RSN IE contain PMF capable
+	 * bit set. Thus only if AP and self are capable, try PMF connection
+	 * else set PMF as 0. The PMF filtering is already taken care in
+	 * get scan results.
+	 */
+	neg_sec_info = &roam_req->cur_candidate->entry->neg_sec_info;
+	rsn_caps = roam_req->req.crypto.rsn_caps;
+	if (!(neg_sec_info->rsn_caps & WLAN_CRYPTO_RSN_CAP_MFP_ENABLED &&
+	     rsn_caps & WLAN_CRYPTO_RSN_CAP_MFP_ENABLED)) {
+		rsn_caps &= ~WLAN_CRYPTO_RSN_CAP_MFP_ENABLED;
+		rsn_caps &= ~WLAN_CRYPTO_RSN_CAP_MFP_REQUIRED;
+		rsn_caps &= ~WLAN_CRYPTO_RSN_CAP_OCV_SUPPORTED;
+	}
+
+	/* Update the new rsn caps */
+	wlan_crypto_set_vdev_param(vdev, WLAN_CRYPTO_PARAM_RSN_CAP,
+				   rsn_caps);
+
+	cm_update_per_peer_key_mgmt_crypto_params(vdev, neg_sec_info);
+	cm_update_per_peer_ucastcipher_crypto_params(vdev, neg_sec_info);
 }
 #else
 static QDF_STATUS cm_host_roam_start(struct cnx_mgr *cm_ctx,
@@ -678,7 +673,6 @@ static QDF_STATUS cm_ser_reassoc_req(struct cnx_mgr *cm_ctx,
 	return QDF_STATUS_SUCCESS;
 }
 
-#ifdef WLAN_POLICY_MGR_ENABLE
 QDF_STATUS
 cm_handle_reassoc_hw_mode_change(struct cnx_mgr *cm_ctx, wlan_cm_id *cm_id,
 				 enum wlan_cm_sm_evt event)
@@ -784,14 +778,6 @@ cm_check_for_reassoc_hw_mode_change(struct cnx_mgr *cm_ctx,
 
 	return status;
 }
-#else
-static inline QDF_STATUS
-cm_check_for_reassoc_hw_mode_change(struct cnx_mgr *cm_ctx,
-				    struct cm_roam_req *cm_req)
-{
-	return QDF_STATUS_E_ALREADY;
-}
-#endif
 
 QDF_STATUS cm_reassoc_start(struct cnx_mgr *cm_ctx,
 			    struct cm_roam_req *cm_req)

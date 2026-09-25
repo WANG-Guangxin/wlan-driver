@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -323,12 +323,12 @@ static void wma_convert_he_cap(tDot11fIEhe_cap *he_cap, uint32_t *mac_cap,
 	rx_mcs_160 = (supp_mcs & 0xFFFF0000) >> 16;
 	tx_mcs_160 = (supp_mcs & 0xFFFF0000) >> 16;
 	/* if FW indicated it is using 1x1 disable upper NSS-MCS sets */
-	if (nss == NSS_1x1_MODE) {
-		rx_mcs_le_80 |= HE_MCS_INV_MSK_4_NSS(1);
-		tx_mcs_le_80 |= HE_MCS_INV_MSK_4_NSS(1);
-		rx_mcs_160 |= HE_MCS_INV_MSK_4_NSS(1);
-		tx_mcs_160 |= HE_MCS_INV_MSK_4_NSS(1);
-	}
+
+	rx_mcs_le_80 |= HE_DISABLE_MCS_OVER_NSS(nss);
+	tx_mcs_le_80 |= HE_DISABLE_MCS_OVER_NSS(nss);
+	rx_mcs_160 |= HE_DISABLE_MCS_OVER_NSS(nss);
+	tx_mcs_160 |= HE_DISABLE_MCS_OVER_NSS(nss);
+
 	he_cap->rx_he_mcs_map_lt_80 = rx_mcs_le_80;
 	he_cap->tx_he_mcs_map_lt_80 = tx_mcs_le_80;
 	*((uint16_t *)he_cap->tx_he_mcs_map_160) = rx_mcs_160;
@@ -514,20 +514,33 @@ static void wma_derive_ext_he_cap(tDot11fIEhe_cap *he_cap,
 	/* take intersection for MCS map */
 	mcs_1 = he_cap->rx_he_mcs_map_lt_80;
 	mcs_2 = new_cap->rx_he_mcs_map_lt_80;
-	he_cap->rx_he_mcs_map_lt_80 = HE_INTERSECT_MCS(mcs_1, mcs_2);
+	he_cap->rx_he_mcs_map_lt_80 = HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
 	mcs_1 = he_cap->tx_he_mcs_map_lt_80;
 	mcs_2 = new_cap->tx_he_mcs_map_lt_80;
-	he_cap->tx_he_mcs_map_lt_80 = HE_INTERSECT_MCS(mcs_1, mcs_2);
+	he_cap->tx_he_mcs_map_lt_80 = HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
 	if (is_5g_cap) {
 		he_cap->rx_pream_puncturing =
 					QDF_MIN(he_cap->rx_pream_puncturing,
 						new_cap->rx_pream_puncturing);
+		mcs_1 = *((uint16_t *)he_cap->rx_he_mcs_map_160);
+		mcs_2 = *((uint16_t *)new_cap->rx_he_mcs_map_160);
 		*((uint16_t *)he_cap->rx_he_mcs_map_160) =
-			*((uint16_t *)new_cap->rx_he_mcs_map_160);
+			HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
+
+		mcs_1 = *((uint16_t *)he_cap->tx_he_mcs_map_160);
+		mcs_2 = *((uint16_t *)new_cap->tx_he_mcs_map_160);
 		*((uint16_t *)he_cap->tx_he_mcs_map_160) =
-			*((uint16_t *)new_cap->tx_he_mcs_map_160);
+			HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
+
+		mcs_1 = *((uint16_t *)he_cap->rx_he_mcs_map_80_80);
+		mcs_2 = *((uint16_t *)new_cap->rx_he_mcs_map_80_80);
 		*((uint16_t *)he_cap->rx_he_mcs_map_80_80) =
-			*((uint16_t *)new_cap->rx_he_mcs_map_80_80);
+			HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
+
+		mcs_1 = *((uint16_t *)he_cap->tx_he_mcs_map_80_80);
+		mcs_2 = *((uint16_t *)new_cap->tx_he_mcs_map_80_80);
+		*((uint16_t *)he_cap->tx_he_mcs_map_80_80) =
+			HE_INTERSECT_MCS_MAX_ENAB(mcs_1, mcs_2);
 		*((uint16_t *)he_cap->tx_he_mcs_map_80_80) =
 			*((uint16_t *)new_cap->tx_he_mcs_map_80_80);
 	}
@@ -1015,13 +1028,16 @@ static void wma_parse_he_ppet(int8_t *rcvd_ppet,
 }
 
 void wma_populate_peer_he_cap(struct peer_assoc_params *peer,
-			      tpAddStaParams params)
+			      tpAddStaParams params,
+			      struct wlan_objmgr_pdev *pdev)
 {
 	tDot11fIEhe_cap *he_cap = &params->he_config;
 	tDot11fIEhe_op *he_op = &params->he_op;
 	uint32_t *phy_cap = peer->peer_he_cap_phyinfo;
 	uint32_t mac_cap[PSOC_HOST_MAX_MAC_SIZE] = {0}, he_ops = 0;
 	uint8_t temp, i, chan_width;
+	enum phy_ch_width max_ch_width;
+	uint32_t freq;
 
 	if (!params->he_capable)
 		return;
@@ -1177,8 +1193,14 @@ void wma_populate_peer_he_cap(struct peer_assoc_params *peer,
 			 WMA_MCS_12_13_MAP_L80) & WMA_MCS_12_13_PEER_RATE_MAP;
 	}
 
+	freq = wlan_get_operation_chan_freq_vdev_id(
+			pdev,
+			peer->vdev_id);
+	max_ch_width = wlan_mlme_get_max_curr_bw(pdev, freq, params->ch_width);
 	if (params->ch_width > CH_WIDTH_80MHZ ||
-	    IS_TDLS_PEER(params->staType)) {
+	    IS_TDLS_PEER(params->staType) ||
+	    (params->ch_width == CH_WIDTH_80MHZ &&
+	     max_ch_width >= CH_WIDTH_160MHZ)) {
 		peer->peer_he_mcs_count = WMI_HOST_MAX_HE_RATE_SET;
 		peer->peer_he_rx_mcs_set[1] |=
 			params->supportedRates.rx_he_mcs_map_160;
@@ -1215,8 +1237,15 @@ void wma_populate_peer_he_cap(struct peer_assoc_params *peer,
 
 #define HE2x2MCSMASK 0xc
 
-	peer->peer_nss = ((params->supportedRates.rx_he_mcs_map_lt_80 &
-			 HE2x2MCSMASK) == HE2x2MCSMASK) ? 1 : 2;
+	peer->peer_nss = NSS_1x1_MODE;
+	for (i = WLAN_MAX_VDEV_NSS; i >= NSS_2x2_MODE; i--) {
+		if (HE_MCS_IS_NSS_ENABLED(params->supportedRates.rx_he_mcs_map_lt_80,
+					  i)) {
+			peer->peer_nss = i;
+			break;
+		}
+	}
+
 	for (i = 0; i < peer->peer_he_mcs_count; i++)
 		wma_debug("[HE - MCS Map: %d] rx_mcs: 0x%x, tx_mcs: 0x%x", i,
 			peer->peer_he_rx_mcs_set[i],

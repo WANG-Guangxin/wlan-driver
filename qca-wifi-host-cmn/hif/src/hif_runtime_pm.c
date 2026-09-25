@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -73,6 +73,8 @@ static const char *hif_rtpm_id_to_string(enum hif_rtpm_client_id id)
 					"HIF_RTPM_FORCE_WAKE",
 					"HIF_RTPM_ID_PM_QOS_NOTIFY",
 					"HIF_RTPM_ID_WIPHY_SUSPEND",
+					"HIF_RTPM_ID_DP_STC",
+					"HIF_RTPM_ID_OPT_DP",
 					"HIF_RTPM_ID_MAX"
 	};
 
@@ -447,6 +449,11 @@ void hif_rtpm_start(struct hif_softc *scn)
 		return;
 	}
 
+	if (pld_is_one_msi(scn->qdf_dev->dev)) {
+		hif_info_high("RUNTIME PM is disabled for single MSI mode");
+		return;
+	}
+
 	if (mode == QDF_GLOBAL_FTM_MODE || QDF_IS_EPPING_ENABLED(mode) ||
 	    mode == QDF_GLOBAL_MONITOR_MODE) {
 		hif_info("RUNTIME PM is disabled for FTM/EPPING/MONITOR mode");
@@ -547,7 +554,8 @@ QDF_STATUS hif_rtpm_deregister(uint32_t id)
 
 QDF_STATUS hif_rtpm_set_autosuspend_delay(int delay)
 {
-	if (delay < HIF_RTPM_DELAY_MIN || delay > HIF_RTPM_DELAY_MAX) {
+	if ((delay < HIF_RTPM_DELAY_MIN || delay > HIF_RTPM_DELAY_MAX) &&
+	    delay > 0) {
 		hif_err("Invalid delay value %d ms", delay);
 		return QDF_STATUS_E_INVAL;
 	}
@@ -864,7 +872,7 @@ int hif_pm_runtime_prevent_suspend(struct hif_pm_runtime_lock *lock)
 	if (!hif_rtpm_enabled() || !lock)
 		return -EINVAL;
 
-	if (in_irq())
+	if (qdf_in_irq())
 		WARN_ON(1);
 
 	qdf_spin_lock_bh(&gp_hif_rtpm_ctx->prevent_list_lock);
@@ -928,7 +936,7 @@ int hif_pm_runtime_prevent_suspend_sync(struct hif_pm_runtime_lock *lock)
 	if (!lock)
 		return -EINVAL;
 
-	if (in_irq())
+	if (qdf_in_irq())
 		WARN_ON(1);
 
 	__hif_pm_runtime_prevent_suspend_sync(lock);
@@ -949,7 +957,7 @@ int hif_pm_runtime_allow_suspend(struct hif_pm_runtime_lock *lock)
 	if (!lock)
 		return -EINVAL;
 
-	if (in_irq())
+	if (qdf_in_irq())
 		WARN_ON(1);
 
 	qdf_spin_lock_bh(&gp_hif_rtpm_ctx->prevent_list_lock);

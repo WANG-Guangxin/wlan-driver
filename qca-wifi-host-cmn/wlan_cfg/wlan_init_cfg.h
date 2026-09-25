@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -36,7 +36,6 @@
 #define WLAN_CFG_INT_NUM_CONTEXTS 7
 #define WLAN_CFG_INT_NUM_CONTEXTS_MAX 14
 #endif
-#define WLAN_CFG_RXDMA1_ENABLE 1
 /*
  * This mask defines how many transmit frames account for 1 NAPI work unit
  * 0 means each tx completion is 1 unit
@@ -46,7 +45,8 @@
 /* PPDU Stats Configuration - Configure bitmask for enabling tx ppdu tlv's */
 #define DP_PPDU_TXLITE_STATS_BITMASK_CFG 0x3FFF
 
-#if defined(QCA_WIFI_QCA6750) || defined(QCA_WIFI_WCN6450)
+#if defined(QCA_WIFI_QCA6750) || defined(QCA_WIFI_WCN6450) || \
+    defined(QCA_WIFI_WCN7750) || defined(QCA_WIFI_QCC2072)
 #define NUM_RXDMA_STATUS_RINGS_PER_PDEV 1
 #else
 #define NUM_RXDMA_STATUS_RINGS_PER_PDEV 2
@@ -77,10 +77,22 @@
 /* Tx configuration */
 #define MAX_LINK_DESC_BANKS 8
 
+#ifdef CONFIG_BORON
+#define MAX_REO_DEST_RINGS 9
+#define MAX_TCL_DATA_RINGS 7
+#else
 #define MAX_REO_DEST_RINGS 8
 #define MAX_TCL_DATA_RINGS 5
+#endif
 
 #define MAX_RX_MAC_RINGS 2
 
 #define WBM2SW_TXCOMP_RING4_NUM 4
+
+/* Num of tx desc pools */
+#define WLAN_CFG_NUM_POOL 4
+
+/* Num of DP Rings */
+#define WLAN_CFG_NUM_RING 4
+
 #endif /* __WLAN_INIT_CFG_H */

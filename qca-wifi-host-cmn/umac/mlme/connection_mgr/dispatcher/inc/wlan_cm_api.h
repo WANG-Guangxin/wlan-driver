@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -268,6 +268,24 @@ bool wlan_cm_is_link_switch_disconnect_resp(struct wlan_cm_discon_rsp *resp);
 bool wlan_cm_is_link_switch_connect_resp(struct wlan_cm_connect_resp *resp);
 
 /**
+ * wlan_cm_is_link_add_connect_resp() - Check if the connect response if for
+ * link add request.
+ * @resp: Connection manager connect response.
+ *
+ * Return: bool
+ */
+bool wlan_cm_is_link_add_connect_resp(struct wlan_cm_connect_resp *resp);
+
+/**
+ * wlan_cm_is_link_add_connecting() - Check if link add connecting request
+ * is active on vdev
+ * @vdev: vdev object
+ *
+ * Return: bool
+ */
+bool wlan_cm_is_link_add_connecting(struct wlan_objmgr_vdev *vdev);
+
+/**
  * wlan_cm_trigger_panic_on_cmd_timeout() - Trigger recovery on CM command
  * timeout.
  * @vdev: VDEV object manager
@@ -307,6 +325,16 @@ bool wlan_cm_is_vdev_roam_sync_inprogress(struct wlan_objmgr_vdev *vdev)
 	return false;
 }
 #endif
+
+/**
+ * wlan_cm_reset_active_cm_id() - reset active cm id
+ * @vdev: vdev object
+ * @cm_id: Reset active cm id if cm id match
+ *
+ * Return: void
+ */
+void wlan_cm_reset_active_cm_id(struct wlan_objmgr_vdev *vdev,
+				wlan_cm_id cm_id);
 
 #ifdef WLAN_FEATURE_HOST_ROAM
 /**
@@ -513,10 +541,8 @@ QDF_STATUS wlan_cm_reassoc_rsp(struct wlan_objmgr_vdev *vdev,
  *
  * Return: void
  */
-#ifdef WLAN_POLICY_MGR_ENABLE
 void wlan_cm_hw_mode_change_resp(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 				 wlan_cm_id cm_id, QDF_STATUS status);
-#endif /* ifdef POLICY_MGR_ENABLE */
 
 #ifdef SM_ENG_HIST_ENABLE
 /**
@@ -547,7 +573,6 @@ static inline void wlan_cm_req_history_print(struct wlan_objmgr_vdev *vdev)
 {}
 #endif
 
-#ifdef CONN_MGR_ADV_FEATURE
 /**
  * wlan_cm_set_candidate_advance_filter_cb() - Set CM candidate advance
  * filter cb
@@ -578,17 +603,6 @@ void wlan_cm_set_candidate_custom_sort_cb(
 				 qdf_list_t *list))
 {
 }
-#else
-void wlan_cm_set_candidate_advance_filter_cb(
-		struct wlan_objmgr_vdev *vdev,
-		void (*filter_fun)(struct wlan_objmgr_vdev *vdev,
-				   struct scan_filter *filter));
-
-void wlan_cm_set_candidate_custom_sort_cb(
-		struct wlan_objmgr_vdev *vdev,
-		void (*sort_fun)(struct wlan_objmgr_vdev *vdev,
-				 qdf_list_t *list));
-#endif
 
 /**
  * wlan_cm_get_rnr() - get rnr
@@ -719,4 +733,27 @@ wlan_cm_bss_mlo_type(struct wlan_objmgr_psoc *psoc,
 void wlan_cm_bearer_switch_resp(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 				wlan_cm_id cm_id, QDF_STATUS status);
 #endif /* WLAN_FEATURE_LL_LT_SAP */
+
+/**
+ * wlan_cm_is_link_switch_connection() - Check whether the connection is
+ * because of link switch or not
+ * @vdev: pointer to vdev
+ *
+ * Return: True/False
+ */
+bool wlan_cm_is_link_switch_connection(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * wlan_cm_update_all_sta_links_assoc_state() - Update assoc_state for all
+ *                                              connected STA links
+ * @pdev: pdev pointer
+ *
+ * Iterates all STA vdevs on the pdev and updates assoc_state to
+ * SCAN_ENTRY_CON_STATE_ASSOC for connected entries. For MLO connections,
+ * updates all links (active + standby). For non-MLO connections, updates
+ * the connected BSSID entry. Called on scan completion to prevent scan
+ * entries from aging out after CSA events.
+ */
+void wlan_cm_update_all_sta_links_assoc_state(struct wlan_objmgr_pdev *pdev);
+
 #endif /* __WLAN_CM_UCFG_API_H */

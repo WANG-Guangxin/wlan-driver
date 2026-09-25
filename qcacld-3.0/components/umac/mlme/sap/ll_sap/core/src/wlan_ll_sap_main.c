@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -19,8 +19,46 @@
 #include "qca_vendor.h"
 #include "wlan_ll_lt_sap_main.h"
 #include "target_if_ll_sap.h"
+#include "wlan_mlme_vdev_mgr_interface.h"
 
 struct ll_sap_ops *global_ll_sap_ops;
+
+static
+void ll_sap_tsf_timer_timeout(void *user_data)
+{
+	struct wlan_objmgr_psoc *psoc;
+	struct wlan_objmgr_vdev *vdev;
+	struct ll_sap_psoc_priv_obj *ll_sap_psoc_obj;
+
+	psoc = (struct wlan_objmgr_psoc *)user_data;
+
+	if (!psoc) {
+		ll_sap_err("Invalid psoc");
+		return;
+	}
+
+	ll_sap_psoc_obj = wlan_objmgr_psoc_get_comp_private_obj(
+							psoc,
+							WLAN_UMAC_COMP_LL_SAP);
+	if (!ll_sap_psoc_obj)
+		return;
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(
+						psoc,
+						ll_sap_psoc_obj->timer_vdev_id,
+						WLAN_LL_SAP_ID);
+	if (!vdev)
+		return;
+
+	/*
+	 * In tsf_timer timeout case, update target_tsf with 0 which
+	 * means immediate switch.
+	 */
+	wlan_ll_sap_notify_chan_switch_started(vdev);
+	wlan_ll_sap_send_continue_vdev_restart(vdev);
+
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_LL_SAP_ID);
+}
 
 static QDF_STATUS ll_sap_psoc_obj_created_notification(struct wlan_objmgr_psoc *psoc, void *arg_list)
 {
@@ -43,6 +81,10 @@ static QDF_STATUS ll_sap_psoc_obj_created_notification(struct wlan_objmgr_psoc *
 	target_if_ll_sap_register_tx_ops(&ll_sap_psoc_obj->tx_ops);
 	target_if_ll_sap_register_rx_ops(&ll_sap_psoc_obj->rx_ops);
 
+	qdf_mc_timer_init(&ll_sap_psoc_obj->tsf_timer, QDF_TIMER_TYPE_SW,
+			  ll_sap_tsf_timer_timeout,
+			  (void *)psoc);
+
 	ll_sap_debug("ll sap psoc object created");
 
 	return status;
@@ -61,6 +103,8 @@ static QDF_STATUS ll_sap_psoc_obj_destroyed_notification(struct wlan_objmgr_psoc
 	ll_sap_psoc_obj =
 		wlan_objmgr_psoc_get_comp_private_obj(psoc,
 						      WLAN_UMAC_COMP_LL_SAP);
+
+	qdf_mc_timer_destroy(&ll_sap_psoc_obj->tsf_timer);
 
 	status = wlan_objmgr_psoc_component_obj_detach(psoc,
 						       WLAN_UMAC_COMP_LL_SAP,
@@ -119,9 +163,25 @@ static QDF_STATUS ll_sap_vdev_obj_destroyed_notification(
 {
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	struct ll_sap_vdev_priv_obj *ll_sap_obj;
+	struct ll_sap_psoc_priv_obj *ll_sap_psoc_obj;
 
 	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_SAP_MODE)
 		return QDF_STATUS_SUCCESS;
+
+	ll_sap_psoc_obj = wlan_objmgr_psoc_get_comp_private_obj(
+						wlan_vdev_get_psoc(vdev),
+						WLAN_UMAC_COMP_LL_SAP);
+	if (!ll_sap_psoc_obj) {
+		ll_sap_err("psoc_ll_sap_obj is null");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (ll_sap_psoc_obj->timer_vdev_id == wlan_vdev_get_id(vdev) &&
+	    QDF_TIMER_STATE_RUNNING == qdf_mc_timer_get_current_state(
+						&ll_sap_psoc_obj->tsf_timer)) {
+		/* Stop tsf timer */
+		qdf_mc_timer_stop(&ll_sap_psoc_obj->tsf_timer);
+	}
 
 	ll_lt_sap_deinit(vdev);
 
@@ -143,6 +203,60 @@ static QDF_STATUS ll_sap_vdev_obj_destroyed_notification(
 	qdf_mem_free(ll_sap_obj);
 
 	return status;
+}
+
+bool ll_sap_is_start_bss_in_progress(struct wlan_objmgr_psoc *psoc,
+				     uint8_t vdev_id)
+{
+	struct ll_sap_vdev_priv_obj *obj = NULL;
+	bool start_bss = false;
+	struct wlan_objmgr_vdev *vdev;
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
+						    WLAN_LL_SAP_ID);
+	if (!vdev) {
+		ll_sap_err("vdev %d is null", vdev_id);
+		return start_bss;
+	}
+	obj = ll_sap_get_vdev_priv_obj(vdev);
+	if (!obj) {
+		ll_sap_err("vdev %d ll_sap obj null", vdev_id);
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_LL_SAP_ID);
+		return start_bss;
+	}
+	start_bss = obj->start_bss_in_progress;
+	ll_sap_debug("vdev %d start bss %d", vdev_id, start_bss);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_LL_SAP_ID);
+
+	return start_bss;
+}
+
+QDF_STATUS ll_sap_set_start_bss_in_progress(struct wlan_objmgr_psoc *psoc,
+					    uint8_t vdev_id,
+					    bool start_bss)
+{
+	struct ll_sap_vdev_priv_obj *obj = NULL;
+	struct wlan_objmgr_vdev *vdev;
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
+						    WLAN_LL_SAP_ID);
+	if (!vdev) {
+		ll_sap_err("vdev %d is null", vdev_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	obj = ll_sap_get_vdev_priv_obj(vdev);
+	if (!obj) {
+		ll_sap_err("vdev %d ll_sap obj null", vdev_id);
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_LL_SAP_ID);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	obj->start_bss_in_progress = start_bss;
+	ll_sap_debug("vdev %d set start bss %d", vdev_id, start_bss);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_LL_SAP_ID);
+
+	return QDF_STATUS_SUCCESS;
 }
 
 QDF_STATUS ll_sap_init(void)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -21,13 +21,14 @@
 #include <cfg_twt.h>
 #include "wlan_twt_cfg.h"
 #include "twt/core/src/wlan_twt_priv.h"
+#include "wlan_mlme_twt_ucfg_api.h"
 
 QDF_STATUS wlan_twt_cfg_init(struct wlan_objmgr_psoc *psoc)
 {
 	struct twt_psoc_priv_obj *twt_psoc;
 	psoc_twt_ext_cfg_params_t *twt_cfg;
 	uint32_t bcast_conf;
-	uint32_t rtwt_conf;
+	uint32_t rtwt_conf, twt_req_res_ht_vht;
 
 	if (!psoc) {
 		twt_err("null psoc");
@@ -49,20 +50,29 @@ QDF_STATUS wlan_twt_cfg_init(struct wlan_objmgr_psoc *psoc)
 	twt_cfg->enable_twt = cfg_get(psoc, CFG_ENABLE_TWT);
 	twt_cfg->twt_requestor = cfg_get(psoc, CFG_TWT_REQUESTOR);
 	twt_cfg->twt_responder = cfg_get(psoc, CFG_TWT_RESPONDER);
+	twt_cfg->twt_responder_orig = cfg_get(psoc, CFG_TWT_RESPONDER);
 	twt_cfg->twt_congestion_timeout =
 				cfg_get(psoc, CFG_TWT_CONGESTION_TIMEOUT);
 	twt_cfg->bcast_requestor_enabled = CFG_TWT_GET_BCAST_REQ(bcast_conf);
 	twt_cfg->bcast_responder_enabled = CFG_TWT_GET_BCAST_RES(bcast_conf);
 	twt_cfg->enable_twt_24ghz = cfg_get(psoc, CFG_ENABLE_TWT_24GHZ);
+	twt_cfg->disable_twt_on_scan = cfg_get(psoc, CFG_DISABLE_TWT_ON_SCAN);
 	twt_cfg->flex_twt_sched = cfg_default(CFG_HE_FLEX_TWT_SCHED);
-	twt_cfg->is_twt_enabled_in_11n = cfg_get(psoc, CFG_TWT_ENABLE_IN_11N);
 	twt_cfg->req_flag = false;
-	twt_cfg->res_flag = false;
 	twt_cfg->rtwt_requestor_enabled = CFG_GET_RTWT_REQ(rtwt_conf);
 	twt_cfg->rtwt_responder_enabled = CFG_GET_RTWT_RES(rtwt_conf);
 
-	twt_debug("req: %d resp: %d", twt_cfg->twt_requestor,
-		  twt_cfg->twt_responder);
+	twt_req_res_ht_vht = cfg_get(psoc, CFG_TWT_REQ_RESP_HT_VHT);
+	twt_cfg->twt_req_ht_vht = CFG_GET_TWT_REQ_HT_VHT(twt_req_res_ht_vht);
+	twt_cfg->twt_res_ht_vht = CFG_GET_TWT_RES_HT_VHT(twt_req_res_ht_vht);
+
+	twt_debug("req: %d resp: %d bcast_resp:%d", twt_cfg->twt_requestor,
+		  twt_cfg->twt_responder, twt_cfg->bcast_responder_enabled);
+
+	twt_nofl_debug("r_twt_req: %d r_twt_resp: %d twt_req_ht_vht: %d twt_res_ht_vht: %d",
+		       twt_cfg->rtwt_requestor_enabled,
+		       twt_cfg->rtwt_responder_enabled,
+		       twt_cfg->twt_req_ht_vht, twt_cfg->twt_res_ht_vht);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -113,8 +123,11 @@ QDF_STATUS wlan_twt_cfg_update(struct wlan_objmgr_psoc *psoc)
 
 	twt_cfg->twt_requestor = QDF_MIN(tgt_caps->twt_requestor,
 					(enable_twt && twt_cfg->twt_requestor));
-	twt_cfg->twt_responder = QDF_MIN(tgt_caps->twt_responder,
-					(enable_twt && twt_cfg->twt_responder));
+	twt_cfg->twt_responder_orig = twt_cfg->twt_responder;
+
+	if (!tgt_caps->twt_responder || !enable_twt)
+		twt_cfg->twt_responder = 0;
+
 	twt_cfg->bcast_requestor_enabled =
 			QDF_MIN((tgt_caps->twt_bcast_req_support ||
 				tgt_caps->legacy_bcast_twt_support),
@@ -125,10 +138,17 @@ QDF_STATUS wlan_twt_cfg_update(struct wlan_objmgr_psoc *psoc)
 				tgt_caps->legacy_bcast_twt_support),
 				(enable_twt &&
 					twt_cfg->bcast_responder_enabled));
-	twt_debug("req: %d resp: %d bcast_req: %d bcast_resp: %d",
+	/*
+	 * flexible twt support is et when  twt enabled and HE cap
+	 * is also having flexible twt support
+	 */
+	twt_cfg->flex_twt_sched = enable_twt &&
+				  ucfg_mlme_is_flexible_twt_enabled(psoc);
+	twt_debug("req: %d resp: %d bcast_req: %d bcast_resp: %d flex_twt %d",
 		  twt_cfg->twt_requestor, twt_cfg->twt_responder,
 		  twt_cfg->bcast_requestor_enabled,
-		  twt_cfg->bcast_responder_enabled);
+		  twt_cfg->bcast_responder_enabled,
+		  twt_cfg->flex_twt_sched);
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -149,7 +169,21 @@ wlan_twt_cfg_get_requestor(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 QDF_STATUS
-wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, bool *val)
+wlan_twt_cfg_set_requestor(struct wlan_objmgr_psoc *psoc, bool val)
+{
+	struct twt_psoc_priv_obj *twt_psoc_obj;
+
+	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
+	if (!twt_psoc_obj)
+		return QDF_STATUS_E_INVAL;
+
+	twt_psoc_obj->cfg_params.twt_requestor = val;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, uint8_t *val)
 {
 	struct twt_psoc_priv_obj *twt_psoc_obj;
 
@@ -165,7 +199,22 @@ wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 QDF_STATUS
-wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, bool val)
+wlan_twt_cfg_reset_responder(struct wlan_objmgr_psoc *psoc)
+{
+	struct twt_psoc_priv_obj *twt_psoc_obj;
+
+	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
+	if (!twt_psoc_obj)
+		return QDF_STATUS_E_INVAL;
+
+	twt_psoc_obj->cfg_params.twt_responder =
+			twt_psoc_obj->cfg_params.twt_responder_orig;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, uint8_t val)
 {
 	struct twt_psoc_priv_obj *twt_psoc_obj;
 
@@ -251,29 +300,41 @@ wlan_twt_cfg_set_requestor_flag(struct wlan_objmgr_psoc *psoc, bool val)
 }
 
 QDF_STATUS
-wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, bool *val)
+wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+				bool *val)
 {
-	struct twt_psoc_priv_obj *twt_psoc_obj;
+	QDF_STATUS status;
+	uint8_t mac_id;
 
-	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
-	if (!twt_psoc_obj)
-		return QDF_STATUS_E_INVAL;
+	mac_id = policy_mgr_mode_get_macid_by_vdev_id(psoc, vdev_id);
+	if (mac_id == DEFAULT_MAC_ID) {
+		for (mac_id = 0; mac_id <= MAX_MAC; mac_id++) {
+			status = wlan_twt_cfg_get_mac_responder_flag(psoc,
+								     mac_id,
+								     val);
+			if (*val)
+				break;
+		}
+	} else {
+		status = wlan_twt_cfg_get_mac_responder_flag(psoc, mac_id, val);
+	}
 
-	*val = twt_psoc_obj->cfg_params.res_flag;
-
-	return QDF_STATUS_SUCCESS;
+	return status;
 }
 
 QDF_STATUS
-wlan_twt_cfg_set_responder_flag(struct wlan_objmgr_psoc *psoc, bool val)
+wlan_twt_cfg_get_twt_disabled_on_scan(struct wlan_objmgr_psoc *psoc,
+				      bool *val)
 {
 	struct twt_psoc_priv_obj *twt_psoc_obj;
 
 	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
-	if (!twt_psoc_obj)
+	if (!twt_psoc_obj) {
+		*val = cfg_default(CFG_DISABLE_TWT_ON_SCAN);
 		return QDF_STATUS_E_INVAL;
+	}
 
-	twt_psoc_obj->cfg_params.res_flag = val;
+	*val = twt_psoc_obj->cfg_params.disable_twt_on_scan;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -387,8 +448,8 @@ wlan_twt_cfg_get_rtwt_responder(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 QDF_STATUS
-wlan_twt_cfg_get_support_in_11n_mode(struct wlan_objmgr_psoc *psoc,
-				     bool *val)
+wlan_twt_get_requestor_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val)
 {
 	struct twt_psoc_priv_obj *twt_psoc_obj;
 	psoc_twt_ext_cfg_params_t *twt_cfg;
@@ -397,11 +458,11 @@ wlan_twt_cfg_get_support_in_11n_mode(struct wlan_objmgr_psoc *psoc,
 
 	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
 	if (!twt_psoc_obj) {
-		*val = cfg_default(CFG_TWT_ENABLE_IN_11N);
+		*val = cfg_default(CFG_TWT_REQ_RESP_HT_VHT);
 		return QDF_STATUS_E_INVAL;
 	}
 
-	*val = twt_psoc_obj->cfg_params.is_twt_enabled_in_11n;
+	*val = twt_psoc_obj->cfg_params.twt_req_ht_vht;
 	twt_cfg = &twt_psoc_obj->cfg_params;
 	tgt_caps = &twt_psoc_obj->twt_caps;
 	enable_twt = twt_cfg->enable_twt;
@@ -450,4 +511,30 @@ wlan_twt_get_pmo_allowed(struct wlan_objmgr_psoc *psoc)
 		return false;
 
 	return true;
+}
+
+QDF_STATUS
+wlan_twt_get_responder_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val)
+{
+	struct twt_psoc_priv_obj *twt_psoc_obj;
+	psoc_twt_ext_cfg_params_t *twt_cfg;
+	struct twt_tgt_caps *tgt_caps;
+	bool enable_twt;
+
+	twt_psoc_obj = wlan_twt_psoc_get_comp_private_obj(psoc);
+	if (!twt_psoc_obj) {
+		*val = cfg_default(CFG_TWT_REQ_RESP_HT_VHT);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	*val = twt_psoc_obj->cfg_params.twt_res_ht_vht;
+	twt_cfg = &twt_psoc_obj->cfg_params;
+	tgt_caps = &twt_psoc_obj->twt_caps;
+	enable_twt = twt_cfg->enable_twt;
+
+	*val = QDF_MIN(tgt_caps->twt_responder,
+		       (enable_twt && twt_cfg->twt_responder && *val));
+
+	return QDF_STATUS_SUCCESS;
 }

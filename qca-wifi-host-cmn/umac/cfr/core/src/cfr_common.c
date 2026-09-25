@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,13 +34,7 @@
 #include "host_diag_core_event.h"
 #endif
 
-/**
- * wlan_cfr_is_ini_disabled() - Check if cfr feature is disabled
- * @pdev: the physical device object.
- *
- * Return : true if cfr is disabled, else false.
- */
-static bool
+bool
 wlan_cfr_is_ini_disabled(struct wlan_objmgr_pdev *pdev)
 {
 	struct wlan_objmgr_psoc *psoc;
@@ -487,6 +482,7 @@ wlan_cfr_peer_obj_destroy_handler(struct wlan_objmgr_peer *peer, void *arg)
 	return QDF_STATUS_SUCCESS;
 }
 
+#ifdef WLAN_STREAMFS
 #ifdef CFR_USE_FIXED_FOLDER
 static char *cfr_get_dev_name(struct wlan_objmgr_pdev *pdev)
 {
@@ -578,6 +574,7 @@ QDF_STATUS cfr_streamfs_init(struct wlan_objmgr_pdev *pdev)
 
 	return QDF_STATUS_SUCCESS;
 }
+#endif
 
 QDF_STATUS cfr_streamfs_remove(struct wlan_objmgr_pdev *pdev)
 {
@@ -648,6 +645,10 @@ QDF_STATUS cfr_stop_indication(struct wlan_objmgr_vdev *vdev)
 	 * userspace needn't stop event string
 	 */
 	if (pa->nl_cb.cfr_nl_cb)
+		return QDF_STATUS_SUCCESS;
+
+	if (pa->nl_cb.cfr_nl_cb_v3 &&
+	    pa->is_cfr_version_v3)
 		return QDF_STATUS_SUCCESS;
 
 	status = cfr_streamfs_write(pa, (const void *)CFR_STOP_STR,

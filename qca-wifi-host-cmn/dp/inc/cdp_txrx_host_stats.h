@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -542,6 +542,27 @@ cdp_host_get_peer_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
 							     peer_stats);
 }
 
+/**
+ * cdp_son_update_peer_stats() - Call to update peer ezmesh stats
+ *
+ * @soc: soc handle
+ * @vdev_id: vdev_id of vdev object
+ * @peer_stats: stats from cdp to update peer stats
+ *
+ * Return: QDF_STATUS
+ */
+static inline QDF_STATUS
+cdp_son_update_peer_stats(ol_txrx_soc_handle soc, uint8_t vdev_id,
+			  struct cdp_peer_stats *peer_stats)
+{
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_update_son_peer_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->host_stats_ops->txrx_update_son_peer_stats(soc,
+								    vdev_id,
+								    peer_stats);
+}
 
 /**
  * cdp_host_get_peer_stats_based_on_peer_type() - Fetch peer stats based on the
@@ -576,6 +597,73 @@ cdp_host_get_peer_stats_based_on_peer_type(ol_txrx_soc_handle soc, uint8_t vdev_
 								peer_stats,
 								peer_type);
 }
+
+#ifdef QCA_PEER_EXT_STATS
+#ifdef CONFIG_SAWF
+/**
+ * cdp_pull_tx_peer_stats - pull tx peer stats
+ * @soc: soc
+ * @peer_mac: peer mac addr
+ * @min_tput: pointer to min threshold
+ * @max_tput: pointer to max threshold
+ * @avg_tput: pointer to average threshold
+ * @per: packet pointer to error rate
+ * @retries_pct: pointer to retries percentage
+ *
+ * Return: QDF_STATUS_SUCCESS on success
+ */
+static inline QDF_STATUS
+cdp_pull_tx_peer_stats(ol_txrx_soc_handle soc,
+		       uint8_t *peer_mac,
+		       uint32_t *min_tput,
+		       uint32_t *max_tput,
+		       uint32_t *avg_tput,
+		       uint32_t *per,
+		       uint32_t *retries_pct)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->sawf_ops ||
+	    !soc->ops->sawf_ops->txrx_pull_tx_peer_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->sawf_ops->txrx_pull_tx_peer_stats(peer_mac,
+							   min_tput,
+							   max_tput,
+							   avg_tput,
+							   per,
+							   retries_pct);
+}
+#else
+/**
+ * cdp_pull_tx_peer_stats - pull tx peer stats
+ * @soc: soc
+ * @peer_mac: peer mac addr
+ * @min_tput: pointer to min threshold
+ * @max_tput: pointer to max threshold
+ * @avg_tput: pointer to average threshold
+ * @per: packet pointer to error rate
+ * @retries_pct: pointer to retries percentage
+ *
+ * Return: QDF_STATUS_SUCCESS on success
+ */
+static inline QDF_STATUS
+cdp_pull_tx_peer_stats(ol_txrx_soc_handle soc,
+		       uint8_t *peer_mac,
+		       uint32_t *min_tput,
+		       uint32_t *max_tput,
+		       uint32_t *avg_tput,
+		       uint32_t *per,
+		       uint32_t *retries_pct)
+{
+	return QDF_STATUS_E_FAILURE;
+}
+#endif
+#endif
 
 /**
  * cdp_host_get_per_link_peer_stats() - Call to get peer stats
@@ -912,7 +1000,6 @@ cdp_mon_pdev_get_rx_stats(ol_txrx_soc_handle soc, uint8_t pdev_id,
 {
 	if (!soc || !soc->ops) {
 		dp_cdp_debug("Invalid Instance");
-		QDF_BUG(0);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -1111,6 +1198,58 @@ static inline QDF_STATUS cdp_get_peer_telemetry_stats(
 					soc, addr, stats);
 }
 
+#ifdef QCA_PEER_EXT_STATS
+/**
+ * cdp_get_peer_tx_ext_stats() - function to get peer tx ext stats
+ * @soc: soc handle
+ * @addr: peer address
+ * @stats: pointer to peer tx stats
+ *
+ * Return: status
+ */
+static inline QDF_STATUS cdp_get_peer_tx_ext_stats(
+				ol_txrx_soc_handle soc,
+				uint8_t *addr,
+				void *stats)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_get_peer_tx_ext_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->host_stats_ops->txrx_get_peer_tx_ext_stats(
+					soc, addr, stats);
+}
+#endif
+
+/**
+ * cdp_get_pdev_stats_deter(): function to get pdev deterministic stats pointer
+ * @soc: soc handle
+ * @pdev_id: pdev id
+ *
+ * return: Pointer to pdev deter stats object
+ */
+static inline struct cdp_pdev_deter_stats *
+cdp_get_pdev_stats_deter(ol_txrx_soc_handle soc, uint8_t pdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		return NULL;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_pdev_stats_deter)
+		return NULL;
+
+	return soc->ops->host_stats_ops->txrx_pdev_stats_deter(
+					soc, pdev_id);
+}
+
 /**
  * cdp_get_pdev_deter_stats(): function to get pdev deterministic stats
  * @soc: soc handle
@@ -1168,6 +1307,30 @@ static inline QDF_STATUS cdp_get_peer_deter_stats(
 }
 
 /**
+ * cdp_get_peer_stats_deter(): function to get peer deterministic stats pointer
+ * @soc: soc handle
+ * @vdev_id: id of vdev handle
+ * @addr: peer address
+ *
+ * return: Pointer to peer deter stats object
+ */
+static inline struct cdp_peer_deter_stats *
+cdp_get_peer_stats_deter(ol_txrx_soc_handle soc, uint8_t vdev_id, uint8_t *addr)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		return NULL;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_peer_stats_deter)
+		return NULL;
+
+	return soc->ops->host_stats_ops->txrx_peer_stats_deter(
+					soc, vdev_id, addr);
+}
+
+/**
  * cdp_update_pdev_chan_util_stats(): function to update pdev channel util stats
  * @soc: soc handle
  * @pdev_id: pdev id
@@ -1192,6 +1355,32 @@ static inline QDF_STATUS cdp_update_pdev_chan_util_stats(
 
 	return soc->ops->host_stats_ops->txrx_update_pdev_chan_util_stats(
 					soc, pdev_id, ch_util);
+}
+
+/**
+ * cdp_get_pdev_erp_stats(): function to get pdev erp stats
+ * @soc: soc handle
+ * @pdev_id: pdev id
+ * @stats: pointer to erp stats
+ *
+ * return: QDF status
+ */
+static inline QDF_STATUS cdp_get_pdev_erp_stats(
+				ol_txrx_soc_handle soc,
+				uint8_t pdev_id,
+				struct cdp_pdev_erp_stats *stats)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_pdev_erp_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->host_stats_ops->txrx_pdev_erp_stats(
+					soc, pdev_id, stats);
 }
 #endif
 
@@ -1388,4 +1577,48 @@ cdp_host_tx_latency_stats_register_cb(ol_txrx_soc_handle soc,
 	return soc->ops->host_stats_ops->tx_latency_stats_register_cb(soc, cb);
 }
 #endif
+#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
+/**
+ * cdp_process_ul_delay() - Process UL delay
+ * @soc: SOC TXRX handle
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS
+ */
+static inline QDF_STATUS
+cdp_process_ul_delay(ol_txrx_soc_handle soc, uint8_t vdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid SOC instance");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_process_ul_delay)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->host_stats_ops->txrx_process_ul_delay(soc, vdev_id);
+}
+
+static inline QDF_STATUS
+cdp_dump_custom_stats(ol_txrx_soc_handle soc, uint8_t vdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid SOC instance");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->host_stats_ops ||
+	    !soc->ops->host_stats_ops->txrx_dump_custom_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->host_stats_ops->txrx_dump_custom_stats(soc, vdev_id);
+}
+#else
+static inline QDF_STATUS
+cdp_process_ul_delay(ol_txrx_soc_handle soc, uint8_t vdev_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif /* WLAN_FEATURE_TSF_UPLINK_DELAY */
 #endif /* _CDP_TXRX_HOST_STATS_H_ */

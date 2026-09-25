@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -39,9 +39,15 @@
 
 /*
  * Maximum number of action oui extensions supported in
- * each action oui category
+ * each action oui category to F/W
  */
-#define ACTION_OUI_MAX_EXTENSIONS 10
+#define ACTION_OUI_MAX_EXT_TO_FW 10
+
+/*
+ * Maximum number of action oui extensions supported in
+ * each action oui category for host only
+ */
+#define ACTION_OUI_MAX_EXT_HOST_ONLY 100
 
 /*
  * Firmware allocates memory for the extensions only during init time.
@@ -57,6 +63,19 @@
 #define ACTION_OUI_MAX_OUI_LENGTH 5
 #define ACTION_OUI_MAX_DATA_LENGTH 20
 #define ACTION_OUI_MAX_DATA_MASK_LENGTH 3
+
+/*
+ * Maximum data length for host-only OUI extensions.
+ * This is larger than ACTION_OUI_MAX_DATA_LENGTH which is limited by firmware.
+ */
+#define ACTION_OUI_MAX_DATA_LENGTH_HOST_ONLY 64
+
+/*
+ * Maximum data mask length for host-only OUI extensions.
+ * This is larger than ACTION_OUI_MAX_DATA_MASK_LENGTH which is limited by
+ * firmware.
+ */
+#define ACTION_OUI_MAX_DATA_MASK_LENGTH_HOST_ONLY 8
 #define ACTION_OUI_MAC_MASK_LENGTH 1
 #define ACTION_OUI_MAX_CAPABILITY_LENGTH 1
 
@@ -94,6 +113,9 @@
 /* Invalid OUI ID action */
 #define ACTION_OUI_INVALID "ffffff 00 01"
 
+#define ACTION_OUI_OPERATOR_AND "&&"
+#define ACTION_OUI_OPERATOR_OR  "||"
+
 /**
  * enum action_oui_id - to identify type of action oui
  * @ACTION_OUI_CONNECT_1X1: for 1x1 connection only
@@ -115,6 +137,12 @@
  * frame for specified IoT APs.
  * @ACTION_OUI_SEND_SMPS_FRAME_WITH_OMN: Send SMPS frame along with OMN
  * frame for specified IoT APs.
+ * @ACTION_OUI_RESTRICT_SLO: Downgrade to SLO if particular AP build present.
+ * @ACTION_OUI_DISABLE_AUX_LISTEN: disable Aux Listen for specified IoT APs
+ * @ACTION_OUI_RESTRICT_MAX_MLO_LINKS: Downgrade MLO if particular AP
+ *                                     build present.
+ * @ACTION_OUI_DISABLE_DYNAMIC_SMPS: Disable Dynamic SMPS for specified AP
+ * @ACTION_OUI_FORCE_TX_NULL_FRAME_ON_P2P: Force tx null frame on p2p Go
  * @ACTION_OUI_HOST_ONLY: host only action id start - placeholder.
  * New Firmware related "ACTION" needs to be added before this placeholder.
  * @ACTION_OUI_HOST_RECONN: reconnect to the same BSSID when wait for
@@ -125,9 +153,14 @@
  * @ACTION_OUI_DISABLE_BFORMEE: disable SU/MU beam formee capability for
  * specified AP
  * @ACTION_OUI_ENABLE_CTS2SELF: enable cts to self for specified AP's
- * @ACTION_OUI_RESTRICT_MAX_MLO_LINKS: Downgrade MLO if particular AP
- *                                     build present.
  * @ACTION_OUI_LIMIT_BW: Limit BW if vendor OUI is received in beacon.
+ * @ACTION_OUI_EXT_MLD_CAP_OP: Exclude Extended MLD cap and op for specified AP
+ * @ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK: skip beacon frame channel mismatch
+ * check for specified AP.
+ * @ACTION_OUI_ENABLE_DYNAMIC_SMPS: Enable Dynamic SMPS for specified AP,
+ * priority higher than ACTION_OUI_DISABLE_DYNAMIC_SMPS
+ * @ACTION_OUI_ENABLE_DSMPS_BY_RSSI: Enable DSMPS based on AP RSSI
+ * @ACTION_OUI_ENABLE_AMSDU_2G: Enable AMSDU for 2.4 GHz STA connections with specified APs
  * @ACTION_OUI_MAXIMUM_ID: maximum number of action oui types
  */
 enum action_oui_id {
@@ -144,17 +177,26 @@ enum action_oui_id {
 	ACTION_OUI_DISABLE_DYNAMIC_QOS_NULL_TX_RATE = 10,
 	ACTION_OUI_ENABLE_CTS2SELF_WITH_QOS_NULL = 11,
 	ACTION_OUI_SEND_SMPS_FRAME_WITH_OMN = 12,
-	/* host&fw interface add above here */
+	ACTION_OUI_RESTRICT_SLO = 13,
+	ACTION_OUI_DISABLE_AUX_LISTEN = 15,
+	ACTION_OUI_RESTRICT_MAX_MLO_LINKS = 16,
+	ACTION_OUI_AUTH_ASSOC_6MBPS_2GHZ = 17,
+	ACTION_OUI_DISABLE_DYNAMIC_SMPS = 18,
+	ACTION_OUI_FORCE_TX_NULL_FRAME_ON_P2P = 19,
 
+	/* host&fw interface add above here */
 	ACTION_OUI_HOST_ONLY,
 	ACTION_OUI_HOST_RECONN = ACTION_OUI_HOST_ONLY,
 	ACTION_OUI_TAKE_ALL_BAND_INFO,
-	ACTION_OUI_AUTH_ASSOC_6MBPS_2GHZ,
 	ACTION_OUI_DISABLE_BFORMEE,
 	ACTION_OUI_DISABLE_AGGRESSIVE_EDCA,
 	ACTION_OUI_ENABLE_CTS2SELF,
-	ACTION_OUI_RESTRICT_MAX_MLO_LINKS,
 	ACTION_OUI_LIMIT_BW,
+	ACTION_OUI_EXT_MLD_CAP_OP,
+	ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK,
+	ACTION_OUI_ENABLE_DYNAMIC_SMPS,
+	ACTION_OUI_ENABLE_DSMPS_BY_RSSI,
+	ACTION_OUI_ENABLE_AMSDU_2G,
 	ACTION_OUI_MAXIMUM_ID
 };
 
@@ -200,6 +242,8 @@ enum action_oui_info {
  * @mac_addr: mac addr
  * @mac_mask: mac mask
  * @capability: capability buffer
+ * @and_oui_index: and oui index, 0 means first of and oui,
+ * OUI0 || OUI1 && OUI2, and_oui_index of OUI0, OUI1 and OUI2 are 0, 0, 1
  */
 struct action_oui_extension {
 	uint32_t info_mask;
@@ -210,16 +254,18 @@ struct action_oui_extension {
 	uint32_t mac_mask_length;
 	uint32_t capability_length;
 	uint8_t oui[ACTION_OUI_MAX_OUI_LENGTH];
-	uint8_t data[ACTION_OUI_MAX_DATA_LENGTH];
-	uint8_t data_mask[ACTION_OUI_MAX_DATA_MASK_LENGTH];
+	uint8_t data[ACTION_OUI_MAX_DATA_LENGTH_HOST_ONLY];
+	uint8_t data_mask[ACTION_OUI_MAX_DATA_MASK_LENGTH_HOST_ONLY];
 	uint8_t mac_addr[QDF_MAC_ADDR_SIZE];
 	uint8_t mac_mask[ACTION_OUI_MAC_MASK_LENGTH];
 	uint8_t capability[ACTION_OUI_MAX_CAPABILITY_LENGTH];
+	uint8_t and_oui_index;
 };
 
 /**
  * struct action_oui_request - Contains specific action oui information
  * @action_id: type of action from enum action_oui_info
+ * @is_action_oui_v2_enabled: Is action oui v2 enabled
  * @no_oui_extensions: number of action oui extensions of type @action_id
  * @total_no_oui_extensions: total no of oui extensions from all
  * action oui types, this is just a total count needed by firmware
@@ -229,6 +275,7 @@ struct action_oui_extension {
  */
 struct action_oui_request {
 	enum action_oui_id action_id;
+	bool is_action_oui_v2_enabled;
 	uint32_t no_oui_extensions;
 	uint32_t total_no_oui_extensions;
 	struct action_oui_extension extension[];
@@ -256,5 +303,58 @@ struct action_oui_search_attr {
 	bool enable_2g;
 	bool enable_5g;
 };
+
+/**
+ * enum action_oui_token_type - token types expected.
+ * @ACTION_OUI_TOKEN: oui
+ * @ACTION_OUI_DATA_LENGTH_TOKEN: data length
+ * @ACTION_OUI_DATA_TOKEN: OUI data
+ * @ACTION_OUI_DATA_MASK_TOKEN: data mask
+ * @ACTION_OUI_INFO_MASK_TOKEN: info mask
+ * @ACTION_OUI_MAC_ADDR_TOKEN: mac addr
+ * @ACTION_OUI_MAC_MASK_TOKEN: mac mask
+ * @ACTION_OUI_CAPABILITY_TOKEN: capability
+ * @ACTION_OUI_DATA_BIT_MASK_TOKEN: data bit mask
+ * @ACTION_OUI_MAC_BIT_MASK_TOKEN: mac bit mask
+ * @ACTION_OUI_END_TOKEN: end of one oui extension
+ */
+enum action_oui_token_type {
+	ACTION_OUI_TOKEN = 1 << 0,
+	ACTION_OUI_DATA_LENGTH_TOKEN = 1 << 1,
+	ACTION_OUI_DATA_TOKEN = 1 << 2,
+	ACTION_OUI_DATA_MASK_TOKEN = 1 << 3,
+	ACTION_OUI_INFO_MASK_TOKEN = 1 << 4,
+	ACTION_OUI_MAC_ADDR_TOKEN = 1 << 5,
+	ACTION_OUI_MAC_MASK_TOKEN = 1 << 6,
+	ACTION_OUI_CAPABILITY_TOKEN = 1 << 7,
+	ACTION_OUI_DATA_BIT_MASK_TOKEN = 1 << 8,
+	ACTION_OUI_MAC_BIT_MASK_TOKEN = 1 << 9,
+	ACTION_OUI_END_TOKEN = 1 << 10,
+};
+
+#ifdef ACTION_OUI_OP_ATTR
+/**
+ * struct action_oui_cap - action oui cap
+ * @nss_bitmap: nss bitmap
+ *  bit 0 : NSS 1
+ *  bit 1 : NSS 2
+ *  bit 2 : NSS 3
+ *  bit 3 : NSS 4
+ * @ht: is ht supported
+ * @vht: is vht supported
+ * @band_bitmap: band bitmap: 2G and 5G
+ */
+struct action_oui_cap {
+	uint8_t nss_bitmap:4;
+	uint8_t ht:1;
+	uint8_t vht:1;
+	uint8_t band_bitmap:2;
+};
+
+union action_oui_capability {
+	uint8_t val;
+	struct action_oui_cap bitmap;
+};
+#endif
 
 #endif /* _WLAN_ACTION_OUI_PUBLIC_STRUCT_H_ */

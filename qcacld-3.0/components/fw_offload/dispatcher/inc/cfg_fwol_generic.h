@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -237,6 +237,29 @@
 		1, \
 		"Enable/Disable DTIM 1Chrx feature")
 
+/*
+ * <ini>
+ * dynamic_bw_switch - Enable/Disable Dynamic BW Switch
+ * @Min: 0
+ * @Max: 1
+ * @Default: 1
+ *
+ * This ini enable/disable the Dynamic BW Switch feature for STA
+ * in FW. If this flag is set and there is no traffic running then
+ * firmware downgrades the bandwidth for those vdev whose bw
+ * is greater than 80Mhz(160Mhz/320 Mhz). If traffic comes up then
+ * fw will restore the original bandwidth
+ *
+ * Supported Feature: STA
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DYNAMIC_BW_SWITCH CFG_INI_BOOL( \
+		"dynamic_bw_switch", \
+		1, \
+		"Enable/Disable Dynamic BW Switch")
 /*
  * <ini>
  * gEnableAlternativeChainmask - Enable Co-Ex Alternative Chainmask
@@ -477,6 +500,26 @@
 #endif
 
 /* <ini>
+ * gRAPriority
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini will configure the RA filter to FW
+ * irrespective of APF configured or not.
+ *
+ * Related: None
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_RA_PRIORITY CFG_INI_BOOL( \
+		"gRAPriority", \
+		0, \
+		"Enable RA Priority")
+
+/* <ini>
  * gtsf_gpio_pin
  * @Min: 0
  * @Max: 254
@@ -502,8 +545,8 @@
 /* <ini>
  * gtsf_irq_host_gpio_pin
  * @Min: 0
- * @Max: 254
- * @Default: 255
+ * @Max: 512
+ * @Default: 512
  *
  * TSF irq GPIO pin of host platform
  *
@@ -516,8 +559,8 @@
 #define CFG_SET_TSF_IRQ_HOST_GPIO_PIN CFG_INI_INT( \
 		"gtsf_irq_host_gpio_pin", \
 		0, \
-		255, \
-		255, \
+		512, \
+		512, \
 		CFG_VALUE_OR_DEFAULT, \
 		"TSF irq GPIO pin of host platform")
 
@@ -560,7 +603,7 @@
 #define __CFG_SET_TSF_SYNC_HOST_GPIO_PIN
 #endif
 
-#if defined(WLAN_FEATURE_TSF) && defined(WLAN_FEATURE_TSF_PLUS)
+#ifdef WLAN_FEATURE_TSF_PLUS
 /* <ini>
  * g_enable_tsf_sync: Enable TSF sync feature
  * @Min: 0
@@ -933,6 +976,34 @@
 
 /*
  * <ini>
+ * g_iot_temporal_mode_enabled - Enable IoT temporal mode
+ * @Default: 0
+ *
+ * This INI controls whether the IoT temporal mode feature
+ * is enabled in firmware via WMI resource config.
+ * BIT 0 of apl_temporal_mode_config_word is set when enabled.
+ *
+ * Related: None
+ *
+ * Supported Feature: IoT
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_IOT_TEMPORAL_MODE_ENABLED CFG_INI_BOOL( \
+		"g_iot_temporal_mode_enabled", \
+		0, \
+		"Enable IoT temporal mode")
+
+#ifdef FEATURE_ETM_TRACE_SUPPORT
+#define PCIE_CONFIG 1
+#else
+#define PCIE_CONFIG 0
+#endif
+
+/*
+ * <ini>
  * pcie_config - Ini to control pcie gen and lane params
  * @Min: 0
  * @Max: 4
@@ -958,7 +1029,7 @@
 				"pcie_config", \
 				0, \
 				4, \
-				0, \
+				PCIE_CONFIG, \
 				CFG_VALUE_OR_DEFAULT, \
 				"to control pcie gen and lane")
 
@@ -972,6 +1043,7 @@
 	CFG(CFG_UPPER_BRSSI_THRESH) \
 	CFG(CFG_LOWER_BRSSI_THRESH) \
 	CFG(CFG_DTIM_1CHRX_ENABLE) \
+	CFG(CFG_DYNAMIC_BW_SWITCH) \
 	CFG(CFG_ENABLE_COEX_ALT_CHAINMASK) \
 	CFG(CFG_ENABLE_SMART_CHAINMASK) \
 	CFG(CFG_ENABLE_FW_RTS_PROFILE) \
@@ -979,6 +1051,7 @@
 	CFG(CFG_ENABLE_FW_LOG_TYPE) \
 	CFG(CFG_ENABLE_FW_MODULE_LOG_LEVEL) \
 	CFG(CFG_RA_FILTER_ENABLE) \
+	CFG(CFG_RA_PRIORITY) \
 	CFG(CFG_SET_TSF_GPIO_PIN) \
 	__CFG_SET_TSF_IRQ_HOST_GPIO_PIN \
 	__CFG_SET_TSF_SYNC_HOST_GPIO_PIN \
@@ -995,6 +1068,7 @@
 	CFG(CFG_DISABLE_HW_ASSIST) \
 	CFG(CFG_ENABLE_PCI_GEN) \
 	CFG(CFG_PCIE_CONFIG) \
+	CFG(CFG_IOT_TEMPORAL_MODE_ENABLED) \
 	ENABLE_OFDM_SCRAMBLER_SEED
 
 #endif

@@ -108,7 +108,6 @@
 /* To check if HT 20mhz detection bit set */
 #define OBSS_DETECTION_IS_HT_20MHZ(_m) ((_m) & OBSS_DETECTION_HT_20MHZ_BIT_MASK)
 
-#define MAX_WAIT_FOR_BCN_TX_COMPLETE_FOR_LL_SAP 500
 #define MAX_WAIT_FOR_BCN_TX_COMPLETE 4000
 
 #define MAX_WAKELOCK_FOR_CSA         5000
@@ -122,6 +121,9 @@
 
 /* SR is disabled if NON_SRG is disallowed and SRG INFO is not present */
 #define SR_DISABLE NON_SRG_PD_SR_DISALLOWED & (~SRG_INFO_PRESENT & 0x0F)
+
+/* SAP Post CSA OCV SA Query waiting time */
+#define POST_CSA_CHECK_OCV_SA_QUERY_TIME (15 * 1000)
 
 typedef union uPmfSaQueryTimerId {
 	struct {
@@ -186,6 +188,7 @@ uint8_t lim_get_max_tx_power(struct mac_context *mac,
  * lim_calculate_tpc() - Utility to get maximum tx power
  * @mac: mac handle
  * @session: PE Session Entry
+ * @force_ap_vlp_pwr: Use VLP power for SAP and Go
  *
  * This function is used to get the maximum possible tx power from the list
  * of tx powers mentioned in @attr.
@@ -193,7 +196,8 @@ uint8_t lim_get_max_tx_power(struct mac_context *mac,
  * Return: None
  */
 void lim_calculate_tpc(struct mac_context *mac,
-		       struct pe_session *session);
+		       struct pe_session *session,
+		       bool force_ap_vlp_pwr);
 
 /* AID pool management functions */
 
@@ -227,6 +231,33 @@ bool lim_create_peer_idxpool(struct pe_session *pe_session,
  * Return: Void
  */
 void lim_free_peer_idxpool(struct pe_session *pe_session);
+#ifdef WLAN_FEATURE_11BE
+static inline uint16_t lim_get_chan_switch_puncture(struct pe_session *session)
+{
+	return session ? session->gLimChannelSwitch.puncture_bitmap :
+			 NO_SCHANS_PUNC;
+}
+
+static inline void lim_set_chan_switch_puncture(struct pe_session *session,
+						uint16_t punct_bitmap)
+{
+	if (!session)
+		return;
+
+	pe_debug("0x%x", punct_bitmap);
+	session->gLimChannelSwitch.puncture_bitmap = punct_bitmap;
+}
+#else
+static inline uint16_t lim_get_chan_switch_puncture(struct pe_session *session)
+{
+	return 0;
+}
+
+static inline void lim_set_chan_switch_puncture(struct pe_session *session,
+						uint16_t punct_bitmap)
+{
+}
+#endif
 
 #ifdef WLAN_FEATURE_11BE_MLO
 /**
@@ -299,7 +330,23 @@ void lim_strip_mlo_ie(struct mac_context *mac_ctx,
  */
 void lim_set_emlsr_caps(struct mac_context *mac_ctx,
 			struct pe_session *session);
+
+/**
+ * lim_remove_puncture() - Remove the existing puncturing in the regulatory
+ * @mac_ctx: Global mac pointer
+ * @session: PE session of BSS
+ *
+ * Removes the current puncturing bitmap from global regulatory.
+ */
+void lim_remove_puncture(struct mac_context *mac_ctx,
+			 struct pe_session *session);
 #else
+static inline
+void lim_remove_puncture(struct mac_context *mac,
+			 struct pe_session *session)
+{
+}
+
 static inline uint16_t lim_assign_mlo_conn_idx(struct mac_context *mac,
 					       struct pe_session *pe_session,
 					       uint16_t partner_peer_idx)
@@ -479,6 +526,16 @@ uint8_t lim_get_cb_mode_for_freq(struct mac_context *mac,
 				 qdf_freq_t chan_freq);
 
 /**
+ * lim_get_sta_cb_mode_for_24ghz() - Get cb mode for 2GHz
+ * @mac: pointer to Global MAC structure
+ * @vdev_id: vdev id
+ *
+ * Return: cb mode allowed for the freq
+ */
+uint8_t lim_get_sta_cb_mode_for_24ghz(struct mac_context *mac,
+				      uint8_t vdev_id);
+
+/**
  * lim_update_sta_run_time_ht_switch_chnl_params() - Process change in HT
  * bandwidth
  * @mac: pointer to Global MAC structure
@@ -569,6 +626,7 @@ void lim_update_sta_run_time_ht_info(struct mac_context *mac,
 /**
  * lim_is_channel_valid_for_channel_switch - check channel valid for switching
  * @mac: Global mac context
+ * @session: PE session
  * @channel_freq: channel freq (MHz)
  *
  * This function checks if the channel to which AP is expecting us to switch,
@@ -577,6 +635,7 @@ void lim_update_sta_run_time_ht_info(struct mac_context *mac,
  * Return bool, true if channel is valid
  */
 bool lim_is_channel_valid_for_channel_switch(struct mac_context *mac,
+					     struct pe_session *session,
 					     uint32_t channel_freq);
 
 QDF_STATUS lim_restore_pre_channel_switch_state(struct mac_context *mac,
@@ -1014,6 +1073,29 @@ void lim_clean_up_disassoc_deauth_req(struct mac_context *mac, uint8_t *staMac,
 bool lim_check_disassoc_deauth_ack_pending(struct mac_context *mac,
 		uint8_t *staMac);
 
+#ifdef CFG80211_SA_QUERY_OFFLOAD_SUPPORT
+QDF_STATUS lim_post_csa_ocv_sa_query_timer_init(struct pe_session *pe_session);
+void lim_post_csa_ocv_sa_query_timer_destroy(struct pe_session *pe_session);
+void lim_post_csa_ocv_sa_query_check(struct mac_context *mac,
+		struct pe_session *pe_session, bool csa_done);
+#else
+static inline QDF_STATUS lim_post_csa_ocv_sa_query_timer_init(
+		struct pe_session *pe_session)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline void lim_post_csa_ocv_sa_query_timer_destroy(
+		struct pe_session *pe_session)
+{
+}
+
+static inline void lim_post_csa_ocv_sa_query_check(struct mac_context *mac,
+		struct pe_session *pe_session, bool csa_done)
+{
+}
+#endif /* CFG80211_SA_QUERY_OFFLOAD_SUPPORT */
+
 void lim_pmf_sa_query_timer_handler(void *pMacGlobal, uint32_t param);
 void lim_pmf_comeback_timer_callback(void *context);
 void lim_set_protected_bit(struct mac_context *mac,
@@ -1040,7 +1122,7 @@ QDF_STATUS lim_send_ext_cap_ie(struct mac_context *mac_ctx, uint32_t session_id,
  * wma
  * @mac_ctx: global mac context
  * @vdev_id: vdev for which IE is targeted
- * @dot11_mode: vdev dot11 mode
+ * @dot11_mode: mlme dot11 mode
  * @device_mode: device mode
  *
  * This function gets ht and vht capability and send to firmware via wma
@@ -1049,8 +1131,24 @@ QDF_STATUS lim_send_ext_cap_ie(struct mac_context *mac_ctx, uint32_t session_id,
  */
 QDF_STATUS lim_send_ies_per_band(struct mac_context *mac_ctx,
 				 uint8_t vdev_id,
-				 enum csr_cfgdot11mode dot11_mode,
+				 enum mlme_dot11_mode dot11_mode,
 				 enum QDF_OPMODE device_mode);
+
+/**
+ * lim_get_bw_for_mcs_set() - Get channel width for populate mcs set
+ * @mac_ctx: Pointer to mac context
+ * @session: Pointer to session entry
+ * @ch_width: Input channel width
+ *
+ * This function gets channel width for populate mcs set. This is for channel
+ * width upgrade.
+ *
+ * Return: Updated channel width
+ */
+enum phy_ch_width
+lim_get_bw_for_mcs_set(struct mac_context *mac_ctx,
+		       struct pe_session *session,
+		       enum phy_ch_width ch_width);
 
 /**
  * lim_update_connect_rsn_ie() - Update the connection RSN IE
@@ -1064,13 +1162,33 @@ void
 lim_update_connect_rsn_ie(struct pe_session *session, uint8_t *rsn_ie_buf,
 			  struct wlan_crypto_pmksa *pmksa);
 
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * lim_get_mld_info_sta() - get peer_mld_addr and assoc peer flag for sta
+ * @req: cm_peer_create_req
+ * @peer_mld_addr: peer mld mac addr
+ * @is_assoc_peer: is assoc peer
+ *
+ * Return: None
+ */
+void lim_get_mld_info_sta(struct cm_peer_create_req *req,
+			  uint8_t **peer_mld_addr,
+			  bool *is_assoc_peer);
+#else
+static inline void
+lim_get_mld_info_sta(struct cm_peer_create_req *req,
+		     uint8_t **peer_mld_addr,
+		     bool *is_assoc_peer)
+{}
+#endif
+
 /**
  * lim_send_action_frm_tb_ppdu_cfg() - sets action frame in TB PPDU cfg to FW
  * @mac_ctx: global MAC context
  * @vdev_id: vdev id
  * @cfg: config setting
  *
- * Preapres the vendor action frame and send action frame in HE TB PPDU
+ * Prepares the vendor action frame and send action frame in HE TB PPDU
  * configuration to FW.
  *
  * Return: QDF_STATUS
@@ -1140,6 +1258,7 @@ bool lim_get_vdev_rmf_capable(struct mac_context *mac,
 /**
  * lim_add_bssid_to_reject_list:- Add rssi reject Ap info to denylist mgr.
  * @pdev: pdev
+ * @vdev_id: vdev_id
  * @entry: info of the BSSID to be put in rssi reject list.
  *
  * This API will add the passed ap info to the rssi reject list.
@@ -1147,6 +1266,7 @@ bool lim_get_vdev_rmf_capable(struct mac_context *mac,
  */
 void
 lim_add_bssid_to_reject_list(struct wlan_objmgr_pdev *pdev,
+			     uint8_t vdev_id,
 			     struct sir_rssi_disallow_lst *entry);
 
 /**
@@ -1156,6 +1276,7 @@ lim_add_bssid_to_reject_list(struct wlan_objmgr_pdev *pdev,
  * @addn_ie: Additional IE buffer
  * @addn_ielen: Length of additional IE
  * @dst: Supp operating class IE structure to be updated
+ * @eht_capable: eht capable or not
  *
  * This function is used to strip supp op class IE from IE buffer and
  * update the passed structure.
@@ -1164,7 +1285,7 @@ lim_add_bssid_to_reject_list(struct wlan_objmgr_pdev *pdev,
  */
 QDF_STATUS lim_strip_supp_op_class_update_struct(struct mac_context *mac_ctx,
 		uint8_t *addn_ie, uint16_t *addn_ielen,
-		tDot11fIESuppOperatingClasses *dst);
+		tDot11fIESuppOperatingClasses *dst, bool eht_capable);
 
 uint8_t lim_get_80Mhz_center_channel(uint8_t primary_channel);
 void lim_update_obss_scanparams(struct pe_session *session,
@@ -1212,6 +1333,10 @@ void lim_update_caps_info_for_bss(struct mac_context *mac_ctx,
 			uint16_t *caps, uint16_t bss_caps);
 void lim_send_set_dtim_period(struct mac_context *mac_ctx, uint8_t dtim_period,
 			      struct pe_session *session);
+void lim_update_vdev_bss_param_dtim(struct pe_session *session,
+				    uint8_t dtim_period);
+void lim_update_vdev_bss_param_use_prot(struct pe_session *session,
+					bool use_prot);
 
 QDF_STATUS lim_strip_ie(struct mac_context *mac_ctx,
 		uint8_t *addn_ie, uint16_t *addn_ielen,
@@ -1300,17 +1425,6 @@ void lim_add_bss_he_cfg(struct bss_params *add_bss, struct pe_session *session);
  * Return: None
  */
 void lim_copy_bss_he_cap(struct pe_session *session);
-
-/**
- * lim_update_he_caps_mcs() - Update he caps MCS
- * @mac: MAC context
- * @session: pointer to PE session
- *
- * Return: None
- */
-void lim_update_he_caps_mcs(struct mac_context *mac,
-			    struct pe_session *session);
-
 
 /**
  * lim_update_he_6gop_assoc_resp() - Update HE 6GHz op info to BSS params
@@ -1630,6 +1744,13 @@ void lim_update_he_6ghz_band_caps(struct mac_context *mac,
 				  tDot11fIEhe_6ghz_band_cap *he_6ghz_band_cap,
 				  tpAddStaParams params);
 
+/*
+ * lim_print_he_channel_widths() - Print the HE channel widths
+ * he_cap: HE cap
+ *
+ * Return: None
+ */
+void lim_print_he_channel_widths(tDot11fIEhe_cap *he_cap);
 #else
 static inline void lim_add_he_cap(struct mac_context *mac_ctx,
 				  struct pe_session *pe_session,
@@ -1698,11 +1819,6 @@ static inline void lim_decide_he_op(struct mac_context *mac_ctx,
 
 static inline
 void lim_copy_bss_he_cap(struct pe_session *session)
-{
-}
-
-static inline
-void lim_update_he_caps_mcs(struct mac_context *mac, struct pe_session *session)
 {
 }
 
@@ -1813,7 +1929,28 @@ lim_update_he_6ghz_band_caps(struct mac_context *mac,
 			     tpAddStaParams params)
 {
 }
+
+static inline
+void lim_print_he_channel_widths(tDot11fIEhe_cap *he_cap)
+{
+}
 #endif
+
+/**
+ * lim_reorder_vendor_ies() - Aggregate all vendor specific IEs to the end
+ * of the buffer.
+ * @mac_ctx: MAC context
+ * @frame_ies: Buffer pointer which contain IEs
+ * @ie_buf_size: Size of buffer pointed by @frame_ies.
+ *
+ * Extract all the vendor specific IEs in the buffer pointed by @frame_ies and
+ * move thoes IEs to the end of the buffer. The final length is still be same
+ * as the API will only reorder the IEs and will not change any contents.
+ *
+ * Return: void.
+ */
+void lim_reorder_vendor_ies(struct mac_context *mac_ctx,
+			    uint8_t *frame_ies, uint16_t ie_buf_size);
 
 #ifdef WLAN_FEATURE_11BE
 static inline bool lim_is_session_eht_capable(struct pe_session *session)
@@ -1827,6 +1964,21 @@ static inline bool lim_is_session_eht_capable(struct pe_session *session)
 static inline bool lim_is_sta_eht_capable(tpDphHashNode sta_ds)
 {
 	return sta_ds->mlmStaContext.eht_capable;
+}
+
+/**
+ * lim_get_punc_chan_bit_map() - get session eht puncture bitmap
+ * @session: pe session
+ *
+ * Return: puncture bitmap
+ */
+static inline uint16_t
+lim_get_punc_chan_bit_map(struct pe_session *session)
+{
+	if (session->eht_op.disabled_sub_chan_bitmap_present)
+		return *(uint16_t *)session->eht_op.disabled_sub_chan_bitmap;
+
+	return 0;
 }
 
 QDF_STATUS lim_strip_eht_op_ie(struct mac_context *mac_ctx,
@@ -1846,6 +1998,7 @@ QDF_STATUS lim_strip_eht_cap_ie(struct mac_context *mac_ctx,
  * @peer_eht_caps: pointer to peer EHT capabilities
  * @session_entry: pe session entry
  * @ch_width: channel width of the association
+ * @is_2g: Is 2g band params
  *
  * Populates EHT mcs rate set based on peer and self capabilities
  *
@@ -1855,7 +2008,8 @@ QDF_STATUS lim_populate_eht_mcs_set(struct mac_context *mac_ctx,
 				    struct supported_rates *rates,
 				    tDot11fIEeht_cap *peer_eht_caps,
 				    struct pe_session *session_entry,
-				    enum phy_ch_width ch_width);
+				    enum phy_ch_width ch_width,
+				    bool is_2g);
 
 /**
  * lim_update_eht_bw_cap_mcs(): Update eht mcs map per bandwidth
@@ -2008,6 +2162,50 @@ void lim_update_sta_eht_capable(struct mac_context *mac,
 				tpAddStaParams add_sta_params,
 				tpDphHashNode sta_ds,
 				struct pe_session *session_entry);
+
+#ifdef DRIVER_PASSTHRU_MODE
+/**
+ * lim_update_passthru_config(): Update passthru caps in add sta params
+ * @mac: pointer to MAC context
+ * @add_sta_params: pointer to add sta params
+ * @sta_ds: pointer to dph hash table entry
+ * @session_entry: pointer to PE session
+ *
+ * Return: None
+ */
+void lim_update_passthru_config(struct mac_context *mac,
+				tpAddStaParams add_sta_params,
+				tpDphHashNode sta_ds,
+				struct pe_session *session_entry);
+/**
+ * lim_passthru_mlme_vdev_disconnect_peers() - delete passthru peers
+ * @vdev_mlme:  VDEV MLME comp object
+ * @data_len: data size
+ * @data: event data
+ *
+ * API invokes passthru peer deletion.
+ *
+ * Return: SUCCESS on successful peer deletion
+ *         FAILURE, if it fails due to any
+ */
+QDF_STATUS
+lim_passthru_mlme_vdev_disconnect_peers(struct vdev_mlme_obj *vdev_mlme,
+					uint16_t data_len, void *data);
+#else
+static inline void lim_update_passthru_config(struct mac_context *mac,
+					      tpAddStaParams add_sta_params,
+					      tpDphHashNode sta_ds,
+					      struct pe_session *session_entry)
+{
+}
+
+static inline QDF_STATUS
+lim_passthru_mlme_vdev_disconnect_peers(struct vdev_mlme_obj *vdev_mlme,
+					uint16_t data_len, void *data)
+{
+	return QDF_STATUS_E_INVAL;
+}
+#endif
 
 #ifdef FEATURE_WLAN_TDLS
 /**
@@ -2196,6 +2394,11 @@ static inline bool lim_is_sta_eht_capable(tpDphHashNode sta_ds)
 	return false;
 }
 
+static inline uint16_t lim_get_punc_chan_bit_map(struct pe_session *session)
+{
+	return 0;
+}
+
 static inline
 QDF_STATUS lim_strip_eht_op_ie(struct mac_context *mac_ctx,
 			       uint8_t *frame_ies,
@@ -2219,7 +2422,8 @@ QDF_STATUS lim_populate_eht_mcs_set(struct mac_context *mac_ctx,
 				    struct supported_rates *rates,
 				    tDot11fIEeht_cap *peer_eht_caps,
 				    struct pe_session *session_entry,
-				    enum phy_ch_width ch_width)
+				    enum phy_ch_width ch_width,
+				    bool is_2g)
 {
 	return QDF_STATUS_SUCCESS;
 }
@@ -2431,6 +2635,21 @@ void lim_extract_msd_caps(struct mac_context *mac_ctx,
 			  struct pe_session *session,
 			  struct bss_params *add_bss,
 			  tpSirAssocRsp assoc_rsp);
+
+/**
+ * lim_extract_ext_mld_caps() - Extract extended AP MLD capabilities and assign
+ * the same caps to ML links
+ * @mac_ctx: Global MAC context
+ * @session: pointer to PE session
+ * @add_bss: pointer to ADD BSS params
+ * @assoc_rsp: pointer to assoc response
+ *
+ * Return: None
+ */
+void lim_extract_ext_mld_caps(struct mac_context *mac_ctx,
+			      struct pe_session *session,
+			      struct bss_params *add_bss,
+			      tpSirAssocRsp assoc_rsp);
 #else
 static inline void
 lim_extract_per_link_id(struct pe_session *session,
@@ -2461,6 +2680,13 @@ lim_extract_msd_caps(struct mac_context *mac_ctx,
 		     tpSirAssocRsp assoc_rsp)
 {
 }
+
+static inline
+void lim_extract_ext_mld_caps(struct mac_context *mac_ctx,
+			      struct pe_session *session,
+			      struct bss_params *add_bss,
+			      tpSirAssocRsp assoc_rsp)
+{}
 #endif /* WLAN_FEATURE_11BE_MLO */
 
 #if defined(CONFIG_BAND_6GHZ) && defined(WLAN_FEATURE_11AX)
@@ -2980,7 +3206,7 @@ QDF_STATUS lim_get_capability_info(struct mac_context *mac, uint16_t *pCap,
  * @mac_ctx: mac context
  * @channel_freq: channel frequency MHz
  * @ch_bandwidth: channel bandwidth
- * @offset: second channel offfset
+ * @offset: second channel offset
  *
  * This API can get the operating class based on channel freq,
  * bandwidth and second channel offset.
@@ -3049,18 +3275,26 @@ static inline void lim_ap_check_6g_compatible_peer(
 {}
 #endif
 
+#define EXT_TX_PSD_POWER 8
+
 /**
  * enum max_tx_power_interpretation
  * @LOCAL_EIRP: Local power interpretation
  * @LOCAL_EIRP_PSD: Local PSD power interpretation
  * @REGULATORY_CLIENT_EIRP: Regulatory power interpretation
  * @REGULATORY_CLIENT_EIRP_PSD: Regulatory PSD power interpretation
+ * @ADDITIONAL_REGULATORY_CLIENT_EIRP: Additional Regulatory power
+ * interpretation
+ * @ADDITIONAL_REGULATORY_CLIENT_EIRP_PSD: Additional Regulatory PSD power
+ * interpretation
  */
 enum max_tx_power_interpretation {
 	LOCAL_EIRP = 0,
 	LOCAL_EIRP_PSD,
 	REGULATORY_CLIENT_EIRP,
 	REGULATORY_CLIENT_EIRP_PSD,
+	ADDITIONAL_REGULATORY_CLIENT_EIRP,
+	ADDITIONAL_REGULATORY_CLIENT_EIRP_PSD,
 };
 
 /**
@@ -3092,6 +3326,15 @@ void lim_process_tpe_ie_from_beacon(struct mac_context *mac,
 				    struct pe_session *session,
 				    struct bss_description *bss_desc,
 				    bool *has_tpe_updated);
+
+/**
+ * lim_is_ap_power_type_6g_invalid() - Check if the AP power type for 6 GHz
+ * channel is invalid
+ * @session: pe session
+ *
+ * Return: true if invalid else false
+ */
+bool lim_is_ap_power_type_6g_invalid(struct pe_session *session);
 
 /**
  * lim_send_conc_params_update() - Function to check and update params based on
@@ -3210,6 +3453,15 @@ uint8_t lim_get_max_rate_idx(tSirMacRateSet *rateset);
 void lim_update_nss(struct mac_context *mac_ctx, tpDphHashNode sta_ds,
 		    uint8_t rx_nss, struct pe_session *session);
 
+/*
+ * lim_convert_phy_width_to_vht_width() - Function to convert the
+ * enum phy_ch_width to the vht channel width definition.
+ * @ch_width: phy ch width
+ *
+ * Return: VHT channel width
+ */
+uint8_t lim_convert_phy_width_to_vht_width(enum phy_ch_width ch_width);
+
 /**
  * lim_update_channel_width() - Function to update channel width
  * @mac_ctx: pointer to Global Mac structure
@@ -3235,12 +3487,25 @@ bool lim_update_channel_width(struct mac_context *mac_ctx,
  * @vht_cap: Pointer to VHT Caps IE.
  * @vht_op: Pointer to VHT Operation IE.
  * @ht_info: Pointer to HT Info IE.
+ * @opmode_ie: Pointer to Operating mode IE
  *
- * Return: VHT channel width
+ * Return: phy channel width
  */
-uint8_t lim_get_vht_ch_width(tDot11fIEVHTCaps *vht_cap,
-			     tDot11fIEVHTOperation *vht_op,
-			     tDot11fIEHTInfo *ht_info);
+enum phy_ch_width lim_get_vht_ch_width(tDot11fIEVHTCaps *vht_cap,
+				       tDot11fIEVHTOperation *vht_op,
+				       tDot11fIEHTInfo *ht_info,
+				       tDot11fIEHTCaps *ht_cap,
+				       tDot11fIEOperatingMode *omn_ie);
+
+/*
+ * lim_get_omn_channel_width() - Function to get the OMN channel width
+ * from the OMN IE fields
+ * @omn_ie: OMN IE
+ *
+ * Return: phy channel width
+ */
+enum phy_ch_width
+lim_get_omn_channel_width(tDot11fIEOperatingMode *omn_ie);
 
 /*
  * lim_set_tpc_power() - Function to compute and send TPC power level to the
@@ -3249,12 +3514,13 @@ uint8_t lim_get_vht_ch_width(tDot11fIEVHTCaps *vht_cap,
  * @mac_ctx:    Pointer to Global MAC structure
  * @pe_session: Pointer to session
  * @bss_desc: Pointer to bss description
+ * @force_vlp: Flag to force use VLP power
  *
  * Return: TPC status
  */
 bool
 lim_set_tpc_power(struct mac_context *mac_ctx, struct pe_session *session,
-		  struct bss_description *bss_desc);
+		  struct bss_description *bss_desc, bool force_vlp);
 
 /**
  * lim_update_tx_power() - Function to update the TX power for
@@ -3285,6 +3551,32 @@ bool
 lim_skip_tpc_update_for_sta(struct mac_context *mac,
 			    struct pe_session *sta_session,
 			    struct pe_session *sap_session);
+
+/**
+ * lim_get_6g_power_type_with_bw() - Get the best 6 GHz power type for given
+ *                                   bandwidth
+ * @mac: Pointer to MAC context
+ * @session: Pointer to PE session
+ * @chan_freq: Channel frequency in MHz
+ * @power_type_6g: Pointer to store the best 6 GHz power type
+ * @bw_update_allowed: Allow to update bandwidth of pe session
+ *
+ * This function determines the best 6 GHz power type (LPI/SP/VLP) based on
+ * the session's channel width and center frequency. For 320 MHz bandwidth,
+ * it uses the center frequency from ch_center_freq_seg1. The function calls
+ * the regulatory module to get the best power type considering the AP's
+ * defined power type and current bandwidth.
+ * Retry with progressively narrower bandwidths (160/80/40/20 MHz) when the
+ * full BW check fails and update pe session BW if bw_update_allowed is true.
+ *
+ * Return: QDF_STATUS_SUCCESS on success, error code otherwise
+ */
+QDF_STATUS lim_get_6g_power_type_with_bw(
+	struct mac_context *mac,
+	struct pe_session *session,
+	qdf_freq_t chan_freq,
+	enum reg_6g_ap_type *power_type_6g,
+	bool bw_update_allowed);
 
 #ifdef FEATURE_WLAN_GC_SKIP_JOIN
 static inline bool
@@ -3367,6 +3659,20 @@ lim_is_power_change_required_for_sta(struct mac_context *mac_ctx,
 void
 lim_update_tx_pwr_on_ctry_change_cb(uint8_t vdev_id);
 
+/**
+ * lim_update_tpc_bcn_on_c2c_detect_cb() - Callback to be invoked by regulatory
+ * module when c2c detect event is received.
+ * @psoc: Pointer to psoc.
+ *
+ * This API calls TPC calculation for each active 6 GHz vdev operating in
+ * VLP/indoor enable AP power. Also for SAP/P2P GO it'll update the beacon
+ * and fils discovery frame to FW.
+ *
+ * Return: None
+ */
+void
+lim_update_tpc_bcn_on_c2c_detect_cb(struct wlan_objmgr_psoc *psoc);
+
 /*
  * lim_get_connected_chan_for_mode() - Get connected channel for given opmode
  *                                     in given frequency range.
@@ -3384,16 +3690,25 @@ lim_get_connected_chan_for_mode(struct wlan_objmgr_psoc *psoc,
 				qdf_freq_t end_freq);
 
 /**
- * lim_convert_vht_chwidth_to_phy_chwidth() - Convert VHT operation
- * ch width into phy ch width
+ * @ch_width: phy channel width
  *
- * @ch_width: VHT op channel width
- * @is_40: is 40 MHz
+ * Convert the current PHY channel width to VHT speicifc BW. 320MHz is not
+ * supported in VHT so return 160MHz for 320MHz input.
  *
  * Return: phy chwidth
  */
-enum phy_ch_width
-lim_convert_vht_chwidth_to_phy_chwidth(uint8_t ch_width, bool is_40);
+uint8_t
+lim_convert_phy_chwidth_to_vht_chwidth(enum phy_ch_width ch_width);
+
+/**
+ * lim_update_cu_flag() - Update cu flag in capability information
+ * @pcap_info: pointer to return capability information
+ * @pe_session: pointer to pe session
+ *
+ * Return: None
+ */
+void lim_update_cu_flag(tSirMacCapabilityInfo *pcap_info,
+			struct pe_session *pe_session);
 
 /*
  * lim_cmp_ssid() - Compare two SSIDs.
@@ -3415,6 +3730,16 @@ uint32_t lim_cmp_ssid(tSirMacSSid *ssid, struct pe_session *pe_session);
 void
 lim_configure_fd_for_existing_6ghz_sap(struct pe_session *session,
 				       bool is_sap_starting);
+
+/**
+ * lim_update_disconnect_vdev_id() - Update the disconnect received on vdev id
+ * in vdev objmgr.
+ * @mac: pointer to global mac context
+ * @vdev_id: VDEV ID on which disconnect was received
+ *
+ * Return: None
+ */
+void lim_update_disconnect_vdev_id(struct mac_context *mac,  uint8_t vdev_id);
 
 #ifdef WLAN_CHIPSET_STATS
 /**
@@ -3672,8 +3997,6 @@ lim_cp_stats_cstats_log_csa_evt(struct pe_session *pe_session,
 }
 #endif /* WLAN_CHIPSET_STATS */
 
-#define MAX_TX_PSD_POWER 15
-
 /**
  * lim_get_tpe_ie_length() : Get the tpe ie length
  * @ch_width: phy channel width
@@ -3700,4 +4023,27 @@ QDF_STATUS lim_fill_complete_tpe_ie(enum phy_ch_width ch_width,
 				    uint16_t tpe_ie_len,
 				    tDot11fIEtransmit_power_env *tpe_ptr,
 				    uint16_t num_tpe, uint8_t *target);
+
+/**
+ * lim_set_session_channel_params() : set session channel params
+ * @mac: pointer to MAC
+ * @session: pointer to session
+ *
+ * check and update channel params of pe session by regulatory
+ *
+ * Return: QDF_STATUS
+ */
+
+QDF_STATUS lim_set_session_channel_params(struct mac_context *mac,
+					  struct pe_session *session);
+
+/**
+ * lim_mismatch_bssid_da() - checks destination addr and bssid if match
+ * @hdr: pointer to the MAC head
+ *
+ * check if da match with bssid or not.
+ *
+ * Return: true if bssid and destination address are different
+ */
+bool lim_mismatch_bssid_da(tpSirMacMgmtHdr hdr);
 #endif /* __LIM_UTILS_H */

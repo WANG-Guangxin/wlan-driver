@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -739,6 +739,18 @@ QDF_STATUS dp_rx_peer_map_handler(struct dp_soc *soc, uint16_t peer_id,
 void dp_rx_peer_unmap_handler(struct dp_soc *soc, uint16_t peer_id,
 			      uint8_t vdev_id, uint8_t *peer_mac_addr,
 			      uint8_t is_wds, uint32_t free_wds_count);
+/**
+ * dp_peer_set_tx_classify_idx() - DP set peer Tx flow queue index
+ * @soc: generic soc handle
+ * @peer_id: peer_id from firmware
+ * @vdev_id: vdev ID
+ * @peer_classify_info_idx: peer flow queue index
+ *
+ * Return: none
+ */
+QDF_STATUS dp_peer_set_tx_classify_idx(struct dp_soc *soc, uint16_t peer_id,
+				       uint8_t vdev_id,
+				       uint8_t peer_classify_info_idx);
 
 #if defined(WLAN_FEATURE_11BE_MLO) && defined(DP_MLO_LINK_STATS_SUPPORT)
 /**
@@ -1303,7 +1315,6 @@ static inline QDF_STATUS dp_peer_sawf_ctx_free(struct dp_soc *soc,
 {
 	return QDF_STATUS_SUCCESS;
 }
-
 #endif
 
 #ifndef CONFIG_SAWF
@@ -1345,6 +1356,28 @@ struct dp_peer *dp_vdev_bss_peer_ref_n_get(struct dp_soc *soc,
 struct dp_peer *dp_sta_vdev_self_peer_ref_n_get(struct dp_soc *soc,
 						struct dp_vdev *vdev,
 						enum dp_mod_id mod_id);
+
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * dp_sta_vdev_link_peer_ref_n_get: Get link peer of sta vdev
+ * @soc: DP soc
+ * @vdev: vdev
+ * @mod_id: id of module requesting reference
+ *
+ * Return: VDEV peer
+ */
+struct dp_peer *dp_sta_vdev_link_peer_ref_n_get(struct dp_soc *soc,
+						struct dp_vdev *vdev,
+						enum dp_mod_id mod_id);
+#else
+static inline
+struct dp_peer *dp_sta_vdev_link_peer_ref_n_get(struct dp_soc *soc,
+						struct dp_vdev *vdev,
+						enum dp_mod_id mod_id)
+{
+	return NULL;
+}
+#endif /* WLAN_FEATURE_11BE_MLO */
 
 void dp_peer_ast_table_detach(struct dp_soc *soc);
 
@@ -1549,6 +1582,21 @@ void dp_peer_delete(struct dp_soc *soc,
  */
 void dp_mlo_peer_delete(struct dp_soc *soc, struct dp_peer *peer, void *arg);
 
+/*
+ * dp_get_hw_link_id() - return hw link id
+ * @pdev: DP pdev
+ *
+ * Return: link_id
+ */
+
+static inline uint8_t dp_get_hw_link_id(struct dp_pdev *pdev)
+{
+	if (pdev->soc->arch_ops.get_hw_link_id)
+		return pdev->soc->arch_ops.get_hw_link_id(pdev);
+
+	return 0;
+}
+
 #ifdef WLAN_FEATURE_11BE_MLO
 
 /* is MLO connection mld peer */
@@ -1597,6 +1645,10 @@ dp_link_peer_hash_find_by_chip_id(struct dp_soc *soc,
 
 	return NULL;
 }
+
+static inline void dp_peer_mlo_setup_err_assert(void)
+{
+}
 #else
 static inline uint8_t dp_get_chip_id(struct dp_soc *soc)
 {
@@ -1614,6 +1666,11 @@ dp_link_peer_hash_find_by_chip_id(struct dp_soc *soc,
 	return dp_peer_find_hash_find(soc, peer_mac_addr,
 				      mac_addr_is_aligned,
 				      vdev_id, mod_id);
+}
+
+static inline void dp_peer_mlo_setup_err_assert(void)
+{
+	qdf_assert_always(0);
 }
 #endif
 
@@ -1692,8 +1749,13 @@ void dp_link_peer_add_mld_peer(struct dp_peer *link_peer,
 			       struct dp_peer *mld_peer)
 {
 	/* increase mld_peer ref_cnt */
-	dp_peer_get_ref(NULL, mld_peer, DP_MOD_ID_CDP);
-	link_peer->mld_peer = mld_peer;
+	if (QDF_STATUS_SUCCESS ==
+	    dp_peer_get_ref(NULL, mld_peer, DP_MOD_ID_CDP)) {
+		link_peer->mld_peer = mld_peer;
+		return;
+	}
+
+	link_peer->mld_peer = NULL;
 }
 
 /**
@@ -1992,7 +2054,7 @@ struct dp_peer *dp_peer_get_tgt_peer_hash_find(struct dp_soc *soc,
 			ta_peer = peer;
 		}
 	} else {
-		dp_peer_err("fail to find peer:" QDF_MAC_ADDR_FMT " vdev_id: %u",
+		dp_peer_info("fail to find peer:" QDF_MAC_ADDR_FMT " vdev_id: %u",
 			    QDF_MAC_ADDR_REF(peer_mac), vdev_id);
 	}
 
@@ -2036,6 +2098,40 @@ struct dp_peer *dp_peer_get_tgt_peer_by_id(struct dp_soc *soc,
 			ta_peer = peer;
 		}
 	}
+
+	return ta_peer;
+}
+
+/**
+ * dp_peer_get_tgt_peer_by_vdev() - Returns target peer object given the
+ *				    STA DP vdev
+ * @soc: core DP soc context
+ * @vdev: DP VDEV handle
+ * @mod_id: ID of module requesting reference
+ *
+ * For MLO connection, get corresponding MLD peer,
+ *
+ * Return: peer in success
+ *         NULL in failure
+ */
+static inline
+struct dp_peer *dp_peer_get_tgt_peer_by_vdev(struct dp_soc *soc,
+					     struct dp_vdev *vdev,
+					     enum dp_mod_id mod_id)
+{
+	struct dp_peer *ta_peer = NULL;
+	struct dp_peer *peer;
+
+	peer = dp_sta_vdev_link_peer_ref_n_get(soc, vdev, mod_id);
+	if (!peer)
+		return NULL;
+
+	if (peer->mld_peer && dp_peer_get_ref(soc, peer->mld_peer, mod_id) ==
+	    QDF_STATUS_SUCCESS)
+		ta_peer = peer->mld_peer;
+
+	/* release peer reference that added by vdev peer find */
+	dp_peer_unref_delete(peer, mod_id);
 
 	return ta_peer;
 }
@@ -2160,6 +2256,36 @@ struct dp_txrx_peer *dp_get_txrx_peer(struct dp_peer *peer)
 }
 
 /**
+ * dp_txrx_peer_lock() - Get Txrx Peer Lock
+ * @peer: Peer handle
+ *
+ * Return: None
+ */
+static inline void
+dp_txrx_peer_lock(struct dp_peer *peer)
+{
+	if (IS_MLO_DP_LINK_PEER(peer))
+		qdf_spin_lock(&peer->mld_peer->txrx_peer_lock);
+	else
+		qdf_spin_lock(&peer->txrx_peer_lock);
+}
+
+/**
+ * dp_txrx_peer_unlock() - Release Txrx Peer Lock
+ * @peer: Peer handle
+ *
+ * Return: None
+ */
+static inline void
+dp_txrx_peer_unlock(struct dp_peer *peer)
+{
+	if (IS_MLO_DP_LINK_PEER(peer))
+		qdf_spin_unlock(&peer->mld_peer->txrx_peer_lock);
+	else
+		qdf_spin_unlock(&peer->txrx_peer_lock);
+}
+
+/**
  * dp_peer_is_primary_link_peer() - Check if peer is primary link peer
  * @peer: Datapath peer
  *
@@ -2227,6 +2353,42 @@ void dp_print_mlo_ast_stats_be(struct dp_soc *soc);
  * Return: Link peer Link ID
  */
 uint8_t dp_get_peer_link_id(struct dp_peer *peer);
+
+#ifdef WLAN_FEATURE_11BE_MLO_3_LINK_TX
+/*
+ * dp_peer_3_link_tx_flow_info_init() -initialize the 3 link tx flow info
+ * @peer: Datapath peer
+ *
+ * Return: void
+ */
+static inline void
+dp_peer_3_link_tx_flow_info_init(struct dp_peer *peer)
+{
+	qdf_spinlock_create(&peer->flow_info_lock);
+}
+
+/*
+ * dp_peer_3_link_tx_flow_info_deinit() - destroy the 3 link tx flow info
+ * @peer: Datapath peer
+ *
+ * Return: void
+ */
+static inline void
+dp_peer_3_link_tx_flow_info_deinit(struct dp_peer *peer)
+{
+	qdf_spinlock_destroy(&peer->flow_info_lock);
+}
+#else
+static inline void
+dp_peer_3_link_tx_flow_info_init(struct dp_peer *peer)
+{
+}
+
+static inline void
+dp_peer_3_link_tx_flow_info_deinit(struct dp_peer *peer)
+{
+}
+#endif /* WLAN_FEATURE_11BE_MLO_3_LINK_TX */
 #else
 
 #define IS_MLO_DP_MLD_TXRX_PEER(_peer) false
@@ -2270,6 +2432,14 @@ struct dp_peer *dp_peer_get_tgt_peer_by_id(struct dp_soc *soc,
 }
 
 static inline
+struct dp_peer *dp_peer_get_tgt_peer_by_vdev(struct dp_soc *soc,
+					     struct dp_vdev *vdev,
+					     enum dp_mod_id mod_id)
+{
+	return NULL;
+}
+
+static inline
 QDF_STATUS dp_peer_mlo_setup(
 			struct dp_soc *soc,
 			struct dp_peer *peer,
@@ -2310,6 +2480,10 @@ static inline uint8_t dp_get_chip_id(struct dp_soc *soc)
 	return 0;
 }
 
+static inline void dp_peer_mlo_setup_err_assert(void)
+{
+}
+
 static inline struct dp_peer *
 dp_link_peer_hash_find_by_chip_id(struct dp_soc *soc,
 				  uint8_t *peer_mac_addr,
@@ -2341,6 +2515,30 @@ static inline
 struct dp_txrx_peer *dp_get_txrx_peer(struct dp_peer *peer)
 {
 	return peer->txrx_peer;
+}
+
+/**
+ * dp_txrx_peer_lock() - Get Txrx Peer Lock
+ * @peer: Peer handle
+ *
+ * Return: None
+ */
+static inline void
+dp_txrx_peer_lock(struct dp_peer *peer)
+{
+	qdf_spin_lock(&peer->txrx_peer_lock);
+}
+
+/**
+ * dp_txrx_peer_unlock() - Release Txrx Peer Lock
+ * @peer: Peer handle
+ *
+ * Return: None
+ */
+static inline void
+dp_txrx_peer_unlock(struct dp_peer *peer)
+{
+	qdf_spin_unlock(&peer->txrx_peer_lock);
 }
 
 static inline
@@ -2383,6 +2581,16 @@ static inline void dp_print_mlo_ast_stats_be(struct dp_soc *soc)
 static inline uint8_t dp_get_peer_link_id(struct dp_peer *peer)
 {
 	return 0;
+}
+
+static inline void
+dp_peer_3_link_tx_flow_info_init(struct dp_peer *peer)
+{
+}
+
+static inline void
+dp_peer_3_link_tx_flow_info_deinit(struct dp_peer *peer)
+{
 }
 #endif /* WLAN_FEATURE_11BE_MLO */
 
@@ -2610,6 +2818,49 @@ void dp_map_link_id_band(struct dp_peer *peer);
 #else
 static inline
 void dp_map_link_id_band(struct dp_peer *peer)
+{
+}
+#endif
+
+#ifdef FEATURE_WDS_AST_LEARNING
+/**
+ * dp_peer_update_wds() - Search WDS hash table to check if wds ast entry
+ * needs to be updated.
+ * @soc: datapath soc handle
+ * @ta_peer: dp_txrx_peer handle
+ * @nbuf: skb buffer
+ *
+ * This branch is added for below driver configurations.
+ * FEATURE_WDS=y && FEATURE_AST=n && AST_OFFLOAD_ENABLE=n.
+ *
+ * return: QDF_STATUS_SUCCESS for success, otherwise error codes.
+ */
+QDF_STATUS dp_peer_update_wds(struct dp_soc *soc, struct dp_txrx_peer *ta_peer,
+			      qdf_nbuf_t nbuf);
+#else /* !FEATURE_WDS_AST_LEARNING */
+static inline QDF_STATUS
+dp_peer_update_wds(struct dp_soc *soc, struct dp_txrx_peer *ta_peer,
+		   qdf_nbuf_t nbuf)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif /* FEATURE_WDS_AST_LEARNING */
+
+#ifdef DP_PEER_EXTENDED_API
+/**
+ * dp_peer_set_bw() - Set bandwidth and mpdu retry count threshold for peer
+ * @soc: DP soc handle
+ * @txrx_peer: Core txrx_peer handle
+ * @set_bw: enum of bandwidth to be set for this peer connection
+ *
+ * Return: None
+ */
+void dp_peer_set_bw(struct dp_soc *soc, struct dp_txrx_peer *txrx_peer,
+		    enum cdp_peer_bw set_bw);
+#else
+static inline
+void dp_peer_set_bw(struct dp_soc *soc, struct dp_txrx_peer *txrx_peer,
+		    enum cdp_peer_bw set_bw)
 {
 }
 #endif

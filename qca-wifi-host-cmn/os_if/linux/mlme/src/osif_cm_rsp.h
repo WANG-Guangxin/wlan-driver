@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015,2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -82,7 +82,6 @@ void osif_cm_get_assoc_rsp_ie_data(struct element_info *assoc_rsp,
 QDF_STATUS osif_connect_handler(struct wlan_objmgr_vdev *vdev,
 				struct wlan_cm_connect_resp *rsp);
 
-#ifdef CONN_MGR_ADV_FEATURE
 /**
  * osif_indicate_reassoc_results() - API to send reassoc response to kernel
  * @vdev: vdev pointer
@@ -111,13 +110,6 @@ QDF_STATUS
 osif_pmksa_candidate_notify(struct wlan_objmgr_vdev *vdev,
 			    struct qdf_mac_addr *bssid,
 			    int index, bool preauth);
-#else
-static inline void
-osif_indicate_reassoc_results(struct wlan_objmgr_vdev *vdev,
-			      struct vdev_osif_priv *osif_priv,
-			      struct wlan_cm_connect_resp *rsp)
-{}
-#endif
 
 /**
  * osif_failed_candidate_handler() - API to indicate individual candidate
@@ -206,4 +198,14 @@ osif_get_chan_bss_from_kernel(struct wlan_objmgr_vdev *vdev,
 			      struct mlo_link_info *rsp_link_info,
 			      struct wlan_cm_connect_resp *rsp);
 #endif
+
+/**
+ *osif_get_wiphy_from_vdev() - API to get wiphy from vdev
+ * @vdev: vdev pointer
+ *
+ * This API is used to get wiphy from vdev.
+ *
+ * Return: wiphy structure
+ */
+struct wiphy *osif_get_wiphy_from_vdev(struct wlan_objmgr_vdev *vdev);
 #endif /* __OSIF_CM_RSP_H */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -49,6 +49,14 @@
 #include "wlan_mlo_mgr_sta.h"
 #include "wlan_cp_stats_mc_tgt_api.h"
 #include "wlan_objmgr_pdev_obj.h"
+#include "wlan_ll_sap_api.h"
+#include "wlan_nan_api_i.h"
+#include "wlan_tdls_api.h"
+#include <wlan_p2p_api.h>
+#include "wlan_mlme_api.h"
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+#include "wlan_mlo_mgr_ap.h"
+#endif
 
 static struct vdev_mlme_ops sta_mlme_ops;
 static struct vdev_mlme_ops ap_mlme_ops;
@@ -149,7 +157,8 @@ QDF_STATUS mlme_register_vdev_mgr_ops(struct vdev_mlme_obj *vdev_mlme)
 
 	if (mlme_is_vdev_in_beaconning_mode(vdev->vdev_mlme.vdev_opmode))
 		vdev_mlme->ops = &ap_mlme_ops;
-	else if (vdev->vdev_mlme.vdev_opmode == QDF_MONITOR_MODE)
+	else if (vdev->vdev_mlme.vdev_opmode == QDF_MONITOR_MODE ||
+		 vdev->vdev_mlme.vdev_opmode == QDF_PASSTHRU_MODE)
 		vdev_mlme->ops = &mon_mlme_ops;
 	else
 		vdev_mlme->ops = &sta_mlme_ops;
@@ -451,8 +460,10 @@ static QDF_STATUS sta_mlme_vdev_up_send(struct vdev_mlme_obj *vdev_mlme,
 			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
 	status = wma_sta_vdev_up_send(vdev_mlme, event_data_len, event_data);
 
-	if (QDF_IS_STATUS_SUCCESS(status))
+	if (QDF_IS_STATUS_SUCCESS(status)) {
 		mlme_sr_update(vdev_mlme->vdev, true);
+		wlan_p2p_validate_ap_assist_dfs_group(vdev_mlme->vdev);
+	}
 
 	return status;
 }
@@ -667,6 +678,68 @@ void wlan_handle_emlsr_sta_concurrency(struct wlan_objmgr_psoc *psoc,
 }
 #endif
 
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * ap_mlme_vdev_send_link_removal() - callback to send link removal wmi
+ * @vdev_mlme: vdev mlme object
+ * @data_len: event data length
+ * @data: event data
+ *
+ * This function is called to indicate link is going be removed
+ *
+ * Return: QDF_STATUS
+ */
+static QDF_STATUS
+ap_mlme_vdev_send_link_removal(struct vdev_mlme_obj *vdev_mlme,
+			       uint16_t data_len, void *data)
+{
+	QDF_STATUS status;
+	struct wlan_objmgr_psoc *psoc;
+	uint8_t vdev_id;
+
+	if (!vdev_mlme || !vdev_mlme->vdev) {
+		mlme_legacy_err("vdev_mlme or vdev is NULL");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	vdev_id = wlan_vdev_get_id(vdev_mlme->vdev);
+	if (vdev_id == WLAN_INVALID_VDEV_ID) {
+		mlme_legacy_err("Invalid vdev ID");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	psoc = wlan_vdev_get_psoc(vdev_mlme->vdev);
+	if (!psoc) {
+		mlme_legacy_err("invalid psoc for vdev: %d", vdev_id);
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	if (!data || !data_len) {
+		mlme_legacy_err("Invalid data parameters for vdev: %d",
+				wlan_vdev_get_id(vdev_mlme->vdev));
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	mlme_legacy_debug("Vdev:%d is going to be removed",
+			  wlan_vdev_get_id(vdev_mlme->vdev));
+
+	status = wlan_mlo_link_removal_cmd(vdev_mlme->vdev, psoc,
+					   data, data_len);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		mlme_legacy_err("Failed to send link removal cmd for vdev: %d, status: %d",
+				wlan_vdev_get_id(vdev_mlme->vdev), status);
+	}
+	return status;
+}
+#else
+static inline
+QDF_STATUS ap_mlme_vdev_send_link_removal(struct vdev_mlme_obj *vdev_mlme,
+					  uint16_t data_len, void *data)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 /**
  * ap_mlme_vdev_notify_up_complete() - callback to notify up completion
  * @vdev_mlme: vdev mlme object
@@ -878,6 +951,24 @@ QDF_STATUS mlme_set_chan_switch_in_progress(struct wlan_objmgr_vdev *vdev,
 	return QDF_STATUS_SUCCESS;
 }
 
+QDF_STATUS mlme_set_is_acs_sap(struct wlan_objmgr_vdev *vdev, bool val)
+{
+	struct mlme_legacy_priv *mlme_priv;
+
+	mlme_priv = wlan_vdev_mlme_get_ext_hdl(vdev);
+	if (!mlme_priv) {
+		mlme_legacy_err("vdev legacy private object is NULL");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	mlme_priv->is_acs_sap = val;
+
+	mlme_legacy_debug("Set is_acs_sap: %d vdev %d",
+			  val, wlan_vdev_get_id(vdev));
+
+	return QDF_STATUS_SUCCESS;
+}
+
 #ifdef WLAN_FEATURE_MSCS
 QDF_STATUS mlme_set_is_mscs_req_sent(struct wlan_objmgr_vdev *vdev, bool val)
 {
@@ -919,6 +1010,19 @@ bool mlme_is_chan_switch_in_progress(struct wlan_objmgr_vdev *vdev)
 	}
 
 	return mlme_priv->chan_switch_in_progress;
+}
+
+bool mlme_is_acs_sap(struct wlan_objmgr_vdev *vdev)
+{
+	struct mlme_legacy_priv *mlme_priv;
+
+	mlme_priv = wlan_vdev_mlme_get_ext_hdl(vdev);
+	if (!mlme_priv) {
+		mlme_legacy_err("vdev legacy private object is NULL");
+		return false;
+	}
+
+	return mlme_priv->is_acs_sap;
 }
 
 QDF_STATUS
@@ -1401,20 +1505,6 @@ QDF_STATUS mlme_set_mbssid_info(struct wlan_objmgr_vdev *vdev,
 	return QDF_STATUS_SUCCESS;
 }
 
-void mlme_get_mbssid_info(struct wlan_objmgr_vdev *vdev,
-			  struct vdev_mlme_mbss_11ax *mbss_11ax)
-{
-	struct vdev_mlme_obj *vdev_mlme;
-
-	vdev_mlme = wlan_vdev_mlme_get_cmpt_obj(vdev);
-	if (!vdev_mlme) {
-		mlme_legacy_err("vdev component object is NULL");
-		return;
-	}
-
-	mbss_11ax = &vdev_mlme->mgmt.mbss_11ax;
-}
-
 QDF_STATUS mlme_set_tx_power(struct wlan_objmgr_vdev *vdev,
 			     int8_t tx_power)
 {
@@ -1566,6 +1656,9 @@ static QDF_STATUS mlme_get_vdev_types(enum QDF_OPMODE mode, uint8_t *type,
 	case QDF_NAN_DISC_MODE:
 		*type = WLAN_VDEV_MLME_TYPE_NAN;
 		break;
+	case QDF_PASSTHRU_MODE:
+		*type = WLAN_VDEV_MLME_TYPE_PASSTHRU;
+		break;
 	default:
 		mlme_err("Invalid device mode %d", mode);
 		status = QDF_STATUS_E_INVAL;
@@ -1624,13 +1717,17 @@ static void mlme_ext_handler_destroy(struct vdev_mlme_obj *vdev_mlme)
 		&vdev_mlme->ext_vdev_ptr->bss_color_change_wakelock);
 	qdf_runtime_lock_deinit(
 		&vdev_mlme->ext_vdev_ptr->disconnect_runtime_lock);
-	mlme_free_self_disconnect_ies(vdev_mlme->vdev);
+	qdf_runtime_lock_deinit(
+			&vdev_mlme->ext_vdev_ptr->peer_set_key_rt_wakelock);
+	qdf_wake_lock_destroy(
+		&vdev_mlme->ext_vdev_ptr->peer_set_key_wakelock);
+	qdf_atomic_set(&vdev_mlme->ext_vdev_ptr->set_key_wakelock_counter, 0);
 	mlme_free_peer_disconnect_ies(vdev_mlme->vdev);
 	mlme_free_sae_auth_retry(vdev_mlme->vdev);
 	mlme_deinit_wait_for_key_timer(&vdev_mlme->ext_vdev_ptr->wait_key_timer);
 	mlme_free_fils_info(&vdev_mlme->ext_vdev_ptr->connect_info);
 	mlme_cm_free_roam_stats_info(vdev_mlme->ext_vdev_ptr);
-	qdf_mem_free(vdev_mlme->ext_vdev_ptr);
+	qdf_mem_common_free(vdev_mlme->ext_vdev_ptr);
 	vdev_mlme->ext_vdev_ptr = NULL;
 }
 
@@ -1711,7 +1808,7 @@ QDF_STATUS vdevmgr_mlme_ext_hdl_create(struct vdev_mlme_obj *vdev_mlme)
 	mlme_legacy_debug("vdev id = %d ",
 			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
 	vdev_mlme->ext_vdev_ptr =
-		qdf_mem_malloc(sizeof(struct mlme_legacy_priv));
+		qdf_mem_common_alloc(sizeof(struct mlme_legacy_priv));
 	if (!vdev_mlme->ext_vdev_ptr)
 		return QDF_STATUS_E_NOMEM;
 
@@ -1742,6 +1839,12 @@ QDF_STATUS vdevmgr_mlme_ext_hdl_create(struct vdev_mlme_obj *vdev_mlme)
 		mlme_ext_handler_destroy(vdev_mlme);
 		return status;
 	}
+
+	qdf_atomic_init(&vdev_mlme->ext_vdev_ptr->set_key_wakelock_counter);
+	qdf_wake_lock_create(&vdev_mlme->ext_vdev_ptr->peer_set_key_wakelock,
+			     "peer_set_key");
+	qdf_runtime_lock_init(
+			&vdev_mlme->ext_vdev_ptr->peer_set_key_rt_wakelock);
 
 	status = vdev_mgr_create_send(vdev_mlme);
 	if (QDF_IS_STATUS_ERROR(status)) {
@@ -1845,7 +1948,7 @@ static QDF_STATUS mon_mlme_vdev_up_send(struct vdev_mlme_obj *vdev_mlme,
  * @data: event data
  * @is_disconnect_legacy_only: flag to indicate legacy disconnect
  *
- * montior mode no connected peers, only do VDEV state transition.
+ * monitor mode no connected peers, only do VDEV state transition.
  *
  * Return: QDF_STATUS
  */
@@ -1881,6 +1984,9 @@ static QDF_STATUS mon_mlme_vdev_disconnect_peers(
 
 	mlme_legacy_debug("vdev id = %d",
 			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
+#ifdef DRIVER_PASSTHRU_MODE
+	lim_passthru_mlme_vdev_disconnect_peers(vdev_mlme, data_len, data);
+#endif
 	return wlan_vdev_mlme_sm_deliver_evt(
 				vdev_mlme->vdev,
 				WLAN_VDEV_SM_EV_DISCONNECT_COMPLETE,
@@ -1905,6 +2011,14 @@ static QDF_STATUS mon_mlme_vdev_stop_send(struct vdev_mlme_obj *vdev_mlme,
 	return wma_mon_mlme_vdev_stop_send(vdev_mlme, data_len, data);
 }
 
+static QDF_STATUS mon_mlme_vdev_stop_resp(struct vdev_mlme_obj *vdev_mlme,
+					  struct vdev_stop_response *rsp)
+{
+	mlme_legacy_debug("vdev id = %d",
+			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
+	return wma_mon_mlme_vdev_stop_resp(vdev_mlme);
+}
+
 /**
  * mon_mlme_vdev_down_send() - callback to send vdev down req
  * @vdev_mlme: vdev mlme object
@@ -1918,9 +2032,25 @@ static QDF_STATUS mon_mlme_vdev_stop_send(struct vdev_mlme_obj *vdev_mlme,
 static QDF_STATUS mon_mlme_vdev_down_send(struct vdev_mlme_obj *vdev_mlme,
 					  uint16_t data_len, void *data)
 {
+	QDF_STATUS status;
+
 	mlme_legacy_debug("vdev id = %d",
 			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
-	return wma_mon_mlme_vdev_down_send(vdev_mlme, data_len, data);
+
+	status = wma_mon_mlme_vdev_down_send(vdev_mlme, data_len, data);
+
+	if (QDF_IS_STATUS_ERROR(status) &&
+	    wlan_vdev_mlme_get_opmode(vdev_mlme->vdev) == QDF_PASSTHRU_MODE)
+		mon_mlme_vdev_stop_resp(vdev_mlme, NULL);
+
+	return status;
+}
+
+static void mon_mlme_vdev_down(struct vdev_mlme_obj *vdev_mlme)
+{
+	mlme_legacy_debug("vdev id = %d",
+			  vdev_mlme->vdev->vdev_objmgr.vdev_id);
+	wma_mon_mlme_vdev_stop_resp(vdev_mlme);
 }
 
 /**
@@ -2026,6 +2156,7 @@ QDF_STATUS psoc_mlme_ext_hdl_create(struct psoc_mlme_obj *psoc_mlme)
 
 	target_if_mlme_register_tx_ops(
 			&psoc_mlme->ext_psoc_ptr->mlme_tx_ops);
+	wlan_mlme_init_miracast_opt(psoc_mlme->ext_psoc_ptr);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -2045,6 +2176,7 @@ QDF_STATUS psoc_mlme_ext_hdl_destroy(struct psoc_mlme_obj *psoc_mlme)
 	}
 
 	if (psoc_mlme->ext_psoc_ptr) {
+		wlan_mlme_deinit_miracast_opt(psoc_mlme->ext_psoc_ptr);
 		qdf_mem_free(psoc_mlme->ext_psoc_ptr);
 		psoc_mlme->ext_psoc_ptr = NULL;
 	}
@@ -2107,6 +2239,10 @@ vdevmgr_vdev_peer_delete_all_rsp_handle(struct vdev_mlme_obj *vdev_mlme,
 
 		status = rx_ops->wifi_pos_vdev_delete_all_ranging_peers_rsp_cb(
 							psoc, rsp->vdev_id);
+		return status;
+	} else if (QDF_HAS_PARAM(rsp->peer_type_bitmap, WLAN_PEER_NAN_PASN)) {
+		status = wlan_nan_handle_delete_all_pasn_peers(psoc,
+							       rsp->vdev_id);
 		return status;
 	}
 
@@ -2256,6 +2392,7 @@ bool mlme_vdev_uses_self_peer(uint32_t vdev_type, uint32_t vdev_subtype)
 
 	case WMI_VDEV_TYPE_MONITOR:
 	case WMI_VDEV_TYPE_OCB:
+	case WMI_VDEV_TYPE_WIFI_PASSTHRU:
 		return true;
 
 	default:
@@ -2355,12 +2492,22 @@ static QDF_STATUS ap_mlme_vdev_csa_complete(struct vdev_mlme_obj *vdev_mlme)
 	return QDF_STATUS_SUCCESS;
 }
 
+uint32_t wlan_sap_get_acs_weight_adjustable(enum phy_ch_width cur_bw)
+{
+	return wlansap_get_acs_weight_adjustable(cur_bw);
+}
+
+bool wlan_sap_is_ch_non_overlap(uint8_t vdev_id, qdf_freq_t freq)
+{
+	return wlansap_is_ch_non_overlap(vdev_id, freq);
+}
+
 #ifdef WLAN_FEATURE_LL_LT_SAP
 QDF_STATUS
 wlan_ll_sap_sort_channel_list(uint8_t vdev_id, qdf_list_t *list,
 			      struct sap_sel_ch_info *ch_info)
 {
-	return wlansap_sort_channel_list(vdev_id, list, ch_info);
+	return wlansap_sort_channel_list(vdev_id, list, ch_info, false);
 }
 
 void wlan_ll_sap_free_chan_info(struct sap_sel_ch_info *ch_param)
@@ -2380,13 +2527,34 @@ bool wlan_ll_sap_freq_present_in_pcl(struct policy_mgr_pcl_list *pcl,
 
 	return false;
 }
+
+void wlan_ll_sap_send_continue_vdev_restart(struct wlan_objmgr_vdev *vdev)
+{
+	lim_ll_sap_continue_vdev_restart(vdev);
+}
+
+void wlan_ll_sap_send_action_frame(struct wlan_objmgr_vdev *vdev,
+				   uint8_t *macaddr)
+{
+	lim_ll_sap_send_ecsa_action_frame(vdev, macaddr);
+}
+
+void wlan_ll_sap_notify_chan_switch_started(struct wlan_objmgr_vdev *vdev)
+{
+	lim_ll_sap_notify_chan_switch_started(vdev);
+}
+
+void wlan_ll_sap_csa_bearer_switch_rsp(uint8_t vdev_id)
+{
+	csr_send_csa_restart_req(vdev_id);
+}
 #endif
 
-void
+QDF_STATUS
 wlan_sap_get_user_config_acs_ch_list(uint8_t vdev_id,
 				     struct scan_filter *filter)
 {
-	wlansap_get_user_config_acs_ch_list(vdev_id, filter);
+	return wlansap_get_user_config_acs_ch_list(vdev_id, filter);
 }
 
 static struct vdev_mlme_ops sta_mlme_ops = {
@@ -2440,6 +2608,7 @@ static struct vdev_mlme_ops ap_mlme_ops = {
 	.mlme_vdev_ext_peer_delete_all_rsp =
 				vdevmgr_vdev_peer_delete_all_rsp_handle,
 	.mlme_vdev_csa_complete = ap_mlme_vdev_csa_complete,
+	.mlme_vdev_link_reconfig_remove = ap_mlme_vdev_send_link_removal,
 };
 
 static struct vdev_mlme_ops mon_mlme_ops = {
@@ -2450,7 +2619,9 @@ static struct vdev_mlme_ops mon_mlme_ops = {
 	.mlme_vdev_disconnect_peers = mon_mlme_vdev_disconnect_peers,
 	.mlme_vdev_stop_send = mon_mlme_vdev_stop_send,
 	.mlme_vdev_down_send = mon_mlme_vdev_down_send,
+	.mlme_vdev_ext_stop_rsp = mon_mlme_vdev_stop_resp,
 	.mlme_vdev_ext_start_rsp = vdevmgr_vdev_start_rsp_handle,
+	.mlme_vdev_init_down = mon_mlme_vdev_down,
 };
 
 static struct mlme_ext_ops ext_ops = {
@@ -2469,6 +2640,7 @@ static struct mlme_ext_ops ext_ops = {
 	.mlme_cm_ext_disconnect_start_ind_cb = cm_disconnect_start_ind,
 	.mlme_cm_ext_disconnect_req_cb = cm_handle_disconnect_req,
 	.mlme_cm_ext_bss_peer_delete_req_cb = cm_send_bss_peer_delete_req,
+	.mlme_cm_ext_force_bss_peer_delete_req_cb = cm_send_force_bss_peer_delete_req,
 	.mlme_cm_ext_disconnect_complete_ind_cb = cm_disconnect_complete_ind,
 	.mlme_cm_ext_vdev_down_req_cb = cm_send_vdev_down_req,
 	.mlme_cm_ext_reassoc_req_cb = cm_handle_reassoc_req,
@@ -2488,5 +2660,7 @@ static struct mlo_mlme_ext_ops mlo_ext_ops = {
 	.mlo_mlme_ext_peer_assoc_fail = lim_mlo_ap_sta_assoc_fail,
 	.mlo_mlme_ext_assoc_resp = lim_mlo_ap_sta_assoc_suc,
 	.mlo_mlme_ext_handle_sta_csa_param = lim_handle_mlo_sta_csa_param,
+	.mlo_mlme_ext_teardown_tdls = wlan_tdls_teardown_links_for_non_dbs,
+	.mlo_mlme_ext_link_add_join_continue = lim_mlo_link_add_join_continue,
 };
 #endif

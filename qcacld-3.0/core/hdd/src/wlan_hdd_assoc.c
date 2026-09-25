@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -92,6 +92,8 @@
 #include "wlan_hdd_son.h"
 #include "wlan_dp_ucfg_api.h"
 #include "wlan_cm_ucfg_api.h"
+#include "wlan_mlo_mgr_roam.h"
+#include "wlan_hdd_apf.h"
 
 /* These are needed to recognize WPA and RSN suite types */
 #define HDD_WPA_OUI_SIZE 4
@@ -180,7 +182,6 @@ uint8_t ccp_wapi_oui02[HDD_WAPI_OUI_SIZE] = { 0x00, 0x14, 0x72, 0x02 };
  */
 static const int beacon_filter_table[] = {
 	WLAN_ELEMID_DSPARMS,
-	WLAN_ELEMID_ERP,
 	WLAN_ELEMID_EDCAPARMS,
 	WLAN_ELEMID_QOS_CAPABILITY,
 	WLAN_ELEMID_HTINFO_ANA,
@@ -188,15 +189,8 @@ static const int beacon_filter_table[] = {
 	WLAN_ELEMID_VHTOP,
 	WLAN_ELEMID_QUIET_CHANNEL,
 	WLAN_ELEMID_TWT,
-#ifdef WLAN_FEATURE_11AX_BSS_COLOR
-	/*
-	 * EID: 221 vendor IE is being used temporarily by 11AX
-	 * bss-color-change IE till it gets any fixed number. This
-	 * vendor EID needs to be replaced with bss-color-change IE
-	 * number.
-	 */
+	WLAN_ELEMID_VHT_TX_PWR_ENVLP,
 	WLAN_ELEMID_VENDOR,
-#endif
 };
 
 /*
@@ -208,6 +202,9 @@ static const int beacon_filter_extn_table[] = {
 	WLAN_EXTN_ELEMID_MUEDCA,
 #ifdef WLAN_FEATURE_11BE
 	WLAN_EXTN_ELEMID_EHTOP,
+#endif
+#ifdef WLAN_FEATURE_11AX_BSS_COLOR
+	WLAN_EXTN_ELEMID_BSS_COLOR_CHANGE_ANNOUNCE,
 #endif
 };
 
@@ -629,8 +626,9 @@ void hdd_abort_ongoing_sta_sae_connection(struct hdd_context *hdd_ctx)
 					     false);
 }
 
-QDF_STATUS hdd_get_first_connected_sta_vdev_id(struct hdd_context *hdd_ctx,
-					       uint32_t *vdev_id)
+QDF_STATUS hdd_get_first_connected_sta_cli_vdev_id(struct hdd_context *hdd_ctx,
+						   uint32_t *vdev_id,
+						   enum QDF_OPMODE device_mode)
 {
 	struct hdd_adapter *adapter = NULL, *next_adapter = NULL;
 	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_IS_ANY_STA_CONNECTED;
@@ -643,8 +641,7 @@ QDF_STATUS hdd_get_first_connected_sta_vdev_id(struct hdd_context *hdd_ctx,
 
 	hdd_for_each_adapter_dev_held_safe(hdd_ctx, adapter, next_adapter,
 					   dbgid) {
-		if (adapter->device_mode == QDF_STA_MODE ||
-		    adapter->device_mode == QDF_P2P_CLIENT_MODE) {
+		if (adapter->device_mode == device_mode) {
 			hdd_adapter_for_each_active_link_info(adapter,
 							      link_info) {
 				if (!hdd_cm_is_vdev_connected(link_info))
@@ -668,50 +665,55 @@ bool hdd_is_any_sta_connected(struct hdd_context *hdd_ctx)
 	QDF_STATUS status;
 	uint32_t vdev_id;
 
-	status = hdd_get_first_connected_sta_vdev_id(hdd_ctx, &vdev_id);
+	status = hdd_get_first_connected_sta_cli_vdev_id(hdd_ctx, &vdev_id,
+							 QDF_STA_MODE);
+
 	return QDF_IS_STATUS_ERROR(status) ? false : true;
 }
 
-/**
- * hdd_remove_beacon_filter() - remove beacon filter
- * @adapter: Pointer to the hdd adapter
- *
- * Return: 0 on success and errno on failure
- */
-int hdd_remove_beacon_filter(struct hdd_adapter *adapter)
+bool hdd_is_any_cli_connected(struct hdd_context *hdd_ctx)
 {
 	QDF_STATUS status;
-	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	uint32_t vdev_id;
 
-	status = sme_remove_beacon_filter(hdd_ctx->mac_handle,
-					  adapter->deflink->vdev_id);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		hdd_err("sme_remove_beacon_filter() failed");
+	status = hdd_get_first_connected_sta_cli_vdev_id(hdd_ctx, &vdev_id,
+							 QDF_P2P_CLIENT_MODE);
+
+	return QDF_IS_STATUS_ERROR(status) ? false : true;
+}
+
+int hdd_remove_beacon_filter(struct hdd_context *hdd_ctx, uint8_t vdev_id)
+{
+	QDF_STATUS status;
+
+	status = sme_remove_beacon_filter(hdd_ctx->mac_handle, vdev_id);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("vdev %d remove bcn filter failed %d", vdev_id, status);
 		return -EFAULT;
 	}
 
 	return 0;
 }
 
-int hdd_add_beacon_filter(struct hdd_adapter *adapter)
+#define MAX_IE_ID (WLAN_ELEMID_EXTN_ELEM + 1)
+int hdd_add_beacon_filter(struct hdd_context *hdd_ctx, uint8_t vdev_id)
 {
 	int i;
 	uint32_t ie_map[SIR_BCN_FLT_MAX_ELEMS_IE_LIST] = {0};
 	QDF_STATUS status;
-	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 
 	for (i = 0; i < ARRAY_SIZE(beacon_filter_table); i++)
 		qdf_set_bit(beacon_filter_table[i],
 			    (unsigned long *)ie_map);
 
 	for (i = 0; i < ARRAY_SIZE(beacon_filter_extn_table); i++)
-		qdf_set_bit(beacon_filter_extn_table[i] + WLAN_ELEMID_EXTN_ELEM,
+		qdf_set_bit(beacon_filter_extn_table[i] + MAX_IE_ID,
 			    (unsigned long *)ie_map);
 
 	status = sme_add_beacon_filter(hdd_ctx->mac_handle,
-				       adapter->deflink->vdev_id, ie_map);
-	if (!QDF_IS_STATUS_SUCCESS(status)) {
-		hdd_err("sme_add_beacon_filter() failed");
+				       vdev_id, ie_map);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("vdev %d set bcn filter failed %d", vdev_id, status);
 		return -EFAULT;
 	}
 	return 0;
@@ -1293,6 +1295,492 @@ void hdd_copy_eht_operation(struct hdd_station_ctx *hdd_sta_ctx,
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)) && \
      defined(WLAN_FEATURE_11AX)
+
+#define HE_MAC_CAP_HTC_HE_POS		0
+#define HE_MAC_CAP_HTC_HE_BITS		1
+#define HE_MAC_CAP_TWT_REQ_POS		1
+#define HE_MAC_CAP_TWT_REQ_BITS		1
+#define HE_MAC_CAP_TWT_RES_POS		2
+#define HE_MAC_CAP_TWT_RES_BITS		1
+#define HE_MAC_CAP_FRAGMEN_POS		3
+#define HE_MAC_CAP_FRAGMEN_BITS		2
+#define HE_MAC_CAP_AMSDU_EXP_POS	5
+#define HE_MAC_CAP_AMSDU_EXP_BITS	3
+
+#define HE_MAC_CAP_MIN_FRAG_POS		0
+#define HE_MAC_CAP_MIN_FRAG_BITS	2
+#define HE_MAC_CAP_TRIG_FRM_POS		2
+#define HE_MAC_CAP_TRIG_FRM_BITS	2
+#define HE_MAC_CAP_AGGR_RX_POS		4
+#define HE_MAC_CAP_AGGR_RX_BITS		3
+#define HE_MAC_CAP_HE_LINK_0_POS	7
+#define HE_MAC_CAP_HE_LINK_0_BITS	1
+#define HE_MAC_CAP_HE_LINK_0_MASK	0x1
+
+#define HE_MAC_CAP_HE_LINK_1_MASK	0x2
+#define HE_MAC_CAP_HE_LINK_1_POS	0
+#define HE_MAC_CAP_HE_LINK_1_BITS	1
+#define HE_MAC_CAP_ALL_ACK_POS		1
+#define HE_MAC_CAP_ALL_ACK_BITS		1
+#define HE_MAC_CAP_TRIGD_RSP_POS	2
+#define HE_MAC_CAP_TRIGD_RSP_BITS	1
+#define HE_MAC_CAP_A_BSR_POS		3
+#define HE_MAC_CAP_A_BSR_BITS		1
+#define HE_MAC_CAP_BCAST_TWT_POS	4
+#define HE_MAC_CAP_BCAST_TWT_BITS	1
+#define HE_MAC_CAP_BA_BITMAP_POS	5
+#define HE_MAC_CAP_BA_BITMAP_BITS	1
+#define HE_MAC_CAP_MU_CASC_POS		6
+#define HE_MAC_CAP_MU_CASC_BITS		1
+#define HE_MAC_CAP_ACK_ENBD_POS		7
+#define HE_MAC_CAP_ACK_ENBD_BITS	1
+
+#define HE_MAC_CAP_OMI_A_POS		1
+#define HE_MAC_CAP_OMI_A_BITS		1
+#define HE_MAC_CAP_OFDMA_RA_POS		2
+#define HE_MAC_CAP_OFDMA_RA_BITS	1
+#define HE_MAC_CAP_MAX_AMPDU_POS	3
+#define HE_MAC_CAP_MAX_AMPDU_BITS	2
+#define HE_MAC_CAP_AMSDU_FLAG_POS	5
+#define HE_MAC_CAP_AMSDU_FLAG_BITS	1
+#define HE_MAC_CAP_FLEX_TWT_POS		6
+#define HE_MAC_CAP_FLEX_TWT_BITS	1
+#define HE_MAC_CAP_RX_CTRL_POS		7
+#define HE_MAC_CAP_RX_CTRL_BITS		1
+
+#define HE_MAC_CAP_BSRP_AMPDU_POS	0
+#define HE_MAC_CAP_BSRP_AMPDU_BITS	1
+#define HE_MAC_CAP_QTP_POS		1
+#define HE_MAC_CAP_QTP_BITS		1
+#define HE_MAC_CAP_A_BQR_POS		2
+#define HE_MAC_CAP_A_BQR_BITS		1
+#define HE_MAC_CAP_SRP_RSPDER_POS	3
+#define HE_MAC_CAP_SRP_RSPDER_BITS	1
+#define HE_MAC_CAP_NDP_SUPP_POS		4
+#define HE_MAC_CAP_NDP_SUPP_BITS	1
+#define HE_MAC_CAP_OPS_SUPP_POS		5
+#define HE_MAC_CAP_OPS_SUPP_BITS	1
+#define HE_MAC_CAP_AMSDU_IN_AMPDU_POS	6
+#define HE_MAC_CAP_AMSDU_IN_AMPDU_BITS	1
+#define HE_MAC_CAP_MULTI_TID_0_POS	7
+#define HE_MAC_CAP_MULTI_TID_0_BITS	1
+#define HE_MAC_CAP_MULTI_TID_0_MASK	0x1
+
+#define HE_MAC_CAP_MULTI_TID_1_MASK	0x6
+#define HE_MAC_CAP_MULTI_TID_1_POS	0
+#define HE_MAC_CAP_MULTI_TID_1_BITS	2
+#define HE_MAC_CAP_SUB_CH_SEL_POS	2
+#define HE_MAC_CAP_SUB_CH_SEL_BITS	1
+#define HE_MAC_CAP_RU_SUPP_POS		3
+#define HE_MAC_CAP_RU_SUPP_BITS		1
+#define HE_MAC_CAP_UL_MU_DATA_RX_POS	4
+#define HE_MAC_CAP_UL_MU_DATA_RX_BITS	1
+#define HE_MAC_CAP_DYNAMIC_SMPS_POS	5
+#define HE_MAC_CAP_DYNAMIC_SMPS_BITS	1
+#define HE_MAC_CAP_PUNCT_SOUNDING_POS	6
+#define HE_MAC_CAP_PUNCT_SOUNDING_BITS	1
+#define HE_MAC_CAP_VHT_TRG_FRM_RX_POS	7
+#define HE_MAC_CAP_VHT_TRG_FRM_RX_BITS	1
+
+#define HE_PHY_CAP_CH_WIDTH_0_POS	1
+#define HE_PHY_CAP_CH_WIDTH_0_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_1_POS	2
+#define HE_PHY_CAP_CH_WIDTH_1_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_2_POS	3
+#define HE_PHY_CAP_CH_WIDTH_2_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_3_POS	4
+#define HE_PHY_CAP_CH_WIDTH_3_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_4_POS	5
+#define HE_PHY_CAP_CH_WIDTH_4_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_5_POS	6
+#define HE_PHY_CAP_CH_WIDTH_5_BITS	1
+#define HE_PHY_CAP_CH_WIDTH_6_POS	7
+#define HE_PHY_CAP_CH_WIDTH_6_BITS	1
+
+#define HE_PHY_CAP_RX_PREM_PUNC_POS	0
+#define HE_PHY_CAP_RX_PREM_PUNC_BITS	4
+#define HE_PHY_CAP_DEVICE_CLASS_POS	4
+#define HE_PHY_CAP_DEVICE_CLASS_BITS	1
+#define HE_PHY_CAP_LDPC_CODING_POS	5
+#define HE_PHY_CAP_LDPC_CODING_BITS	1
+#define HE_PHY_CAP_LTF_800_GI_PPDU_POS	6
+#define HE_PHY_CAP_LTF_800_GI_PPDU_BITS	1
+#define HE_PHY_CAP_MAX_NSTS0_POS	7
+#define HE_PHY_CAP_MAX_NSTS0_BITS	1
+#define HE_PHY_CAP_MAX_NSTS0_MASK	0x1
+
+#define HE_PHY_CAP_MAX_NSTS1_POS	0
+#define HE_PHY_CAP_MAX_NSTS1_BITS	1
+#define HE_PHY_CAP_MAX_NSTS1_MASK	0x2
+#define HE_PHY_CAP_LTF_3200_GI_POS	1
+#define HE_PHY_CAP_LTF_3200_GI_BITS	1
+#define HE_PHY_CAP_TX_STBC_LT_80_POS	3
+#define HE_PHY_CAP_TX_STBC_LT_80_BITS	1
+#define HE_PHY_CAP_RX_STBC_LT_80_POS	4
+#define HE_PHY_CAP_RX_STBC_LT_80_BITS	1
+#define HE_PHY_CAP_DOPPLER_POS		5
+#define HE_PHY_CAP_DOPPLER_BITS		2
+#define HE_PHY_CAP_UL_MU_POS		6
+#define HE_PHY_CAP_UL_MU_BITS		2
+
+#define HE_PHY_CAP_DCM_ENC_TX_POS	0
+#define HE_PHY_CAP_DCM_ENC_TX_BITS	3
+#define HE_PHY_CAP_DCM_ENC_RX_POS	3
+#define HE_PHY_CAP_DCM_ENC_RX_BITS	3
+#define HE_PHY_CAP_UL_HE_MU_POS		6
+#define HE_PHY_CAP_UL_HE_MU_BITS	1
+#define HE_PHY_CAP_SU_BEAMFORMER_POS	7
+#define HE_PHY_CAP_SU_BEAM_FORMER_BITS	1
+
+#define HE_PHY_CAP_SU_BEAMFORMEE_POS	0
+#define HE_PHY_CAP_SU_BEAM_FORMEE_BITS	1
+#define HE_PHY_CAP_MU_BEAMFORMER_POS	1
+#define HE_PHY_CAP_MU_BEAM_FORMER_BITS	1
+#define HE_PHY_CAP_BFEE_STS_LT80_POS	2
+#define HE_PHY_CAP_BFEE_STS_LT80_BITS	3
+#define HE_PHY_CAP_BFEE_STS_GT80_POS	5
+#define HE_PHY_CAP_BFEE_STS_GT80_BITS	3
+
+#define HE_PHY_CAP_SOUNDING_LT80_POS	0
+#define HE_PHY_CAP_SOUNDING_LT80_BITS	3
+#define HE_PHY_CAP_SOUNDING_GT80_POS	3
+#define HE_PHY_CAP_SOUNDING_GT80_BITS	3
+#define HE_PHY_CAP_SU_TONE16_POS	6
+#define HE_PHY_CAP_SU_TONE_16_BITS	1
+#define HE_PHY_CAP_MU_TONE16_POS	7
+#define HE_PHY_CAP_MU_TONE_16_BITS	1
+
+#define HE_PHY_CAP_CODEBOOK_SU_POS	0
+#define HE_PHY_CAP_CODEBOOK_SU_BITS	1
+#define HE_PHY_CAP_CODEBOOK_MU_POS	1
+#define HE_PHY_CAP_CODEBOOK_MU_BITS	1
+#define HE_PHY_CAP_BEAMFORMING_FB_POS	2
+#define HE_PHY_CAP_BEAMFORMING_FB_BITS	3
+#define HE_PHY_CAP_HE_ER_SU_PPDU_POS	5
+#define HE_PHY_CAP_HE_ER_SU_PPDU_BITS	1
+#define HE_PHY_CAP_MU_MIMO_PART_BW_POS	6
+#define HE_PHY_CAP_MU_MIMO_PART_BW_BITS	1
+#define HE_PHY_CAP_PPET_PRESENT_POS	7
+#define HE_PHY_CAP_PPET_PRESENT_BITS	1
+
+#define HE_PHY_CAP_SRP_POS		0
+#define HE_PHY_CAP_SRP_BITS		1
+#define HE_PHY_CAP_POWER_BOOST_POS	1
+#define HE_PHY_CAP_POWER_BOOST_BITS	1
+#define HE_PHY_CAP_LTF_800_GI_POS	2
+#define HE_PHY_CAP_LTF_800_GI_BITS	1
+#define HE_PHY_CAP_MAX_NC_POS		3
+#define HE_PHY_CAP_MAX_NC_BITS		3
+#define HE_PHY_CAP_TX_STBC_GT_80_POS	6
+#define HE_PHY_CAP_TX_STBC_GT_80_BITS	1
+#define HE_PHY_CAP_RX_STBC_GT_80_POS	7
+#define HE_PHY_CAP_RX_STBC_GT_80_BITS	1
+
+#define HE_PHY_CAP_LTF_800_GI_4X_POS	0
+#define HE_PHY_CAP_LTF_800_GI_4X_BITS	1
+#define HE_PHY_CAP_PPDU_20_40MHZ_POS	1
+#define HE_PHY_CAP_PPDU_20_40MHZ_BITS	1
+#define HE_PHY_CAP_PPDU_20_160MHZ_POS	2
+#define HE_PHY_CAP_PPDU_20_160MHZ_BITS	1
+#define HE_PHY_CAP_PPDU_80_160MHZ_POS	3
+#define HE_PHY_CAP_PPDU_80_160MHZ_BITS	1
+#define HE_PHY_CAP_LTF_HE_GI_POS	4
+#define HE_PHY_CAP_LTF_HE_GI_BITS	1
+#define HE_PHY_CAP_MIDAMBLE_TXRX_POS	5
+#define HE_PHY_CAP_MIDAMBLE_TXRX_BITS	1
+#define HE_PHY_CAP_DCM_MAX_BW_POS	6
+#define HE_PHY_CAP_DCM_MAX_BW_BITS	2
+
+#define HE_PHY_CAP_SIGB_OFDM_SYM_POS	0
+#define HE_PHY_CAP_SIGB_OFDM_SUM_BITS	1
+#define HE_PHY_CAP_NON_TRIG_CQI_POS	1
+#define HE_PHY_CAP_NON_TRIG_CQI_BITS	1
+#define HE_PHY_CAP_TX_1024_QAM_POS	2
+#define HE_PHY_CAP_TX_1024_QAM_BITS	1
+#define HE_PHY_CAP_RX_1024_QAM_POS	3
+#define HE_PHY_CAP_RX_1024_QAM_BITS	1
+#define HE_PHY_CAP_COMPRESS_SIGB_POS	4
+#define HE_PHY_CAP_COMPRESS_SGIB_BITS	1
+#define HE_PHY_CAP_NON_CMPR_SIGB_POS	5
+#define HE_PHY_CAP_NON_CMPR_SGIB_BITS	1
+
+void hdd_copy_he_caps(struct hdd_station_ctx *hdd_sta_ctx,
+		      tDot11fIEhe_cap *he_caps)
+{
+	struct ieee80211_he_cap_elem *he_cap_elem =
+		&hdd_sta_ctx->conn_info.he_cap_elem;
+
+	qdf_mem_zero(he_cap_elem, sizeof(struct ieee80211_he_cap_elem));
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[0], HE_MAC_CAP_HTC_HE_POS,
+		     HE_MAC_CAP_HTC_HE_BITS, he_caps->htc_he);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[0], HE_MAC_CAP_TWT_REQ_POS,
+		     HE_MAC_CAP_TWT_REQ_BITS, he_caps->twt_request);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[0], HE_MAC_CAP_TWT_RES_POS,
+		     HE_MAC_CAP_TWT_RES_BITS, he_caps->twt_responder);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[0], HE_MAC_CAP_FRAGMEN_POS,
+		     HE_MAC_CAP_FRAGMEN_BITS, he_caps->fragmentation);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[0], HE_MAC_CAP_AMSDU_EXP_POS,
+		     HE_MAC_CAP_AMSDU_EXP_BITS,
+		     he_caps->max_num_frag_msdu_amsdu_exp);
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[1], HE_MAC_CAP_MIN_FRAG_POS,
+		     HE_MAC_CAP_MIN_FRAG_BITS, he_caps->min_frag_size);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[1], HE_MAC_CAP_TRIG_FRM_POS,
+		     HE_MAC_CAP_TRIG_FRM_BITS, he_caps->trigger_frm_mac_pad);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[1], HE_MAC_CAP_AGGR_RX_POS,
+		     HE_MAC_CAP_AGGR_RX_BITS, he_caps->multi_tid_aggr_rx_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[1], HE_MAC_CAP_HE_LINK_0_POS,
+		     HE_MAC_CAP_HE_LINK_0_BITS,
+		     (he_caps->he_link_adaptation &&
+		      HE_MAC_CAP_HE_LINK_0_MASK));
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_HE_LINK_1_POS,
+		     HE_MAC_CAP_HE_LINK_1_BITS,
+		     (he_caps->he_link_adaptation &&
+		      HE_MAC_CAP_HE_LINK_1_MASK));
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_ALL_ACK_POS,
+		     HE_MAC_CAP_ALL_ACK_BITS, he_caps->all_ack);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_TRIGD_RSP_POS,
+		     HE_MAC_CAP_TRIGD_RSP_BITS, he_caps->trigd_rsp_sched);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_A_BSR_POS,
+		     HE_MAC_CAP_A_BSR_BITS, he_caps->a_bsr);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_BCAST_TWT_POS,
+		     HE_MAC_CAP_BCAST_TWT_BITS, he_caps->broadcast_twt);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_BA_BITMAP_POS,
+		     HE_MAC_CAP_BA_BITMAP_BITS, he_caps->ba_32bit_bitmap);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_MU_CASC_POS,
+		     HE_MAC_CAP_MU_CASC_BITS, he_caps->mu_cascade);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[2], HE_MAC_CAP_ACK_ENBD_POS,
+		     HE_MAC_CAP_ACK_ENBD_BITS, he_caps->ack_enabled_multitid);
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_OMI_A_POS,
+		     HE_MAC_CAP_OMI_A_BITS, he_caps->omi_a_ctrl);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_OFDMA_RA_POS,
+		     HE_MAC_CAP_OFDMA_RA_BITS, he_caps->ofdma_ra);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_MAX_AMPDU_POS,
+		     HE_MAC_CAP_MAX_AMPDU_BITS,
+		     he_caps->max_ampdu_len_exp_ext);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_AMSDU_FLAG_POS,
+		     HE_MAC_CAP_AMSDU_FLAG_BITS, he_caps->amsdu_frag);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_FLEX_TWT_POS,
+		     HE_MAC_CAP_FLEX_TWT_BITS, he_caps->flex_twt_sched);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[3], HE_MAC_CAP_RX_CTRL_POS,
+		     HE_MAC_CAP_RX_CTRL_BITS, he_caps->rx_ctrl_frame);
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_BSRP_AMPDU_POS,
+		     HE_MAC_CAP_BSRP_AMPDU_BITS, he_caps->bsrp_ampdu_aggr);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_QTP_POS,
+		     HE_MAC_CAP_QTP_BITS, he_caps->qtp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_A_BQR_POS,
+		     HE_MAC_CAP_A_BQR_BITS, he_caps->a_bqr);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_SRP_RSPDER_POS,
+		     HE_MAC_CAP_SRP_RSPDER_BITS,
+		     he_caps->spatial_reuse_param_rspder);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_NDP_SUPP_POS,
+		     HE_MAC_CAP_NDP_SUPP_BITS, he_caps->ndp_feedback_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_OPS_SUPP_POS,
+		     HE_MAC_CAP_OPS_SUPP_BITS, he_caps->ops_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4],
+		     HE_MAC_CAP_AMSDU_IN_AMPDU_POS,
+		     HE_MAC_CAP_AMSDU_IN_AMPDU_BITS, he_caps->amsdu_in_ampdu);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[4], HE_MAC_CAP_MULTI_TID_0_POS,
+		     HE_MAC_CAP_MULTI_TID_0_BITS,
+		     (he_caps->multi_tid_aggr_tx_supp &&
+		      HE_MAC_CAP_MULTI_TID_0_MASK));
+
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5], HE_MAC_CAP_MULTI_TID_1_POS,
+		     HE_MAC_CAP_MULTI_TID_1_BITS,
+		     (he_caps->multi_tid_aggr_tx_supp &&
+		      HE_MAC_CAP_MULTI_TID_1_MASK));
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5], HE_MAC_CAP_SUB_CH_SEL_POS,
+		     HE_MAC_CAP_SUB_CH_SEL_BITS,
+		     he_caps->he_sub_ch_sel_tx_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5], HE_MAC_CAP_RU_SUPP_POS,
+		     HE_MAC_CAP_RU_SUPP_BITS, he_caps->ul_2x996_tone_ru_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5],
+		     HE_MAC_CAP_UL_MU_DATA_RX_POS,
+		     HE_MAC_CAP_UL_MU_DATA_RX_BITS,
+		     he_caps->om_ctrl_ul_mu_data_dis_rx);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5], HE_MAC_CAP_DYNAMIC_SMPS_POS,
+		     HE_MAC_CAP_DYNAMIC_SMPS_BITS, he_caps->he_dynamic_smps);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5],
+		     HE_MAC_CAP_PUNCT_SOUNDING_POS,
+		     HE_MAC_CAP_PUNCT_SOUNDING_BITS,
+		     he_caps->punctured_sounding_supp);
+	QDF_SET_BITS(he_cap_elem->mac_cap_info[5],
+		     HE_MAC_CAP_VHT_TRG_FRM_RX_POS,
+		     HE_MAC_CAP_VHT_TRG_FRM_RX_BITS,
+		     he_caps->ht_vht_trg_frm_rx_supp);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_0_POS,
+		     HE_PHY_CAP_CH_WIDTH_0_BITS, he_caps->chan_width_0);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_1_POS,
+		     HE_PHY_CAP_CH_WIDTH_1_BITS, he_caps->chan_width_1);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_2_POS,
+		     HE_PHY_CAP_CH_WIDTH_2_BITS, he_caps->chan_width_2);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_3_POS,
+		     HE_PHY_CAP_CH_WIDTH_3_BITS, he_caps->chan_width_3);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_4_POS,
+		     HE_PHY_CAP_CH_WIDTH_4_BITS, he_caps->chan_width_4);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_5_POS,
+		     HE_PHY_CAP_CH_WIDTH_5_BITS, he_caps->chan_width_5);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[0], HE_PHY_CAP_CH_WIDTH_6_POS,
+		     HE_PHY_CAP_CH_WIDTH_6_BITS, he_caps->chan_width_6);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[1], HE_PHY_CAP_RX_PREM_PUNC_POS,
+		     HE_PHY_CAP_RX_PREM_PUNC_BITS,
+		     he_caps->rx_pream_puncturing);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[1], HE_PHY_CAP_DEVICE_CLASS_POS,
+		     HE_PHY_CAP_DEVICE_CLASS_BITS, he_caps->device_class);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[1], HE_PHY_CAP_LDPC_CODING_POS,
+		     HE_PHY_CAP_LDPC_CODING_BITS, he_caps->ldpc_coding);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[1],
+		     HE_PHY_CAP_LTF_800_GI_PPDU_POS,
+		     HE_PHY_CAP_LTF_800_GI_PPDU_BITS,
+		     he_caps->he_1x_ltf_800_gi_ppdu);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[1], HE_PHY_CAP_MAX_NSTS0_POS,
+		     HE_PHY_CAP_MAX_NSTS0_BITS,
+		     (he_caps->midamble_tx_rx_max_nsts &&
+		     HE_PHY_CAP_MAX_NSTS0_MASK));
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2], HE_PHY_CAP_MAX_NSTS1_POS,
+		     HE_PHY_CAP_MAX_NSTS1_BITS,
+		     (he_caps->midamble_tx_rx_max_nsts &&
+		     HE_PHY_CAP_MAX_NSTS1_MASK));
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2], HE_PHY_CAP_LTF_3200_GI_POS,
+		     HE_PHY_CAP_LTF_3200_GI_BITS,
+		     he_caps->he_4x_ltf_3200_gi_ndp);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2],
+		     HE_PHY_CAP_TX_STBC_LT_80_POS,
+		     HE_PHY_CAP_TX_STBC_LT_80_BITS,
+		     he_caps->tb_ppdu_tx_stbc_lt_80mhz);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2],
+		     HE_PHY_CAP_RX_STBC_LT_80_POS,
+		     HE_PHY_CAP_RX_STBC_LT_80_BITS, he_caps->rx_stbc_lt_80mhz);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2], HE_PHY_CAP_DOPPLER_POS,
+		     HE_PHY_CAP_DOPPLER_BITS, he_caps->doppler);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[2], HE_PHY_CAP_UL_MU_POS,
+		     HE_PHY_CAP_UL_MU_BITS, he_caps->ul_mu);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[3], HE_PHY_CAP_DCM_ENC_TX_POS,
+		     HE_PHY_CAP_DCM_ENC_TX_BITS, he_caps->dcm_enc_tx);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[3], HE_PHY_CAP_DCM_ENC_RX_POS,
+		     HE_PHY_CAP_DCM_ENC_RX_BITS, he_caps->dcm_enc_rx);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[3], HE_PHY_CAP_UL_HE_MU_POS,
+		     HE_PHY_CAP_UL_HE_MU_BITS, he_caps->ul_he_mu);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[3],
+		     HE_PHY_CAP_SU_BEAMFORMER_POS,
+		     HE_PHY_CAP_SU_BEAM_FORMER_BITS, he_caps->su_beamformer);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[4],
+		     HE_PHY_CAP_SU_BEAMFORMEE_POS,
+		     HE_PHY_CAP_SU_BEAM_FORMEE_BITS, he_caps->su_beamformee);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[4],
+		     HE_PHY_CAP_MU_BEAMFORMER_POS,
+		     HE_PHY_CAP_MU_BEAM_FORMER_BITS, he_caps->mu_beamformer);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[4],
+		     HE_PHY_CAP_BFEE_STS_LT80_POS,
+		     HE_PHY_CAP_BFEE_STS_LT80_BITS, he_caps->bfee_sts_lt_80);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[4],
+		     HE_PHY_CAP_BFEE_STS_GT80_POS,
+		     HE_PHY_CAP_BFEE_STS_GT80_BITS, he_caps->bfee_sts_gt_80);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[5],
+		     HE_PHY_CAP_SOUNDING_LT80_POS,
+		     HE_PHY_CAP_SOUNDING_LT80_BITS,
+		     he_caps->num_sounding_lt_80);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[5],
+		     HE_PHY_CAP_SOUNDING_GT80_POS,
+		     HE_PHY_CAP_SOUNDING_GT80_BITS,
+		     he_caps->num_sounding_gt_80);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[5], HE_PHY_CAP_SU_TONE16_POS,
+		     HE_PHY_CAP_SU_TONE_16_BITS, he_caps->su_feedback_tone16);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[5], HE_PHY_CAP_MU_TONE16_POS,
+		     HE_PHY_CAP_MU_TONE_16_BITS, he_caps->mu_feedback_tone16);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6], HE_PHY_CAP_CODEBOOK_SU_POS,
+		     HE_PHY_CAP_CODEBOOK_SU_BITS, he_caps->codebook_su);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6], HE_PHY_CAP_CODEBOOK_MU_POS,
+		     HE_PHY_CAP_CODEBOOK_MU_BITS, he_caps->codebook_mu);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6],
+		     HE_PHY_CAP_BEAMFORMING_FB_POS,
+		     HE_PHY_CAP_BEAMFORMING_FB_BITS,
+		     he_caps->beamforming_feedback);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6],
+		     HE_PHY_CAP_HE_ER_SU_PPDU_POS,
+		     HE_PHY_CAP_HE_ER_SU_PPDU_BITS, he_caps->he_er_su_ppdu);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6],
+		     HE_PHY_CAP_MU_MIMO_PART_BW_POS,
+		     HE_PHY_CAP_MU_MIMO_PART_BW_BITS,
+		     he_caps->dl_mu_mimo_part_bw);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[6], HE_PHY_CAP_PPET_PRESENT_POS,
+		     HE_PHY_CAP_PPET_PRESENT_BITS, he_caps->ppet_present);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7], HE_PHY_CAP_SRP_POS,
+		     HE_PHY_CAP_SRP_BITS, he_caps->srp);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7], HE_PHY_CAP_POWER_BOOST_POS,
+		     HE_PHY_CAP_POWER_BOOST_BITS, he_caps->power_boost);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7], HE_PHY_CAP_LTF_800_GI_POS,
+		     HE_PHY_CAP_LTF_800_GI_BITS, he_caps->he_ltf_800_gi_4x);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7], HE_PHY_CAP_MAX_NC_POS,
+		     HE_PHY_CAP_MAX_NC_BITS, he_caps->max_nc);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7],
+		     HE_PHY_CAP_TX_STBC_GT_80_POS,
+		     HE_PHY_CAP_TX_STBC_GT_80_BITS,
+		     he_caps->tb_ppdu_tx_stbc_gt_80mhz);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[7],
+		     HE_PHY_CAP_RX_STBC_GT_80_POS,
+		     HE_PHY_CAP_RX_STBC_GT_80_BITS, he_caps->rx_stbc_gt_80mhz);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8],
+		     HE_PHY_CAP_LTF_800_GI_4X_POS,
+		     HE_PHY_CAP_LTF_800_GI_4X_BITS,
+		     he_caps->er_he_ltf_800_gi_4x);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8],
+		     HE_PHY_CAP_PPDU_20_40MHZ_POS,
+		     HE_PHY_CAP_PPDU_20_40MHZ_BITS,
+		     he_caps->he_ppdu_20_in_40Mhz_2G);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8],
+		     HE_PHY_CAP_PPDU_20_160MHZ_POS,
+		     HE_PHY_CAP_PPDU_20_160MHZ_BITS,
+		     he_caps->he_ppdu_20_in_160_80p80Mhz);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8],
+		     HE_PHY_CAP_PPDU_80_160MHZ_POS,
+		     HE_PHY_CAP_PPDU_80_160MHZ_BITS,
+		     he_caps->he_ppdu_80_in_160_80p80Mhz);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8], HE_PHY_CAP_LTF_HE_GI_POS,
+		     HE_PHY_CAP_LTF_HE_GI_BITS, he_caps->er_1x_he_ltf_gi);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8],
+		     HE_PHY_CAP_MIDAMBLE_TXRX_POS,
+		     HE_PHY_CAP_MIDAMBLE_TXRX_BITS,
+		     he_caps->midamble_tx_rx_1x_he_ltf);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[8], HE_PHY_CAP_DCM_MAX_BW_POS,
+		     HE_PHY_CAP_DCM_MAX_BW_BITS, he_caps->dcm_max_bw);
+
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9],
+		     HE_PHY_CAP_SIGB_OFDM_SYM_POS,
+		     HE_PHY_CAP_SIGB_OFDM_SUM_BITS,
+		     he_caps->longer_than_16_he_sigb_ofdm_sym);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9], HE_PHY_CAP_NON_TRIG_CQI_POS,
+		     HE_PHY_CAP_NON_TRIG_CQI_BITS,
+		     he_caps->non_trig_cqi_feedback);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9], HE_PHY_CAP_TX_1024_QAM_POS,
+		     HE_PHY_CAP_TX_1024_QAM_BITS,
+		     he_caps->tx_1024_qam_lt_242_tone_ru);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9], HE_PHY_CAP_RX_1024_QAM_POS,
+		     HE_PHY_CAP_RX_1024_QAM_BITS,
+		     he_caps->rx_1024_qam_lt_242_tone_ru);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9],
+		     HE_PHY_CAP_COMPRESS_SIGB_POS,
+		     HE_PHY_CAP_COMPRESS_SGIB_BITS,
+		     he_caps->rx_full_bw_su_he_mu_compress_sigb);
+	QDF_SET_BITS(he_cap_elem->phy_cap_info[9],
+		     HE_PHY_CAP_NON_CMPR_SIGB_POS,
+		     HE_PHY_CAP_NON_CMPR_SGIB_BITS,
+		     he_caps->rx_full_bw_su_he_mu_non_cmpr_sigb);
+}
+
 void hdd_copy_he_operation(struct hdd_station_ctx *hdd_sta_ctx,
 			   tDot11fIEhe_op *he_operation)
 {
@@ -1404,6 +1892,9 @@ void hdd_conn_remove_connect_info(struct hdd_station_ctx *sta_ctx)
 	qdf_mem_zero(&sta_ctx->conn_info.peer_macaddr[0],
 		     QDF_MAC_ADDR_SIZE);
 
+	/* Clear AP MLD addr */
+	hdd_cm_clear_conn_info_mld_addr(sta_ctx);
+
 	/* Clear all security settings */
 	sta_ctx->conn_info.auth_type = eCSR_AUTH_TYPE_OPEN_SYSTEM;
 	sta_ctx->conn_info.uc_encrypt_type = eCSR_ENCRYPT_TYPE_NONE;
@@ -1501,7 +1992,6 @@ QDF_STATUS hdd_change_peer_state(struct wlan_hdd_link_info *link_info,
 		    WLAN_WDS_MODE_REPEATER))
 			hdd_config_wds_repeater_mode(link_info, peer_mac);
 
-		hdd_son_deliver_peer_authorize_event(link_info, peer_mac);
 		return QDF_STATUS_SUCCESS;
 	}
 
@@ -1526,7 +2016,6 @@ QDF_STATUS hdd_change_peer_state(struct wlan_hdd_link_info *link_info,
 		    WLAN_WDS_MODE_REPEATER))
 			hdd_config_wds_repeater_mode(link_info, peer_mac);
 
-		hdd_son_deliver_peer_authorize_event(link_info, peer_mac);
 	}
 	return QDF_STATUS_SUCCESS;
 }
@@ -1564,6 +2053,63 @@ QDF_STATUS hdd_update_dp_vdev_flags(void *cbk_data,
 
 	return status;
 }
+
+#ifdef NDP_TX_BW_FLOW_CTRL
+static
+void hdd_ndp_set_peer_bw(struct wlan_hdd_link_info *link_info,
+			 struct qdf_mac_addr *peer_mac,
+			 enum phy_ch_width peer_bw)
+{
+	struct hdd_station_ctx *sta_ctx;
+	enum cdp_peer_bw cdp_bw;
+	uint8_t idx;
+
+	if (qdf_is_macaddr_broadcast(peer_mac))
+		return;
+
+	sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(link_info);
+
+	for (idx = 0; idx < MAX_PEERS; idx++) {
+		if (qdf_is_macaddr_zero(&sta_ctx->conn_info.peer_macaddr[idx]))
+			break;
+
+		if (qdf_is_macaddr_equal(&sta_ctx->conn_info.peer_macaddr[idx],
+					 peer_mac)) {
+			hdd_debug("Set NDP peer " QDF_MAC_ADDR_FMT " bandwidth:%u",
+				  QDF_MAC_ADDR_REF(peer_mac->bytes), peer_bw);
+			sta_ctx->conn_info.peer_bw[idx] = peer_bw;
+			cdp_bw = hdd_convert_ch_width_to_cdp_peer_bw(peer_bw);
+			link_info->adapter->ndp_peer_bitmap[cdp_bw] |=
+							BIT(idx ? idx - 1 : 0);
+			break;
+		}
+	}
+}
+
+static inline
+void hdd_reset_peer_bw(struct hdd_adapter *adapter,
+		       struct hdd_connection_info *conn_info, int peer_idx)
+{
+	enum cdp_peer_bw bw;
+
+	bw = hdd_convert_ch_width_to_cdp_peer_bw(conn_info->peer_bw[peer_idx]);
+	adapter->ndp_peer_bitmap[bw] &= ~BIT(peer_idx ? peer_idx - 1 : 0);
+	conn_info->peer_bw[peer_idx] = CH_WIDTH_20MHZ;
+}
+#else
+static inline
+void hdd_ndp_set_peer_bw(struct wlan_hdd_link_info *link_info,
+			 struct qdf_mac_addr *peer_mac,
+			 enum phy_ch_width peer_bw)
+{
+}
+
+static inline
+void hdd_reset_peer_bw(struct hdd_adapter *adapter,
+		       struct hdd_connection_info *conn_info, int peer_idx)
+{
+}
+#endif
 
 QDF_STATUS hdd_roam_register_sta(struct wlan_hdd_link_info *link_info,
 				 struct qdf_mac_addr *bssid,
@@ -1616,11 +2162,22 @@ QDF_STATUS hdd_roam_register_sta(struct wlan_hdd_link_info *link_info,
 						adapter->hdd_ctx->psoc,
 						link_info->vdev_id);
 		ch_width = ucfg_mlme_get_ch_width_from_phymode(phymode);
+		hdd_ndp_set_peer_bw(link_info, &txrx_desc.peer_addr, ch_width);
 	} else {
 		ch_width = ucfg_mlme_get_peer_ch_width(adapter->hdd_ctx->psoc,
 						txrx_desc.peer_addr.bytes);
 	}
 	txrx_desc.bw = hdd_convert_ch_width_to_cdp_peer_bw(ch_width);
+
+#ifdef WLAN_LOCAL_PKT_CAPTURE_SUBFILTER
+	if (adapter->device_mode == QDF_STA_MODE) {
+		txrx_desc.beacon_interval = ucfg_mlme_get_beacon_interval(vdev);
+		qdf_mem_copy(txrx_desc.self_link_addr.bytes,
+			     hdd_adapter_get_link_mac_addr(link_info),
+			     QDF_MAC_ADDR_SIZE);
+	}
+#endif
+
 	qdf_status = cdp_peer_register(soc, OL_TXRX_PDEV_ID, &txrx_desc);
 	if (!QDF_IS_STATUS_SUCCESS(qdf_status)) {
 		hdd_err("cdp_peer_register() failed Status: %d [0x%08X]",
@@ -1633,6 +2190,48 @@ QDF_STATUS hdd_roam_register_sta(struct wlan_hdd_link_info *link_info,
 
 	return qdf_status;
 }
+
+#ifdef IPA_HANDLE_MLO_DEF_LINK_REG
+/**
+ * hdd_handle_ipa_sta_mlo_conn() - Handle STA MLO connection for IPA
+ * @link_info: Link info pointer in HDD adapter
+ * @sta_ctx: Pointer to struct hdd_station_ctx
+ * @mac_addr: pointer to AP mld addr if MLO connection
+ *
+ * This function handles STA MLO connection and only deflink information
+ * is registered to IPA component for STA_CONNECT event.
+ *
+ * Return: true to notify IPA component of the STA_CONNECT event.
+ *	   false to not notify IPA component.
+ */
+static bool hdd_handle_ipa_sta_mlo_conn(struct wlan_hdd_link_info *link_info,
+					struct hdd_station_ctx *sta_ctx,
+					uint8_t **mac_addr)
+{
+	if (!wlan_vdev_mlme_is_mlo_vdev(link_info->vdev))
+		return true;
+
+	/* Only deflink information is passed to IPA */
+	if (!WLAN_HDD_IS_DEFLINK(link_info))
+		return false;
+
+	/* If mac based rules are needed from IPA, it's based on ethernet
+	 * headers, which is SA or DA. Hence mld address should be passed
+	 * instead of link address of the AP.
+	 */
+	*mac_addr = sta_ctx->conn_info.mld_addr.bytes;
+
+	return true;
+}
+#else /* !IPA_HANDLE_MLO_DEF_LINK_REG */
+static inline bool
+hdd_handle_ipa_sta_mlo_conn(struct wlan_hdd_link_info *link_info,
+			    struct hdd_station_ctx *sta_ctx,
+			    uint8_t **mac_addr)
+{
+	return true;
+}
+#endif /* IPA_HANDLE_MLO_DEF_LINK_REG */
 
 /**
  * hdd_change_sta_state_authenticated()-
@@ -1666,6 +2265,9 @@ hdd_change_sta_state_authenticated(struct wlan_hdd_link_info *link_info,
 	    sta_ctx->conn_info.auth_type != eCSR_AUTH_TYPE_OPEN_SYSTEM &&
 	    sta_ctx->conn_info.auth_type != eCSR_AUTH_TYPE_SHARED_KEY) {
 
+		if (!hdd_handle_ipa_sta_mlo_conn(link_info, sta_ctx, &mac_addr))
+			goto set_peer_auth;
+
 		hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 		status = hdd_ipa_get_tx_pipe(hdd_ctx, link_info, &alt_pipe);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
@@ -1681,6 +2283,7 @@ hdd_change_sta_state_authenticated(struct wlan_hdd_link_info *link_info,
 				  alt_pipe);
 	}
 
+set_peer_auth:
 	hdd_cm_set_peer_authenticate(link_info,
 				     &sta_ctx->conn_info.bssid, false);
 
@@ -1828,7 +2431,8 @@ bool hdd_save_peer(struct hdd_station_ctx *sta_ctx,
 	return false;
 }
 
-void hdd_delete_peer(struct hdd_station_ctx *sta_ctx,
+void hdd_delete_peer(struct hdd_adapter *adapter,
+		     struct hdd_station_ctx *sta_ctx,
 		     struct qdf_mac_addr *peer_mac_addr)
 {
 	int i;
@@ -1837,6 +2441,7 @@ void hdd_delete_peer(struct hdd_station_ctx *sta_ctx,
 	for (i = 0; i < MAX_PEERS; i++) {
 		mac_addr = &sta_ctx->conn_info.peer_macaddr[i];
 		if (qdf_is_macaddr_equal(mac_addr, peer_mac_addr)) {
+			hdd_reset_peer_bw(adapter, &sta_ctx->conn_info, i);
 			qdf_zero_macaddr(mac_addr);
 			return;
 		}
@@ -2006,7 +2611,7 @@ hdd_indicate_unprot_mgmt_frame(struct wlan_hdd_link_info *link_info,
 	}
 
 	type = WLAN_HDD_GET_TYPE_FRM_FC(frame[0]);
-	if (type != SIR_MAC_MGMT_FRAME) {
+	if (type != WLAN_FC0_TYPE_MGMT) {
 		hdd_warn("Unexpected frame type %d", type);
 		return;
 	}
@@ -2424,7 +3029,10 @@ hdd_roam_channel_switch_handler(struct wlan_hdd_link_info *link_info,
 			notify = false;
 	}
 	if (notify) {
-		qdf_sched_work(0, &link_info->chan_change_notify_work);
+		link_info->ch_chng_info.ch_chng_type =
+					CHAN_SWITCH_COMPLETE_NOTIFY;
+		qdf_sched_work(
+			0, &link_info->ch_chng_info.chan_change_notify_work);
 	} else {
 		hdd_err("BSS "QDF_MAC_ADDR_FMT" no connected with vdev %d (%d)",
 			QDF_MAC_ADDR_REF(sta_ctx->conn_info.bssid.bytes),
@@ -2487,10 +3095,6 @@ QDF_STATUS hdd_sme_roam_callback(void *context,
 	struct hdd_station_ctx *sta_ctx = NULL;
 	struct hdd_context *hdd_ctx;
 
-	hdd_debug("CSR Callback: status=%s (%d) result= %s (%d)",
-		  get_e_roam_cmd_status_str(roam_status), roam_status,
-		  get_e_csr_roam_result_str(roam_result), roam_result);
-
 	/* Sanity check */
 	if (WLAN_HDD_ADAPTER_MAGIC != adapter->magic) {
 		hdd_err("Invalid adapter or adapter has invalid magic");
@@ -2500,6 +3104,10 @@ QDF_STATUS hdd_sme_roam_callback(void *context,
 	sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(link_info);
 	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 
+	hdd_debug("vdev %d status %s(%d) result %s(%d)", link_info->vdev_id,
+		  get_e_roam_cmd_status_str(roam_status), roam_status,
+		  get_e_csr_roam_result_str(roam_result), roam_result);
+
 	MTRACE(qdf_trace(QDF_MODULE_ID_HDD, TRACE_CODE_HDD_RX_SME_MSG,
 				 link_info->vdev_id, roam_status));
 
@@ -2507,17 +3115,11 @@ QDF_STATUS hdd_sme_roam_callback(void *context,
 	case eCSR_ROAM_MIC_ERROR_IND:
 		hdd_roam_mic_error_indication_handler(link_info, roam_info);
 		break;
-
 	case eCSR_ROAM_SET_KEY_COMPLETE:
-	{
 		qdf_ret_status =
 			hdd_roam_set_key_complete_handler(link_info, roam_info,
 							  roam_status,
 							  roam_result);
-		if (eCSR_ROAM_RESULT_AUTHENTICATED == roam_result)
-			hdd_debug("set key complete, session: %d",
-				  link_info->vdev_id);
-	}
 		break;
 	case eCSR_ROAM_UNPROT_MGMT_FRAME_IND:
 		if (roam_info)
@@ -2535,16 +3137,11 @@ QDF_STATUS hdd_sme_roam_callback(void *context,
 					    roam_info->tsm_ie.msmt_interval);
 		break;
 	case eCSR_ROAM_ESE_ADJ_AP_REPORT_IND:
-	{
 		hdd_indicate_ese_adj_ap_rep_ind(adapter, roam_info);
 		break;
-	}
-
 	case eCSR_ROAM_ESE_BCN_REPORT_IND:
-	{
 		hdd_indicate_ese_bcn_report_ind(adapter, roam_info);
 		break;
-	}
 #endif /* FEATURE_WLAN_ESE */
 	case eCSR_ROAM_STA_CHANNEL_SWITCH:
 		hdd_roam_channel_switch_handler(link_info, roam_info);
@@ -2834,26 +3431,19 @@ hdd_convert_ch_width_to_cdp_peer_bw(enum phy_ch_width ch_width)
 {
 	switch (ch_width) {
 	case CH_WIDTH_20MHZ:
-		return CDP_20_MHZ;
+		return CDP_PEER_BW_20MHZ;
 	case CH_WIDTH_40MHZ:
-		return CDP_40_MHZ;
+		return CDP_PEER_BW_40MHZ;
 	case CH_WIDTH_80MHZ:
-		return CDP_80_MHZ;
+		return CDP_PEER_BW_80MHZ;
 	case CH_WIDTH_160MHZ:
-		return CDP_160_MHZ;
 	case CH_WIDTH_80P80MHZ:
-		return CDP_80P80_MHZ;
-	case CH_WIDTH_5MHZ:
-		return CDP_5_MHZ;
-	case CH_WIDTH_10MHZ:
-		return CDP_10_MHZ;
+		return CDP_PEER_BW_160MHZ;
 	case CH_WIDTH_320MHZ:
-		return CDP_320_MHZ;
+		return CDP_PEER_BW_320MHZ;
 	default:
-		return CDP_BW_INVALID;
+		return CDP_PEER_BW_20MHZ;
 	}
-
-	return CDP_BW_INVALID;
 }
 
 #ifdef WLAN_FEATURE_FILS_SK
@@ -2911,6 +3501,35 @@ void hdd_roam_profile_init(struct wlan_hdd_link_info *link_info)
 	hdd_exit();
 }
 
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+/*
+ * hdd_cm_roam_connect_complete() - Callback to complete roaming
+ * @vdev: pointer to vdev object
+ *
+ * Return: None
+ */
+static void hdd_cm_roam_connect_complete(struct wlan_objmgr_vdev *vdev)
+{
+	struct hdd_context *hdd_ctx;
+	struct wlan_hdd_link_info *link_info;
+
+	hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	if (hdd_ctx) {
+		link_info = hdd_get_link_info_by_vdev(hdd_ctx,
+						      wlan_vdev_get_id(vdev));
+		if (link_info)
+			hdd_apf_reset_history(link_info->adapter);
+	}
+
+	mlo_roam_connect_complete(vdev);
+}
+#else
+static inline
+void hdd_cm_roam_connect_complete(struct wlan_objmgr_vdev *vdev)
+{
+}
+#endif
+
 struct osif_cm_ops osif_ops = {
 	.connect_active_notify_cb = hdd_cm_connect_active_notify,
 	.connect_complete_cb = hdd_cm_connect_complete,
@@ -2920,6 +3539,8 @@ struct osif_cm_ops osif_ops = {
 	.save_gtk_cb = hdd_cm_save_gtk,
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	.roam_rt_stats_event_cb = wlan_hdd_cfg80211_roam_events_callback,
+	.roam_complete_notify_cb = hdd_cm_roam_connect_complete,
+	.reset_scan_reject_params_cb = hdd_reset_scan_reject_params,
 #endif
 #ifdef WLAN_FEATURE_FILS_SK
 	.set_hlp_data_cb = hdd_cm_set_hlp_data,

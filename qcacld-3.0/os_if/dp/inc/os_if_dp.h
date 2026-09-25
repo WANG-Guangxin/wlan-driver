@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -37,6 +37,18 @@ enum qdisc_filter_status {
 	QDISC_FILTER_RTNL_LOCK_FAIL,
 	QDISC_FILTER_PRIO_MATCH,
 	QDISC_FILTER_PRIO_MISMATCH,
+};
+#endif
+
+#ifdef FEATURE_DIRECT_LINK
+/**
+ * struct osif_dp_lpass_ssr_nb_params - DP LPASS SSR notifier parameters
+ * @psoc : psoc handle
+ * @dp_lpass_ssr_nb: lpass ssr notifier block
+ */
+struct osif_dp_lpass_ssr_nb_params {
+	struct wlan_objmgr_psoc *psoc;
+	struct notifier_block dp_lpass_ssr_nb;
 };
 #endif
 
@@ -147,4 +159,17 @@ int osif_dp_get_nud_stats(struct wiphy *wiphy, struct wlan_objmgr_vdev *vdev,
  */
 int osif_dp_set_nud_stats(struct wiphy *wiphy, struct wlan_objmgr_vdev *vdev,
 			  const void *data, int data_len);
+
+#ifdef NDP_TX_BW_FLOW_CTRL
+static inline void osif_dp_ndp_set_peer_bw(qdf_nbuf_t nbuf)
+{
+	QDF_NBUF_CB_TX_PEER_BW(nbuf) =
+		(sk_tx_queue_get(nbuf->sk) & NDP_TX_QUEUE_INDEX_PEER_BW_MASK) >>
+		NDP_TX_QUEUE_INDEX_PEER_BW_SHIFT;
+}
+#else
+static inline void osif_dp_ndp_set_peer_bw(qdf_nbuf_t nbuf)
+{
+}
+#endif
 #endif /* __OSIF_DP_H__ */

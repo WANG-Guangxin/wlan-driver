@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -32,6 +32,8 @@
 #include <net/sock.h>
 #include <linux/netlink.h>
 #include <linux/vmalloc.h>
+
+#include "wlan_ipa_tgt_api.h"
 
 #ifdef WLAN_DBGLOG_DEBUGFS
 #include <linux/debugfs.h>
@@ -1881,6 +1883,10 @@ static int diag_fw_handler(ol_scn_t scn, uint8_t *data, uint32_t datalen)
 		AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("NULL Pointer assigned\n"));
 		return A_ERROR;
 	}
+
+	if (cds_is_pm_fw_debug_enable())
+		qdf_debug("Received fw data of len: %d\n", datalen);
+
 	/* when fw assert occurs,host can't use TLV format. */
 	if (wma->is_fw_assert) {
 		datap = data;
@@ -1982,6 +1988,29 @@ fw_diag_data_event_handler(ol_scn_t scn, uint8_t *data, uint32_t datalen)
 
 	return process_fw_diag_event_data(datap, num_data);
 }
+
+#ifdef IPA_OPT_WIFI_DP_LOGGING
+static int
+fw_opt_dp_diag_handler(ol_scn_t scn, uint8_t *data, uint32_t datalen)
+{
+	WMI_DEBUG_MESG_EVENTID_param_tlvs *param_buf;
+	uint8_t *datap;
+	uint32_t num_data;
+
+	wlan_ipa_fw_log_received_stats();
+	param_buf = (WMI_DEBUG_MESG_EVENTID_param_tlvs *)data;
+	if (!param_buf) {
+		AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+				("Got NULL point message from FW\n"));
+		return A_ERROR;
+	}
+
+	num_data = param_buf->num_bufp;
+	datap = (uint8_t *)param_buf->bufp;
+
+	return wlan_ipa_fw_nl_broadcast(datap, num_data);
+}
+#endif
 
 int dbglog_parse_debug_logs(ol_scn_t scn, uint8_t *data, uint32_t datalen)
 {
@@ -4485,6 +4514,27 @@ int dbglog_parser_type_init(wmi_unified_t wmi_handle, int type)
 	return A_OK;
 }
 
+#ifdef IPA_OPT_WIFI_DP_LOGGING
+static inline
+QDF_STATUS wlan_ipa_fw_diag_init(wmi_unified_t wmi_handle)
+{
+	QDF_STATUS res;
+
+	res = wmi_unified_register_event_handler(wmi_handle,
+						 wmi_opt_dp_diag_event_id,
+						 fw_opt_dp_diag_handler,
+						 WMI_RX_DIAG_WORK_CTX);
+	return res;
+}
+
+#else
+static inline
+QDF_STATUS wlan_ipa_fw_diag_init(wmi_unified_t wmi_handle)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 int dbglog_init(wmi_unified_t wmi_handle)
 {
 	QDF_STATUS res;
@@ -4533,6 +4583,11 @@ int dbglog_init(wmi_unified_t wmi_handle)
 	res = wmi_unified_register_event_handler(wmi_handle, wmi_diag_event_id,
 						 diag_fw_handler,
 						 WMI_RX_DIAG_WORK_CTX);
+	if (QDF_IS_STATUS_ERROR(res))
+		return A_ERROR;
+
+	/* Register handler for FW diag dedicated for opt_dp */
+	res = wlan_ipa_fw_diag_init(wmi_handle);
 	if (QDF_IS_STATUS_ERROR(res))
 		return A_ERROR;
 

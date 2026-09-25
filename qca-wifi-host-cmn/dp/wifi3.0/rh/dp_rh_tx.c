@@ -113,7 +113,7 @@ QDF_STATUS dp_tx_comp_desc_sanity_check_rh(uint32_t *msg_word,
 					(((uint64_t)paddr_hi) << 32));
 
 	if (desc_dma_addr != tx_desc->dma_addr) {
-		dp_err("Mismatched paddr. tx desc %pK sw cookie %lu",
+		dp_err("Mismatched paddr. tx desc %pK sw cookie %u",
 		       tx_desc,
 		       HTT_TX_BUFFER_ADDR_INFO_SW_BUFFER_COOKIE_GET(*(msg_word + 1)));
 		dp_err("dma addr in tx desc 0x%llx,dma addr in msdu info 0x%llx",
@@ -438,15 +438,16 @@ dp_tx_hw_enqueue_rh(struct dp_soc *soc, struct dp_vdev *vdev,
 	coalesce = dp_tx_attempt_coalescing(soc, vdev, tx_desc, tid,
 					    msdu_info, 0);
 
+	DP_STATS_INC_PKT(vdev, tx_i[DP_XMIT_LINK].processed, 1,
+			 tx_desc->length);
+	dp_tx_update_stats(soc, tx_desc, 0);
+
 	dp_tx_update_write_index(soc, tx_ep_info, coalesce);
 	ce_ring_release_lock(tx_ep_info->ce_tx_hdl);
 
 	dp_vdev_peer_stats_update_protocol_cnt_tx(vdev, nbuf);
-	DP_STATS_INC_PKT(vdev, tx_i[DP_XMIT_LINK].processed, 1,
-			 tx_desc->length);
 	DP_STATS_INC(soc, tx.tcl_enq[0], 1);
 
-	dp_tx_update_stats(soc, tx_desc, 0);
 	status = QDF_STATUS_SUCCESS;
 
 	dp_tx_record_hw_desc_rh((uint8_t *)hal_tx_desc_cached, soc);
@@ -813,6 +814,15 @@ void dp_tx_compl_handler_rh(struct dp_soc *soc, qdf_nbuf_t htt_msg)
 			qdf_assert_always(0);
 		}
 
+		if (qdf_unlikely(tx_desc->flags &
+			DP_TX_DESC_FLAG_REAPED)) {
+			dp_tx_comp_alert("Txdesc duplicate entry, flags = %x,id = %d",
+					 tx_desc->flags, tx_desc->id);
+			qdf_assert_always(0);
+		}
+
+		tx_desc->flags |= DP_TX_DESC_FLAG_REAPED;
+
 		if (HTT_TX_BUFFER_ADDR_INFO_RELEASE_SOURCE_GET(*(msg_word + 1)) ==
 		    HTT_TX_MSDU_RELEASE_SOURCE_FW)
 			tx_desc->buffer_src = HAL_TX_COMP_RELEASE_SOURCE_FW;
@@ -853,4 +863,25 @@ next_msdu:
 
 	DP_STATS_INC(soc, tx.tx_comp[ring_id], num_msdus);
 	DP_TX_HIST_STATS_PER_PDEV();
+}
+
+bool dp_mlo_tx_pool_map_rh(struct dp_soc *soc,
+			   uint8_t vdev_id,
+			   enum dp_mod_id mod_id)
+{
+	return false;
+}
+
+bool dp_mlo_tx_pool_unmap_rh(struct dp_soc *soc,
+			     uint8_t vdev_id,
+			     uint8_t *new_id,
+			     enum dp_mod_id mod_id)
+{
+	return false;
+}
+
+void
+dp_tx_override_flow_pool_id_rh(struct dp_vdev *vdev,
+			       struct dp_tx_queue *queue)
+{
 }

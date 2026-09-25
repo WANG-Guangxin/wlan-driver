@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -33,6 +34,8 @@
  * @QDF_IPA_STA_CONNECT: STA associates to AP
  * @QDF_IPA_STA_DISCONNECT: STA dissociates from AP
  * @QDF_IPA_CLIENT_CONNECT_EX: Peer associates/re-associates to softap
+ * @QDF_IPA_MLO_CLIENT_CONNECT_EX: MLO Peer associates/re-associates to softap
+ * @QDF_IPA_MLO_CLIENT_DISCONNECT: MLO Client Disconnects
  * @QDF_SWITCH_TO_SCC: WLAN interfaces in scc mode
  * @QDF_SWITCH_TO_MCC: WLAN interfaces in mcc mode
  * @QDF_WDI_ENABLE: WDI enable complete
@@ -48,6 +51,8 @@ typedef enum {
 	QDF_IPA_STA_CONNECT,
 	QDF_IPA_STA_DISCONNECT,
 	QDF_IPA_CLIENT_CONNECT_EX,
+	QDF_IPA_MLO_CLIENT_CONNECT_EX,
+	QDF_IPA_MLO_CLIENT_DISCONNECT,
 	QDF_SWITCH_TO_SCC,
 	QDF_SWITCH_TO_MCC,
 	QDF_WDI_ENABLE,
@@ -292,7 +297,14 @@ typedef __qdf_ipa_ast_info_type_t qdf_ipa_ast_info_type_t;
 #else
 #define QDF_IPA_CLIENT_WLAN_LEGACY_CONS   QDF_IPA_CLIENT_WLAN1_CONS
 #define QDF_IPA_CLIENT_WLAN_LEGACY_PROD   QDF_IPA_CLIENT_WLAN1_PROD
-#define QDF_IPA_CLIENT_MCC2_CONS          QDF_IPA_CLIENT_WLAN3_CONS
+
+#define QDF_IPA_CLIENT_MCC2_CONS          QDF_IPA_CLIENT_WLAN4_CONS
+#endif
+
+#if defined(CONFIG_ARCH_SA510M) && defined(CONFIG_AR6320_SUPPORT)
+#define QDF_IPA_CLIENT_MCC1_CONS          QDF_IPA_CLIENT_WLAN3_CONS
+#else
+#define QDF_IPA_CLIENT_MCC1_CONS          QDF_IPA_CLIENT_WLAN2_CONS
 #endif
 
 #ifdef QCN7605_SUPPORT

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -730,7 +730,7 @@ static ssize_t qdf_major_alloc_set_threshold(struct file *file,
 					     size_t count,
 					     loff_t *pos)
 {
-	char buf[32];
+	char buf[32] = {0};
 	ssize_t buf_size;
 	uint32_t threshold;
 	struct seq_file *seq = file->private_data;
@@ -903,7 +903,7 @@ static ssize_t qdf_major_nbuf_alloc_set_threshold(struct file *file,
 						  size_t count,
 						  loff_t *pos)
 {
-	char buf[32];
+	char buf[32] = {0};
 	ssize_t buf_size;
 	uint32_t threshold;
 	struct seq_file *seq = file->private_data;
@@ -1334,6 +1334,18 @@ void __qdf_mempool_free(qdf_device_t osdev, __qdf_mempool_t pool, void *buf)
 }
 qdf_export_symbol(__qdf_mempool_free);
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) && \
+	defined(CNSS_MEM_PRE_ALLOC)
+void qdf_mem_check_prealloc_leaks(void)
+{
+	wcnss_check_pool_lists();
+}
+#else
+void qdf_mem_check_prealloc_leaks(void)
+{
+}
+#endif
+
 #ifdef CNSS_MEM_PRE_ALLOC
 static bool qdf_might_be_prealloc(void *ptr)
 {
@@ -1668,16 +1680,19 @@ void qdf_mem_free_debug(void *ptr, const char *func, uint32_t line)
 	error_bitmap = qdf_mem_header_validate(header, current_domain);
 	error_bitmap |= qdf_mem_trailer_validate(header);
 
-	if (!error_bitmap) {
+	if (!error_bitmap)
 		header->freed = true;
+
+	if (error_bitmap != QDF_MEM_BAD_NODE)
 		qdf_list_remove_node(qdf_mem_list_get(header->domain),
 				     &header->node);
-	}
+
 	qdf_spin_unlock_irqrestore(&qdf_mem_list_lock);
 
 	qdf_mem_header_assert_valid(header, current_domain, error_bitmap,
 				    func, line);
 
+	qdf_nbuf_detect_track_list_corruption(ptr, header->size);
 	qdf_mem_kmalloc_dec(ksize(header));
 	kfree(header);
 }
@@ -1730,7 +1745,7 @@ void qdf_mem_multi_pages_alloc_debug(qdf_device_t osdev,
 	if (cacheable) {
 		/* Pages information storage */
 		pages->cacheable_pages = qdf_mem_malloc_debug(
-			pages->num_pages * sizeof(pages->cacheable_pages),
+			pages->num_pages * sizeof(*pages->cacheable_pages),
 			func, line, caller, 0);
 		if (!pages->cacheable_pages)
 			goto out_fail;
@@ -1891,7 +1906,7 @@ void qdf_mem_multi_pages_alloc(qdf_device_t osdev,
 	if (cacheable) {
 		/* Pages information storage */
 		pages->cacheable_pages = qdf_mem_malloc(
-			pages->num_pages * sizeof(pages->cacheable_pages));
+			pages->num_pages * sizeof(*pages->cacheable_pages));
 		if (!pages->cacheable_pages)
 			goto out_fail;
 
@@ -1984,7 +1999,7 @@ void qdf_mem_multi_pages_alloc(qdf_device_t osdev,
 	if (cacheable) {
 		/* Pages information storage */
 		pages->cacheable_pages = qdf_mem_malloc(
-			pages->num_pages * sizeof(pages->cacheable_pages));
+			pages->num_pages * sizeof(*pages->cacheable_pages));
 		if (!pages->cacheable_pages)
 			goto out_fail;
 

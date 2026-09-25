@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,6 +18,27 @@
 #include <wmi_unified_priv.h>
 #include "wmi_unified_ll_sap_api.h"
 #include "wmi_unified_param.h"
+
+QDF_STATUS wmi_unified_oob_connect_request_send(
+					wmi_unified_t wmi_hdl,
+					struct wmi_oob_connect_request request)
+{
+	if (wmi_hdl->ops->send_oob_connect_request)
+		return wmi_hdl->ops->send_oob_connect_request(wmi_hdl,
+							      request);
+	return QDF_STATUS_E_FAILURE;
+}
+
+QDF_STATUS wmi_extract_oob_connect_response_event(
+				wmi_unified_t wmi_handle,
+				uint8_t *event, uint32_t len,
+				struct wmi_oob_connect_response_event *response)
+{
+	if (wmi_handle->ops->extract_oob_connect_response_event)
+		return wmi_handle->ops->extract_oob_connect_response_event(
+					wmi_handle, event, len, response);
+	return QDF_STATUS_E_FAILURE;
+}
 
 QDF_STATUS wmi_unified_audio_transport_switch_resp_send(
 					wmi_unified_t wmi_hdl,
@@ -44,3 +65,11 @@ wmi_extract_audio_transport_switch_req_event(
 	return QDF_STATUS_E_FAILURE;
 }
 
+QDF_STATUS
+wmi_unified_get_tsf_stats_for_csa(wmi_unified_t wmi_hdl, uint8_t vdev_id)
+{
+	if (wmi_hdl->ops->get_tsf_stats_for_csa)
+		return wmi_hdl->ops->get_tsf_stats_for_csa(wmi_hdl, vdev_id);
+
+	return QDF_STATUS_E_FAILURE;
+}

@@ -34,6 +34,7 @@
 #include "pld_internal.h"
 #include "pld_pcie.h"
 #include "osif_psoc_sync.h"
+#include "cds_api.h"
 
 #ifdef CONFIG_PCI
 
@@ -96,17 +97,15 @@ static void pld_pcie_remove(struct pci_dev *pdev)
 {
 	struct pld_context *pld_context;
 	int errno;
-	struct osif_psoc_sync *psoc_sync;
+	struct osif_psoc_sync *psoc_sync = NULL;
 
-	errno = osif_psoc_sync_trans_start_wait(&pdev->dev, &psoc_sync);
-
-#ifdef ENFORCE_PLD_REMOVE
-	if (errno && errno != -EINVAL)
-		return;
-#else
-	if (errno)
-		return;
-#endif
+	cds_set_driver_loaded(false);
+	cds_set_unload_in_progress(true);
+	if (!cds_is_pcie_link_resume_fail()) {
+		errno = osif_psoc_sync_trans_start_wait(&pdev->dev, &psoc_sync);
+		if (errno)
+			return;
+	}
 
 	osif_psoc_sync_unregister(&pdev->dev);
 
@@ -306,9 +305,6 @@ static void pld_pcie_uevent(struct pci_dev *pdev,
 	case CNSS_FW_DOWN:
 		data.uevent = PLD_FW_DOWN;
 		break;
-	case CNSS_SYS_REBOOT:
-		data.uevent = PLD_SYS_REBOOT;
-		break;
 	default:
 		goto out;
 	}
@@ -342,7 +338,7 @@ pld_pcie_collect_driver_dump(struct pci_dev *pdev,
 }
 #endif
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0))
 /**
  * pld_bus_event_type_convert() - Convert enum cnss_bus_event_type
  *		to enum pld_bus_event
@@ -361,6 +357,9 @@ enum pld_bus_event pld_bus_event_type_convert(enum cnss_bus_event_type etype)
 	switch (etype) {
 	case BUS_EVENT_PCI_LINK_DOWN:
 		pld_etype = PLD_BUS_EVENT_PCIE_LINK_DOWN;
+		break;
+	case BUS_EVENT_PCI_LINK_RESUME_FAIL:
+		pld_etype = PLD_BUS_EVENT_PCIE_LINK_RESUME_FAIL;
 		break;
 	default:
 		break;
@@ -705,7 +704,9 @@ static struct pci_device_id pld_pcie_id_table[] = {
 #elif defined(QCA_WIFI_QCA6490)
 	{ 0x17cb, 0x1103, PCI_ANY_ID, PCI_ANY_ID },
 #elif defined(QCA_WIFI_KIWI)
-#if defined(QCA_WIFI_PEACH)
+#if defined(QCA_WIFI_FIG)
+	{ 0x17cb, 0x1111, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_PEACH)
 	{ 0x17cb, 0x110E, PCI_ANY_ID, PCI_ANY_ID },
 #elif defined(QCA_WIFI_MANGO)
 	{ 0x17cb, 0x110A, PCI_ANY_ID, PCI_ANY_ID },
@@ -714,6 +715,8 @@ static struct pci_device_id pld_pcie_id_table[] = {
 #endif
 #elif defined(QCN7605_SUPPORT)
 	{ 0x17cb, 0x1102, PCI_ANY_ID, PCI_ANY_ID },
+#elif defined(QCA_WIFI_QCC2072)
+	{ 0x17cb, 0x1112, PCI_ANY_ID, PCI_ANY_ID },
 #else
 	{ 0x168c, 0x003c, PCI_ANY_ID, PCI_ANY_ID },
 	{ 0x168c, 0x0041, PCI_ANY_ID, PCI_ANY_ID },
@@ -752,7 +755,7 @@ struct cnss_wlan_driver pld_pcie_ops = {
 #ifdef WLAN_FEATURE_SSR_DRIVER_DUMP
 	.collect_driver_dump = pld_pcie_collect_driver_dump,
 #endif
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 9, 0))
 	.update_event = pld_pcie_update_event,
 #endif
 #ifdef CONFIG_PM
@@ -958,7 +961,7 @@ int pld_pcie_get_soc_info(struct device *dev, struct pld_soc_info *info)
 	info->board_id = cnss_info.board_id;
 	info->soc_id = cnss_info.soc_id;
 	info->fw_version = cnss_info.fw_version;
-	strlcpy(info->fw_build_timestamp, cnss_info.fw_build_timestamp,
+	strscpy(info->fw_build_timestamp, cnss_info.fw_build_timestamp,
 		sizeof(info->fw_build_timestamp));
 	info->device_version.family_number =
 		cnss_info.device_version.family_number;
@@ -972,7 +975,7 @@ int pld_pcie_get_soc_info(struct device *dev, struct pld_soc_info *info)
 		info->dev_mem_info[i].start = cnss_info.dev_mem_info[i].start;
 		info->dev_mem_info[i].size = cnss_info.dev_mem_info[i].size;
 	}
-	strlcpy(info->fw_build_id, cnss_info.fw_build_id,
+	strscpy(info->fw_build_id, cnss_info.fw_build_id,
 		sizeof(info->fw_build_id));
 
 	return 0;
@@ -986,6 +989,9 @@ void pld_pcie_schedule_recovery_work(struct device *dev,
 	switch (reason) {
 	case PLD_REASON_LINK_DOWN:
 		cnss_reason = CNSS_REASON_LINK_DOWN;
+		break;
+	case PLD_REASON_FW_ASSERTION_FAIL:
+		cnss_reason = CNSS_REASON_FW_ASSERTION_FAIL;
 		break;
 	default:
 		cnss_reason = CNSS_REASON_DEFAULT;
@@ -1009,6 +1015,17 @@ void pld_pcie_device_self_recovery(struct device *dev,
 	}
 	cnss_self_recovery(dev, cnss_reason);
 }
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0))
+int pld_pcie_set_host_param(struct device *dev, const char *chip_name)
+{
+	struct cnss_wlan_host_param param;
+
+	param.chip_name = chip_name;
+
+	return cnss_set_host_param(dev, &param);
+}
+#endif
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0))
 int pld_pcie_set_wfc_mode(struct device *dev,

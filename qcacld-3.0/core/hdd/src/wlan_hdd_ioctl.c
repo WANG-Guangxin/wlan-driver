@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -312,6 +312,13 @@ static bool hdd_check_and_fill_freq(uint32_t in_chan, qdf_freq_t *freq,
 	else
 		return false;
 
+	hdd_debug("channel num: %d, freq: %d", in_chan, *freq);
+
+	/* freq = 0 is a valid input, so return true */
+	if (*freq &&
+	    !wlan_reg_is_freq_enabled(pdev, *freq, REG_CURRENT_PWR_MODE))
+		return false;
+
 	return true;
 }
 
@@ -553,9 +560,46 @@ static int hdd_parse_reassoc_command_v1_data(const uint8_t *command,
 	return 0;
 }
 
+static int
+hdd_check_and_reject_reassoc_command(struct wlan_hdd_link_info *link_info,
+				     struct qdf_mac_addr *target_bssid)
+{
+	struct wlan_objmgr_vdev *vdev;
+	struct qdf_mac_addr connected_bssid;
+	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(link_info->adapter);
+
+	vdev = hdd_objmgr_get_vdev_by_user(link_info, WLAN_OSIF_ID);
+	if (!vdev) {
+		hdd_err("vdev is NULL");
+		return -EINVAL;
+	}
+
+	wlan_vdev_get_bss_peer_mac(vdev, &connected_bssid);
+
+	if (ucfg_cm_roam_get_roam_score_algo(hdd_ctx->pdev) ==
+	    VENDOR_ROAM_SCORE_ALGORITHM_1 &&
+	    ucfg_cm_is_bssid_present_on_any_assoc_link(vdev, target_bssid)) {
+		hdd_debug("vdev: %d reject self REASSOC cmd on connected bssid" QDF_MAC_ADDR_FMT,
+			  link_info->adapter->deflink->vdev_id,
+			  QDF_MAC_ADDR_REF(target_bssid->bytes));
+		/*
+		 * Send roam cancel event when roam invoke triggered by
+		 * userspace reassoc command is rejected
+		 */
+		ucfg_cm_roam_reject_reassoc_event(hdd_ctx->pdev, vdev,
+						  &connected_bssid);
+		hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_ID);
+		return -EINVAL;
+	}
+
+	hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_ID);
+
+	return 0;
+}
+
 /**
  * hdd_parse_reassoc_v1() - parse version 1 of the REASSOC command
- * @adapter:	Adapter upon which the command was received
+ * @link_info: Link info pointer in HDD adapter
  * @command:	ASCII text command that was received
  *
  * This function parses the v1 REASSOC command with the format
@@ -571,17 +615,18 @@ static int hdd_parse_reassoc_command_v1_data(const uint8_t *command,
  *
  * Return: 0 for success non-zero for failure
  */
-static int hdd_parse_reassoc_v1(struct hdd_adapter *adapter, const char *command)
+static int hdd_parse_reassoc_v1(struct wlan_hdd_link_info *link_info,
+				const char *command)
 {
 	qdf_freq_t freq = 0;
 	tSirMacAddr bssid;
 	int ret;
 	struct qdf_mac_addr target_bssid;
-	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(link_info->adapter);
 	QDF_STATUS status;
 	struct wlan_objmgr_pdev *pdev;
 
-	pdev = wlan_vdev_get_pdev(adapter->deflink->vdev);
+	pdev = wlan_vdev_get_pdev(link_info->adapter->deflink->vdev);
 	ret = hdd_parse_reassoc_command_v1_data(command, bssid, &freq, pdev);
 	if (ret) {
 		hdd_err("Failed to parse reassoc command data");
@@ -589,8 +634,12 @@ static int hdd_parse_reassoc_v1(struct hdd_adapter *adapter, const char *command
 	}
 
 	qdf_mem_copy(target_bssid.bytes, bssid, sizeof(tSirMacAddr));
+	ret = hdd_check_and_reject_reassoc_command(link_info, &target_bssid);
+	if (ret)
+		return ret;
+
 	status = ucfg_wlan_cm_roam_invoke(hdd_ctx->pdev,
-					  adapter->deflink->vdev_id,
+					  link_info->adapter->deflink->vdev_id,
 					  &target_bssid, freq,
 					  CM_ROAMING_USER);
 	return qdf_status_to_os_return(status);
@@ -598,7 +647,7 @@ static int hdd_parse_reassoc_v1(struct hdd_adapter *adapter, const char *command
 
 /**
  * hdd_parse_reassoc_v2() - parse version 2 of the REASSOC command
- * @adapter:	Adapter upon which the command was received
+ * @link_info: Link info pointer in HDD adapter
  * @command:	Command that was received, ASCII command
  *		followed by binary data
  * @total_len:  Total length of the command received
@@ -609,20 +658,19 @@ static int hdd_parse_reassoc_v1(struct hdd_adapter *adapter, const char *command
  *
  * Return: 0 for success non-zero for failure
  */
-static int hdd_parse_reassoc_v2(struct hdd_adapter *adapter,
-				const char *command,
-				int total_len)
+static int hdd_parse_reassoc_v2(struct wlan_hdd_link_info *link_info,
+				const char *command, int total_len)
 {
 	struct android_wifi_reassoc_params params;
 	tSirMacAddr bssid;
 	qdf_freq_t freq = 0;
 	int ret;
 	struct qdf_mac_addr target_bssid;
-	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(link_info->adapter);
 	QDF_STATUS status;
 	struct wlan_objmgr_pdev *pdev;
 
-	pdev = wlan_vdev_get_pdev(adapter->deflink->vdev);
+	pdev = wlan_vdev_get_pdev(link_info->adapter->deflink->vdev);
 	if (total_len < sizeof(params) + 8) {
 		hdd_err("Invalid command length");
 		return -EINVAL;
@@ -645,10 +693,15 @@ static int hdd_parse_reassoc_v2(struct hdd_adapter *adapter,
 			return -EINVAL;
 
 		qdf_mem_copy(target_bssid.bytes, bssid, sizeof(tSirMacAddr));
+		ret = hdd_check_and_reject_reassoc_command(link_info,
+							   &target_bssid);
+		if (ret)
+			return ret;
+
 		status = ucfg_wlan_cm_roam_invoke(hdd_ctx->pdev,
-						  adapter->deflink->vdev_id,
-						  &target_bssid, freq,
-						  CM_ROAMING_USER);
+					link_info->adapter->deflink->vdev_id,
+					&target_bssid, freq,
+					CM_ROAMING_USER);
 		ret = qdf_status_to_os_return(status);
 	}
 
@@ -657,7 +710,7 @@ static int hdd_parse_reassoc_v2(struct hdd_adapter *adapter,
 
 /**
  * hdd_parse_reassoc() - parse the REASSOC command
- * @adapter:	Adapter upon which the command was received
+ * @link_info: Link info pointer in HDD adapter
  * @command:	Command that was received
  * @total_len:  Total length of the command received
  *
@@ -670,8 +723,8 @@ static int hdd_parse_reassoc_v2(struct hdd_adapter *adapter,
  *
  * Return: 0 for success non-zero for failure
  */
-static int hdd_parse_reassoc(struct hdd_adapter *adapter, const char *command,
-			     int total_len)
+static int hdd_parse_reassoc(struct wlan_hdd_link_info *link_info,
+			     const char *command, int total_len)
 {
 	int ret;
 
@@ -695,9 +748,9 @@ static int hdd_parse_reassoc(struct hdd_adapter *adapter, const char *command,
 	}
 
 	if (command[25])
-		ret = hdd_parse_reassoc_v1(adapter, command);
+		ret = hdd_parse_reassoc_v1(link_info, command);
 	else
-		ret = hdd_parse_reassoc_v2(adapter, command, total_len);
+		ret = hdd_parse_reassoc_v2(link_info, command, total_len);
 
 	return ret;
 }
@@ -1974,10 +2027,14 @@ struct link_status_priv {
 static int hdd_conc_set_dwell_time(struct hdd_adapter *adapter,
 				   uint8_t *command)
 {
-	u8 *value = command;
+	u8 *value;
 	int val = 0, temp = 0;
 	int retval = 0;
 
+	if (!command)
+		return -EINVAL;
+
+	value = command;
 	if (strncmp(command, "CONCSETDWELLTIME ACTIVE MAX", 27) == 0) {
 		if (drv_cmd_validate(command, 27)) {
 			hdd_err("Invalid driver command");
@@ -2504,7 +2561,7 @@ int wlan_hdd_set_mc_rate(struct wlan_hdd_link_info *link_info, int target_rate)
 	QDF_STATUS status;
 	struct hdd_adapter *adapter = link_info->adapter;
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
-	bool bval = false;
+	uint8_t enable_mimo = WLAN_MIMO_CAP_DISABLE;
 
 	if (!hdd_ctx) {
 		hdd_err("HDD context is null");
@@ -2519,12 +2576,12 @@ int wlan_hdd_set_mc_rate(struct wlan_hdd_link_info *link_info, int target_rate)
 		return -EINVAL;
 	}
 
-	status = ucfg_mlme_get_vht_enable2x2(hdd_ctx->psoc, &bval);
+	status = ucfg_mlme_get_vht_mimo_cap(hdd_ctx->psoc, &enable_mimo);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		hdd_err("unable to get vht_enable2x2");
 		return -EINVAL;
 	}
-	rate_update.nss = (bval == 0) ? 0 : 1;
+	rate_update.nss = enable_mimo ? 1 : 0;
 
 	rate_update.dev_mode = adapter->device_mode;
 	rate_update.mcastDataRate24GHz = target_rate;
@@ -2900,7 +2957,7 @@ static int drv_cmd_get_roam_trigger(struct wlan_hdd_link_info *link_info,
 				    struct hdd_priv_data *priv_data)
 {
 	int ret = 0;
-	uint8_t lookup_threshold;
+	uint8_t next_rssi_threshold;
 	int rssi;
 	char extra[32];
 	uint8_t len = 0;
@@ -2909,18 +2966,18 @@ static int drv_cmd_get_roam_trigger(struct wlan_hdd_link_info *link_info,
 	status = ucfg_cm_get_neighbor_lookup_rssi_threshold(
 						hdd_ctx->psoc,
 						link_info->vdev_id,
-						&lookup_threshold);
+						&next_rssi_threshold);
 	if (QDF_IS_STATUS_ERROR(status))
 		return qdf_status_to_os_return(status);
 
 	qdf_mtrace(QDF_MODULE_ID_HDD, QDF_MODULE_ID_HDD,
 		   TRACE_CODE_HDD_GETROAMTRIGGER_IOCTL,
-		   link_info->vdev_id, lookup_threshold);
+		   link_info->vdev_id, next_rssi_threshold);
 
-	hdd_debug("vdev_id: %u, lookup_threshold: %u",
-		  link_info->vdev_id, lookup_threshold);
+	hdd_debug("vdev_id: %u, NEXT_RSSI_THRESHOLD: %u",
+		  link_info->vdev_id, next_rssi_threshold);
 
-	rssi = (-1) * lookup_threshold;
+	rssi = (-1) * next_rssi_threshold;
 
 	len = scnprintf(extra, sizeof(extra), "%s %d", command, rssi);
 	len = QDF_MIN(priv_data->total_len, len + 1);
@@ -3194,7 +3251,7 @@ exit:
 }
 
 #ifdef FEATURE_WLAN_APF
-static void hdd_enable_active_apf_mode(struct wlan_hdd_link_info *link_info)
+void hdd_enable_active_apf_mode(struct wlan_hdd_link_info *link_info)
 {
 	struct hdd_adapter *adapter = link_info->adapter;
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
@@ -3203,23 +3260,13 @@ static void hdd_enable_active_apf_mode(struct wlan_hdd_link_info *link_info)
 				       adapter->mac_addr.bytes, link_info->vdev_id);
 }
 
-static void hdd_disable_active_apf_mode(struct wlan_hdd_link_info *link_info)
+void hdd_disable_active_apf_mode(struct wlan_hdd_link_info *link_info)
 {
 	struct hdd_adapter *adapter = link_info->adapter;
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
 
 	sme_disable_active_apf_mode_ind(hdd_ctx->mac_handle, adapter->device_mode,
 					adapter->mac_addr.bytes, link_info->vdev_id);
-}
-#else
-static void
-hdd_enable_active_apf_mode(struct wlan_hdd_link_info *link_info)
-{
-}
-
-static void
-hdd_disable_active_apf_mode(struct wlan_hdd_link_info *link_info)
-{
 }
 #endif
 
@@ -3232,7 +3279,6 @@ static int drv_cmd_set_suspend_mode(struct wlan_hdd_link_info *link_info,
 	struct hdd_adapter *adapter = link_info->adapter;
 	int errno;
 	uint8_t *value = command;
-	QDF_STATUS status;
 	uint8_t idle_monitor;
 
 	if (QDF_STA_MODE != adapter->device_mode) {
@@ -3258,21 +3304,47 @@ static int drv_cmd_set_suspend_mode(struct wlan_hdd_link_info *link_info,
 		  idle_monitor,
 		  ucfg_pmo_is_configure_apf_per_screen_state(hdd_ctx->psoc));
 
-	if (sme_get_dhcp_status(hdd_ctx->mac_handle, link_info->vdev_id)) {
+	if (sme_get_dhcp_status(hdd_ctx->mac_handle, link_info->vdev_id) &&
+	    idle_monitor == 1) {
 		hdd_nofl_debug("DHCP in progress. Ignore SETSUSPEND command");
+		adapter->dhcp_config_setsuspend = true;
 		return 0;
 	}
+
+	return hdd_handle_apf_mode_on_idle(hdd_ctx, link_info, idle_monitor);
+}
+
+int hdd_handle_apf_mode_on_idle(struct hdd_context *hdd_ctx,
+				struct wlan_hdd_link_info *link_info,
+				uint8_t idle_monitor)
+{
+	QDF_STATUS status;
+	struct hdd_adapter *adapter = link_info->adapter;
+	struct wlan_objmgr_vdev *vdev;
 
 	if (ucfg_pmo_is_configure_apf_per_screen_state(hdd_ctx->psoc)) {
-		if (idle_monitor == 0)
+		if (idle_monitor == 0) {
 			hdd_disable_active_apf_mode(link_info);
-		else if (idle_monitor == 1)
-			hdd_enable_active_apf_mode(link_info);
-	}
+			adapter->enable_active_apf_mode = false;
+		} else if (idle_monitor == 1) {
+			vdev = hdd_objmgr_get_vdev_by_user(link_info,
+							   WLAN_OSIF_ID);
+			if (!vdev) {
+				hdd_err("vdev is NULL");
+				return -EINVAL;
+			}
 
-	if (sme_get_dhcp_status(hdd_ctx->mac_handle, link_info->vdev_id)) {
-		hdd_nofl_debug("DHCP in progress. Ignore SETSUSPEND command");
-		return 0;
+			if (ucfg_cm_is_vdev_connected(vdev)) {
+				hdd_enable_active_apf_mode(link_info);
+				adapter->enable_active_apf_mode = false;
+			} else {
+				hdd_debug("vdev:%d not in connected state",
+					  link_info->vdev_id);
+				adapter->enable_active_apf_mode = true;
+			}
+
+			hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_ID);
+		}
 	}
 
 	status = ucfg_pmo_tgt_psoc_send_idle_roam_suspend_mode(hdd_ctx->psoc,
@@ -3296,7 +3368,7 @@ static int drv_cmd_get_roam_mode(struct wlan_hdd_link_info *link_info,
 	uint8_t len;
 
 	/*
-	 * roamMode value shall be inverted because the sementics is different.
+	 * roamMode value shall be inverted because the semantics is different.
 	 */
 	if (roam_mode)
 		roam_mode = cfg_min(CFG_LFR_FEATURE_ENABLED);
@@ -4321,7 +4393,7 @@ static int drv_cmd_reassoc(struct wlan_hdd_link_info *link_info,
 			   uint8_t command_len,
 			   struct hdd_priv_data *priv_data)
 {
-	return hdd_parse_reassoc(link_info->adapter, command,
+	return hdd_parse_reassoc(link_info, command,
 				 priv_data->total_len);
 }
 
@@ -4841,15 +4913,15 @@ static int drv_cmd_miracast(struct wlan_hdd_link_info *link_info,
 	case MIRACAST_SINK:
 		break;
 	case MIRACAST_CONN_OPT_ENABLED:
+		ucfg_mlme_start_miracast_opt(hdd_ctx->psoc);
+		wma_cli_set_command(0, wmi_pdev_param_power_collapse_enable, 0,
+				    PDEV_CMD);
+		return 0;
 	case MIRACAST_CONN_OPT_DISABLED:
-		{
-			wma_cli_set_command(
-				link_info->vdev_id,
-				wmi_pdev_param_power_collapse_enable,
-				(filter_type == MIRACAST_CONN_OPT_ENABLED ?
-				 0 : 1), PDEV_CMD);
-			return 0;
-		}
+		wma_cli_set_command(0, wmi_pdev_param_power_collapse_enable, 1,
+				    PDEV_CMD);
+		ucfg_mlme_stop_miracast_opt(hdd_ctx->psoc);
+		return 0;
 	default:
 		hdd_err("accepted Values: 0-Disabled, 1-Source, 2-Sink, 128,129");
 		ret = -EINVAL;
@@ -6004,31 +6076,6 @@ static int hdd_parse_setantennamode_command(const uint8_t *value)
 }
 
 /**
- * hdd_is_supported_chain_mask_2x2() - Verify if supported chain
- * mask is 2x2 mode
- * @hdd_ctx: Pointer to hdd context
- *
- * Return: true if supported chain mask 2x2 else false
- */
-static bool hdd_is_supported_chain_mask_2x2(struct hdd_context *hdd_ctx)
-{
-	QDF_STATUS status;
-	bool bval = false;
-
-/*
-	 * Revisit and the update logic to determine the number
-	 * of TX/RX chains supported in the system when
-	 * antenna sharing per band chain mask support is
-	 * brought in
-	 */
-	status = ucfg_mlme_get_vht_enable2x2(hdd_ctx->psoc, &bval);
-	if (!QDF_IS_STATUS_SUCCESS(status))
-		hdd_err("unable to get vht_enable2x2");
-
-	return (bval == 0x01) ? true : false;
-}
-
-/**
  * hdd_is_supported_chain_mask_1x1() - Verify if the supported
  * chain mask is 1x1
  * @hdd_ctx: Pointer to hdd context
@@ -6038,7 +6085,7 @@ static bool hdd_is_supported_chain_mask_2x2(struct hdd_context *hdd_ctx)
 static bool hdd_is_supported_chain_mask_1x1(struct hdd_context *hdd_ctx)
 {
 	QDF_STATUS status;
-	bool bval = false;
+	uint8_t enable_mimo = WLAN_MIMO_CAP_DISABLE;
 
 	/*
 	 * Revisit and update the logic to determine the number
@@ -6046,11 +6093,23 @@ static bool hdd_is_supported_chain_mask_1x1(struct hdd_context *hdd_ctx)
 	 * antenna sharing per band chain mask support is
 	 * brought in
 	 */
-	status = ucfg_mlme_get_vht_enable2x2(hdd_ctx->psoc, &bval);
+	status = ucfg_mlme_get_vht_mimo_cap(hdd_ctx->psoc, &enable_mimo);
 	if (!QDF_IS_STATUS_SUCCESS(status))
 		hdd_err("unable to get vht_enable2x2");
 
-	return (!bval) ? true : false;
+	return !enable_mimo;
+}
+
+/**
+ * hdd_is_supported_chain_mask_2x2() - Verify if supported chain
+ * mask is 2x2 mode
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Return: true if supported chain mask 2x2 else false
+ */
+static inline bool hdd_is_supported_chain_mask_2x2(struct hdd_context *hdd_ctx)
+{
+	return !hdd_is_supported_chain_mask_1x1(hdd_ctx);
 }
 
 QDF_STATUS hdd_update_smps_antenna_mode(struct hdd_context *hdd_ctx, int mode)
@@ -6345,14 +6404,16 @@ static int drv_cmd_invalid(struct hdd_adapter *adapter,
 }
 
 /**
- * hdd_apply_fcc_constraint() - Set FCC constraint
+ * hdd_apply_fcc_rules() - Set FCC constraint and modify unii 1 and 2A band
  * @hdd_ctx: Pointer to hdd context
  * @fcc_constraint: Fcc constraint flag
+ * @disable_unii_1_2a: Disable UNII 1 and 2A band
  *
  * Return: Return 0 incase of success else return error number
  */
-static int hdd_apply_fcc_constraint(struct hdd_context *hdd_ctx,
-				    bool fcc_constraint)
+static int hdd_apply_fcc_rules(struct hdd_context *hdd_ctx,
+			       bool fcc_constraint,
+			       bool disable_unii_1_2a)
 {
 	QDF_STATUS status;
 
@@ -6360,6 +6421,13 @@ static int hdd_apply_fcc_constraint(struct hdd_context *hdd_ctx,
 					     fcc_constraint);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err("Failed to update tx power for channels 12/13");
+		return qdf_status_to_os_return(status);
+	}
+
+	status = ucfg_reg_set_disable_unii_1_2a(hdd_ctx->pdev,
+						disable_unii_1_2a);
+	if (status) {
+		hdd_err("Failed to update disable UNII 1 & 2A");
 		return qdf_status_to_os_return(status);
 	}
 
@@ -6374,22 +6442,25 @@ static int hdd_apply_fcc_constraint(struct hdd_context *hdd_ctx,
 }
 
 /**
- * hdd_apply_fcc_constraint_update_band() - Set FCC constraint and update band
+ * hdd_apply_fcc_rules_and_update_band() - Set FCC constraint and update band
+ * and modify unii 1 and 2A band
  * @link_info: Link info pointer in HDD adapter
  * @hdd_ctx: Pointer to hdd context
  * @fcc_constraint: FCC constraint flag
  * @dis_6g_keep_sta_cli_conn: Disable 6 GHz band and keep STA, P2P client
  *                            connection flag
  * @band_bitmap: Band bitmap
+ * @disable_unii_1_2a: Disable UNII 1 and 2A band
  *
  * Return:  Return 0 incase of success else return error number
  */
 static int
-hdd_apply_fcc_constraint_update_band(struct wlan_hdd_link_info *link_info,
-				     struct hdd_context *hdd_ctx,
-				     bool fcc_constraint,
-				     bool dis_6g_keep_sta_cli_conn,
-				     uint32_t band_bitmap)
+hdd_apply_fcc_rules_and_update_band(struct wlan_hdd_link_info *link_info,
+				    struct hdd_context *hdd_ctx,
+				    bool fcc_constraint,
+				    bool dis_6g_keep_sta_cli_conn,
+				    uint32_t band_bitmap,
+				    bool disable_unii_1_2a)
 {
 	QDF_STATUS status;
 
@@ -6407,6 +6478,13 @@ hdd_apply_fcc_constraint_update_band(struct wlan_hdd_link_info *link_info,
 		return qdf_status_to_os_return(status);
 	}
 
+	status = ucfg_reg_set_disable_unii_1_2a(hdd_ctx->pdev,
+						disable_unii_1_2a);
+	if (status) {
+		hdd_err("Failed to update disable UNII 1 & 2A");
+		return qdf_status_to_os_return(status);
+	}
+
 	return hdd_reg_set_band(link_info->adapter->dev, band_bitmap);
 }
 
@@ -6414,7 +6492,7 @@ hdd_apply_fcc_constraint_update_band(struct wlan_hdd_link_info *link_info,
  * drv_cmd_set_fcc_channel() - Handle fcc constraint request
  * @link_info: Link info pointer in HDD adapter
  * @hdd_ctx: HDD context
- * @command: command ptr, SET_FCC_CHANNEL 0/1/2/-1 is the command
+ * @command: command ptr, SET_FCC_CHANNEL 0/1/2/3/-1 is the command
  * @command_len: command len
  * @priv_data: private data
  *
@@ -6432,6 +6510,7 @@ static int drv_cmd_set_fcc_channel(struct wlan_hdd_link_info *link_info,
 	uint32_t band_bitmap = 0, curr_band_bitmap;
 	bool rf_test_mode, fcc_constraint, dis_6g_keep_sta_cli_conn;
 	bool modify_band = false;
+	bool disable_unii_1_2a;
 
 	/*
 	 * This command would be called by user-space when it detects WLAN
@@ -6440,11 +6519,18 @@ static int drv_cmd_set_fcc_channel(struct wlan_hdd_link_info *link_info,
 	 * off, WLAN would turn back on. So at that point the command is
 	 * expected to come down.
 	 * a) 0 means reduce power as per fcc constraint and disable 6 GHz band
-	 *    but keep existing STA/P2P Client connections intact.
-	 * b) 1 means reduce power as per fcc constraint and enable 6 GHz band.
+	 *    but keep existing STA/P2P Client connections intact and enable
+	 *    UNII 1/2A band.
+	 * b) 1 means reduce power as per fcc constraint and enable 6 GHz band
+	 *    and enable UNII 1/2A band.
 	 * c) 2 means reset fcc constraint but disable 6 GHz band but keep
-	 *    existing STA/P2P Client connections intact.
-	 * d) -1 means reset fcc constraint and enable 6 GHz band.
+	 *    existing STA/P2P Client connections intact and enable UNII 1/2A
+	 *    band.
+	 * d) -1 means reset fcc constraint and enable 6 GHz band and enable
+	 *    UNII 1/2A band
+	 * e) 3  means reduce power as per fcc constraint and disable 6 GHz
+	 *    band but keep existing STA/P2P Client connections intact,
+	 *    disable UNII 1/2A band if operating country is CA.
 	 */
 
 	err = kstrtos8(command + command_len + 1, 10, &input_value);
@@ -6459,18 +6545,28 @@ static int drv_cmd_set_fcc_channel(struct wlan_hdd_link_info *link_info,
 	case -1:
 		fcc_constraint = false;
 		dis_6g_keep_sta_cli_conn = false;
+		disable_unii_1_2a = false;
 		break;
 	case 0:
 		fcc_constraint = true;
 		dis_6g_keep_sta_cli_conn = true;
+		disable_unii_1_2a = false;
 		break;
 	case 1:
 		fcc_constraint = true;
 		dis_6g_keep_sta_cli_conn = false;
+		disable_unii_1_2a = false;
 		break;
 	case 2:
 		fcc_constraint = false;
 		dis_6g_keep_sta_cli_conn = true;
+		disable_unii_1_2a = false;
+		break;
+	case 3:
+		fcc_constraint = true;
+		dis_6g_keep_sta_cli_conn = true;
+		if (ucfg_reg_disable_unii_1_2a_for_current_cc(hdd_ctx->pdev))
+			disable_unii_1_2a = true;
 		break;
 	default:
 		hdd_err("Invalie input value");
@@ -6510,15 +6606,18 @@ static int drv_cmd_set_fcc_channel(struct wlan_hdd_link_info *link_info,
 		if (ucfg_reg_is_fcc_constraint_set(hdd_ctx->pdev) ==
 		    fcc_constraint &&
 		    ucfg_reg_get_keep_6ghz_sta_cli_connection(hdd_ctx->pdev) ==
-		    dis_6g_keep_sta_cli_conn) {
-			hdd_debug("Same FCC constraint and band bitmap value");
+		    dis_6g_keep_sta_cli_conn && !modify_band &&
+		    ucfg_reg_get_disable_unii_1_2a(hdd_ctx->pdev) ==
+		    disable_unii_1_2a) {
+			hdd_debug("Same FCC constraint and band bitmap and disable UNII 1 & 2A value");
 			return 0;
 		} else if (modify_band) {
-			return hdd_apply_fcc_constraint_update_band(link_info,
+			return hdd_apply_fcc_rules_and_update_band(link_info,
 						hdd_ctx,
 						fcc_constraint,
 						dis_6g_keep_sta_cli_conn,
-						band_bitmap);
+						band_bitmap,
+						disable_unii_1_2a);
 		}
 	} else {
 		if (ucfg_reg_is_fcc_constraint_set(hdd_ctx->pdev) ==
@@ -6528,7 +6627,7 @@ static int drv_cmd_set_fcc_channel(struct wlan_hdd_link_info *link_info,
 		}
 	}
 
-	return hdd_apply_fcc_constraint(hdd_ctx, fcc_constraint);
+	return hdd_apply_fcc_rules(hdd_ctx, fcc_constraint, disable_unii_1_2a);
 }
 
 /**
@@ -6605,7 +6704,6 @@ static int drv_cmd_set_channel_switch(struct wlan_hdd_link_info *link_info,
 				      struct hdd_priv_data *priv_data)
 {
 	struct hdd_adapter *adapter = link_info->adapter;
-	struct net_device *dev = adapter->dev;
 	int status;
 	uint32_t chan_number = 0, chan_bw = 0;
 	uint8_t *value = command;
@@ -6618,7 +6716,7 @@ static int drv_cmd_set_channel_switch(struct wlan_hdd_link_info *link_info,
 		return -EINVAL;
 	}
 
-	if (!qdf_atomic_test_bit(SOFTAP_BSS_STARTED, &link_info->link_flags)) {
+	if (!qdf_atomic_test_bit(SOFTAP_BSS_STARTED, link_info->link_flags)) {
 		hdd_err("SAP not started");
 		return -EINVAL;
 	}
@@ -6654,7 +6752,8 @@ static int drv_cmd_set_channel_switch(struct wlan_hdd_link_info *link_info,
 		chan_number = wlan_reg_legacy_chan_to_freq(hdd_ctx->pdev,
 							   chan_number);
 
-	status = hdd_softap_set_channel_change(dev, chan_number, width, false);
+	status = hdd_softap_set_channel_change(link_info, chan_number, 0, width,
+					       NO_SCHANS_PUNC, false, true);
 	if (status) {
 		hdd_err("Set channel change fail");
 		return status;
@@ -6786,7 +6885,7 @@ static void disconnect_sta_and_restart_sap(struct hdd_context *hdd_ctx,
 
 		ap_ctx = WLAN_HDD_GET_AP_CTX_PTR(adapter->deflink);
 		if (!is_valid_chan_present)
-			wlan_hdd_stop_sap(adapter);
+			wlan_hdd_stop_sap(adapter->deflink);
 		else if (check_disable_channels(hdd_ctx,
 						ap_ctx->operating_chan_freq))
 			policy_mgr_check_sap_restart(hdd_ctx->psoc,
@@ -6920,8 +7019,10 @@ static int hdd_parse_disable_chan_cmd(struct hdd_adapter *adapter, uint8_t *ptr)
 	num_channels = temp_int;
 
 	chan_freq_list = qdf_mem_malloc(num_channels * sizeof(qdf_freq_t));
-	if (!chan_freq_list)
-		return -ENOMEM;
+	if (!chan_freq_list) {
+		ret = -ENOMEM;
+		goto mem_alloc_failed;
+	}
 
 	for (j = 0; j < num_channels; j++) {
 		/*

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,10 +35,10 @@
 #include <qca_vendor.h>
 #include "cfg_nan_api.h"
 #include "os_if_nan.h"
-#include "../../core/src/nan_main_i.h"
 #include "spatial_reuse_api.h"
 #include "wlan_nan_api.h"
 #include "spatial_reuse_ucfg_api.h"
+#include <cdp_txrx_ctrl.h>
 
 /**
  * wlan_hdd_nan_is_supported() - HDD NAN support query function
@@ -76,6 +76,8 @@ static int __wlan_hdd_cfg80211_nan_ext_request(struct wiphy *wiphy,
 	struct hdd_context *hdd_ctx = wiphy_priv(wiphy);
 	struct net_device *dev = wdev->netdev;
 	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
+	enum scan_reject_states out_reason = SCAN_REJECT_DEFAULT;
+	uint8_t conc_vdev_id;
 
 	hdd_enter_dev(wdev->netdev);
 
@@ -93,9 +95,11 @@ static int __wlan_hdd_cfg80211_nan_ext_request(struct wiphy *wiphy,
 		return -EPERM;
 	}
 
-	if (hdd_is_connection_in_progress(NULL, NULL)) {
-		hdd_err("Connection refused: conn in progress");
-		return -EAGAIN;
+	if (hdd_is_connection_in_progress(&conc_vdev_id, &out_reason)) {
+		if (out_reason != EAPOL_IN_PROGRESS) {
+			hdd_err("NAN command refused, reason %d", out_reason);
+			return -EAGAIN;
+		}
 	}
 
 	return os_if_process_nan_req(hdd_ctx->pdev, adapter->deflink->vdev_id,
@@ -151,16 +155,10 @@ void hdd_nan_sr_concurrency_update(struct nan_event_params *nan_evt)
 	uint8_t non_srg_max_pd_offset = 0;
 	uint8_t vdev_id_list[MAX_NUMBER_OF_CONC_CONNECTIONS] = {
 							WLAN_INVALID_VDEV_ID};
-	struct nan_psoc_priv_obj *psoc_obj =
-				nan_get_psoc_priv_obj(nan_evt->psoc);
 	struct connection_info info[MAX_NUMBER_OF_CONC_CONNECTIONS] = {0};
 	uint8_t mac_id;
 	QDF_STATUS status;
 
-	if (!psoc_obj) {
-		nan_err("nan psoc priv object is NULL");
-		return;
-	}
 	conn_count = policy_mgr_get_connection_info(nan_evt->psoc, info);
 	if (!conn_count)
 		return;
@@ -203,7 +201,8 @@ void hdd_nan_sr_concurrency_update(struct nan_event_params *nan_evt)
 						sta_vdev, SR_OPERATION_SUSPEND,
 						SR_REASON_CODE_CONCURRENCY);
 		}
-		if (nan_evt->evt_type == nan_event_id_disable_ind) {
+		if (nan_evt->evt_type == nan_event_id_disable_ind ||
+		    nan_evt->evt_type == nan_event_id_disable_rsp) {
 			if (conn_count > 2) {
 				status =
 				policy_mgr_get_mac_id_by_session_id(
@@ -238,6 +237,56 @@ void hdd_nan_sr_concurrency_update(struct nan_event_params *nan_evt)
 exit:
 	if (sta_vdev && is_sr_enabled)
 		wlan_objmgr_vdev_release_ref(sta_vdev, WLAN_OSIF_ID);
+}
+#endif
+
+#ifdef NDP_TX_BW_FLOW_CTRL
+void hdd_ndp_update_peer_bw(uint8_t vdev_id, struct qdf_mac_addr *peer_mac,
+			    enum phy_ch_width peer_bw)
+{
+	struct hdd_context *hdd_ctx = cds_get_context(QDF_MODULE_ID_HDD);
+	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
+	struct wlan_hdd_link_info *link_info;
+	struct hdd_station_ctx *sta_ctx;
+	cdp_config_param_type val;
+	enum cdp_peer_bw cdp_bw;
+	uint8_t idx;
+
+	if (!hdd_ctx)
+		return;
+
+	link_info = hdd_get_link_info_by_vdev(hdd_ctx, vdev_id);
+	if (!link_info) {
+		hdd_err("Invalid vdev");
+		return;
+	}
+
+	sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(link_info);
+
+	for (idx = 0; idx < MAX_PEERS; idx++) {
+		if (qdf_is_macaddr_zero(&sta_ctx->conn_info.peer_macaddr[idx]))
+			break;
+
+		if (qdf_is_macaddr_equal(&sta_ctx->conn_info.peer_macaddr[idx],
+					 peer_mac)) {
+			hdd_debug("Update NDP peer " QDF_MAC_ADDR_FMT " bandwidth:%u",
+				  QDF_MAC_ADDR_REF(peer_mac->bytes), peer_bw);
+
+			cdp_bw = hdd_convert_ch_width_to_cdp_peer_bw(sta_ctx->conn_info.peer_bw[idx]);
+			link_info->adapter->ndp_peer_bitmap[cdp_bw] &=
+							~BIT(idx ? idx - 1 : 0);
+
+			sta_ctx->conn_info.peer_bw[idx] = peer_bw;
+			cdp_bw = hdd_convert_ch_width_to_cdp_peer_bw(peer_bw);
+			link_info->adapter->ndp_peer_bitmap[cdp_bw] |=
+							BIT(idx ? idx - 1 : 0);
+
+			val.cdp_peer_param_bw = cdp_bw;
+			cdp_txrx_set_peer_param(soc, vdev_id, peer_mac->bytes,
+						CDP_CONFIG_PEER_BW, val);
+			break;
+		}
+	}
 }
 #endif
 #endif

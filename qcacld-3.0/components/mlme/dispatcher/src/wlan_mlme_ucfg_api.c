@@ -33,6 +33,7 @@
 #include "wlan_vdev_mgr_tgt_if_tx_api.h"
 #include "wlan_policy_mgr_public_struct.h"
 #include "spatial_reuse_api.h"
+#include "wlan_cm_roam_api.h"
 
 QDF_STATUS ucfg_mlme_global_init(void)
 {
@@ -272,6 +273,15 @@ ucfg_mlme_get_dfs_master_capability(struct wlan_objmgr_psoc *psoc,
 }
 
 QDF_STATUS
+ucfg_mlme_vendor_set_disable_dfs_master_capability(
+					struct wlan_objmgr_psoc *psoc,
+					bool disable)
+{
+	return wlan_mlme_vendor_set_disable_dfs_master_capability(
+				psoc, disable);
+}
+
+QDF_STATUS
 ucfg_mlme_get_oem_6g_supported(struct wlan_objmgr_psoc *psoc,
 			       bool *oem_6g_disable)
 {
@@ -318,6 +328,25 @@ ucfg_mlme_set_fine_time_meas_cap(struct wlan_objmgr_psoc *psoc,
 		return QDF_STATUS_E_INVAL;
 
 	mlme_obj->cfg.wifi_pos_cfg.fine_time_meas_cap = fine_time_meas_cap;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+ucfg_mlme_is_rtt_bw_downgrade_enabled(struct wlan_objmgr_psoc *psoc,
+				      bool *is_rtt_bw_downgrade_enabled)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj) {
+		*is_rtt_bw_downgrade_enabled =
+			cfg_default(CFG_ENABLE_RTT_BW_DOWNGRADE);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	*is_rtt_bw_downgrade_enabled =
+		mlme_obj->cfg.wifi_pos_cfg.is_rtt_bw_downgrade_enabled;
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -1140,6 +1169,18 @@ ucfg_mlme_set_fast_roam_in_concurrency_enabled(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
+bool
+ucfg_mlme_is_roaming_offload_enabled(struct wlan_objmgr_psoc *psoc)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj)
+		return false;
+
+	return wlan_is_roam_offload_enabled(mlme_obj->cfg.lfr);
+}
+
 #ifdef MULTI_CLIENT_LL_SUPPORT
 bool ucfg_mlme_get_wlm_multi_client_ll_caps(struct wlan_objmgr_psoc *psoc)
 {
@@ -1624,6 +1665,20 @@ ucfg_mlme_get_restart_beaconing_on_ch_avoid(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
+bool
+ucfg_mlme_check_bit_in_rso_disabled_bitmap(struct wlan_objmgr_psoc *psoc,
+				uint8_t vdev_id,
+				enum wlan_cm_rso_control_requestor reqs)
+{
+	uint8_t rso_disabled_bitmap;
+
+	rso_disabled_bitmap = mlme_get_rso_disabled_bitmap(psoc, vdev_id);
+	if (rso_disabled_bitmap & reqs)
+		return true;
+
+	return false;
+}
+
 QDF_STATUS
 ucfg_mlme_get_indoor_channel_support(struct wlan_objmgr_psoc *psoc,
 				     bool *value)
@@ -1972,6 +2027,11 @@ bool ucfg_mlme_get_coex_unsafe_chan_reg_disable(
 }
 #endif
 
+bool ucfg_mlme_is_chan_switch_in_progress(struct wlan_objmgr_vdev *vdev)
+{
+	return mlme_is_chan_switch_in_progress(vdev);
+}
+
 #if defined(CONFIG_AFC_SUPPORT) && defined(CONFIG_BAND_6GHZ)
 QDF_STATUS
 ucfg_mlme_get_enable_6ghz_sp_mode_support(struct wlan_objmgr_psoc *psoc,
@@ -2086,8 +2146,7 @@ ucfg_mlme_get_vdev_phy_mode(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
 		phymode = WLAN_PHYMODE_AUTO;
 		goto done;
 	}
-	phymode = mlme_obj->mgmt.generic.phy_mode;
-
+	phymode = wlan_cm_fw_to_host_phymode(mlme_obj->mgmt.generic.phy_mode);
 done:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLME_OBJMGR_ID);
 
@@ -2139,3 +2198,49 @@ ucfg_mlme_get_dfs_discard_mode(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
+QDF_STATUS
+ucfg_mlme_get_passive_discard_mode(struct wlan_objmgr_psoc *psoc,
+				   uint8_t *val)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj) {
+		*val = cfg_default(CFG_DISCARD_PASSIVE_CHANNEL_FOR_MODE);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	*val = mlme_obj->cfg.passive_chan_discard_mode;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+ucfg_mlme_set_mrsno_support(struct wlan_objmgr_psoc *psoc, bool val)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj)
+		return QDF_STATUS_E_INVAL;
+
+	mlme_obj->cfg.lfr.mrsno_support = val;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+ucfg_mlme_get_mrsno_support(struct wlan_objmgr_psoc *psoc, bool *val)
+{
+	struct wlan_mlme_psoc_ext_obj *mlme_obj;
+
+	mlme_obj = mlme_get_psoc_ext_obj(psoc);
+	if (!mlme_obj) {
+		*val = false;
+		return QDF_STATUS_E_INVAL;
+	}
+
+	*val = mlme_obj->cfg.lfr.mrsno_support;
+
+	return QDF_STATUS_SUCCESS;
+}

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -227,7 +227,7 @@ dp_rx_wds_add_or_update_ast(struct dp_soc *soc,
 	struct dp_pdev *pdev = ta_peer->vdev->pdev;
 	uint8_t wds_src_mac[QDF_MAC_ADDR_SIZE];
 	struct dp_peer *ta_base_peer;
-
+	struct cdp_peer_info sa_peer_info;
 
 	if (!(is_chfrag_start && is_ad4_valid))
 		return;
@@ -243,12 +243,37 @@ dp_rx_wds_add_or_update_ast(struct dp_soc *soc,
 			if (ta_peer->vdev->opmode == wlan_op_mode_ap)
 				dp_wds_ext_peer_learn(soc, ta_base_peer);
 
+			DP_PEER_INFO_PARAMS_INIT(&sa_peer_info,
+						 DP_VDEV_ALL,
+						 wds_src_mac,
+						 false,
+						 CDP_WILD_PEER_TYPE);
+
+			sa_peer = dp_peer_hash_find_wrapper(soc, &sa_peer_info,
+							    DP_MOD_ID_RX);
+			if (qdf_unlikely(sa_peer)) {
+				dp_info_rl("src: " QDF_MAC_ADDR_FMT " exists",
+					   QDF_MAC_ADDR_REF(wds_src_mac));
+				dp_peer_unref_delete(sa_peer,
+						     DP_MOD_ID_RX);
+				dp_peer_unref_delete(ta_base_peer,
+						     DP_MOD_ID_RX);
+				return;
+			}
+
 			dp_peer_add_ast(soc, ta_base_peer, wds_src_mac,
 					CDP_TXRX_AST_TYPE_WDS, flags);
 
 			dp_peer_unref_delete(ta_base_peer, DP_MOD_ID_RX);
 		}
 		return;
+	} else {
+		/* With FEATURE_WDS=y && FEATURE_AST=n &&
+		 * AST_OFFLOAD_ENABLE=n, check if it is roaming
+		 * candidate with source mac address and its
+		 * current associated peer.
+		 */
+		dp_peer_update_wds(soc, ta_peer, nbuf);
 	}
 
 	qdf_spin_lock_bh(&soc->ast_lock);
@@ -467,6 +492,7 @@ dp_rx_wds_srcport_learn(struct dp_soc *soc,
  * @msdu_end_info: msdu end info
  * @ad4_valid: address4 valid bit
  * @chfrag_start: Msdu start bit
+ * @sa_valid: indicate whether SA has a valid entry in AST table
  *
  * Return: void
  */
@@ -474,15 +500,18 @@ static inline void
 dp_rx_ipa_wds_srcport_learn(struct dp_soc *soc,
 			    struct dp_peer *ta_peer, qdf_nbuf_t nbuf,
 			    struct hal_rx_msdu_metadata msdu_end_info,
-			    bool ad4_valid, bool chfrag_start)
+			    bool ad4_valid, bool chfrag_start,
+			    bool sa_valid)
 {
-	uint8_t sa_is_valid = qdf_nbuf_is_sa_valid(nbuf);
 	uint8_t is_chfrag_start = (uint8_t)chfrag_start;
 	uint8_t is_ad4_valid = (uint8_t)ad4_valid;
-	struct dp_txrx_peer *peer = (struct dp_txrx_peer *)ta_peer;
+	uint8_t sa_is_valid = (uint8_t)sa_valid;
+	struct dp_txrx_peer *peer;
 
 	if (qdf_unlikely(!ta_peer))
 		return;
+
+	peer = (struct dp_txrx_peer *)ta_peer;
 
 	/*
 	 * Get the AST entry from HW SA index and mark it as active
@@ -535,4 +564,158 @@ static inline QDF_STATUS dp_rx_ast_set_active(struct dp_soc *soc,
 	qdf_spin_unlock_bh(&soc->ast_lock);
 	return QDF_STATUS_E_FAILURE;
 }
+
+#ifdef FEATURE_WDS_AST_LEARNING
+/**
+ * dp_wds_hash_attach() - Allocate and initialize WDS Hash table
+ * @soc: datapath soc handle
+ *
+ * Return: QDF_STATUS;
+ */
+QDF_STATUS dp_wds_hash_attach(struct dp_soc *soc);
+
+/**
+ * dp_wds_hash_detach() - Free WDS hash table
+ * @soc: datapath soc handle
+ *
+ * Return: None
+ */
+void dp_wds_hash_detach(struct dp_soc *soc);
+
+/**
+ * dp_wds_hash_add_wds_entry() - Add wds entry into WDS hash table
+ * @soc: datapath soc handle
+ * @wds_macaddr: wds mac address
+ * @peer_id: peer id of peer the wds node is associated
+ *
+ * Add wds entry into WDS hash table along with WMI_PEER_ADD_WDS_ENTRY_CMDID
+ * request to target.
+ *
+ * Return: QDF_STATUS_SUCCESS for success and otherwise failure
+ */
+QDF_STATUS dp_wds_hash_add_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+				     uint16_t peer_id);
+
+/**
+ * dp_wds_hash_map_wds_entry() - Map wds entry in WDS hash table
+ * @soc: datapath soc handle
+ * @wds_macaddr: wds mac address
+ * @peer_id: peer id of peer the wds node is associated
+ *
+ * Map the wds entry upon wds peer map event from target.
+ *
+ * Return: QDF_STATUS_SUCCESS for success and otherwise failure
+ */
+QDF_STATUS dp_wds_hash_map_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+				     uint16_t peer_id);
+
+/**
+ * dp_wds_hash_update_wds_entry() - Update wds entry in WDS hash table
+ * @soc: datapath soc handle
+ * @wds_macaddr: wds mac address
+ * @peer_id: peer id of peer the wds node is associated
+ *
+ * Update wds entry with new peer_id if matching entry with wds_macaddr
+ * is found and the entry is mapped already.
+ *
+ * Return: QDF_STATUS_SUCCESS for success and otherwise failure
+ */
+QDF_STATUS dp_wds_hash_update_wds_entry(struct dp_soc *soc,
+					uint8_t *wds_macaddr,
+					uint16_t peer_id);
+
+/**
+ * dp_wds_hash_remove_wds_entry() - Remove wds entry from WDS hash table
+ * @soc: datapath soc handle
+ * @wds_macaddr: wds mac address
+ * @peer_id: peer id the wds node is associated
+ *
+ * Return: QDF_STATUS_SUCCESS for success otherwise error codes
+ */
+QDF_STATUS dp_wds_hash_remove_wds_entry(struct dp_soc *soc,
+					uint8_t *wds_macaddr,
+					uint16_t peer_id);
+
+/**
+ * dp_wds_hash_find_wds_entry() - Find wds entry from WDS hash table matching
+ *				  vdev_id and wds_macaddr
+ * @soc: datapath soc handle
+ * @wds_macaddr: wds mac address
+ *
+ * Return: dp_wds_entry pointer if matched, otherwise NULL
+ */
+struct dp_wds_entry *dp_wds_hash_find_wds_entry(struct dp_soc *soc,
+						uint8_t *wds_macaddr);
+
+/**
+ * dp_wds_hash_cleanup_by_peer_id() - Cleanup wds entries with peer_id
+ * @soc: datapath soc handle
+ * @vdev_id: vdev id
+ * @peer_id: peer id
+ *
+ * This API cleans up all wds entries in WDS hash table that match with
+ * peer id.
+ *
+ * Return: QDF_STATUS_SUCCESS for success, otherwise error codes.
+ */
+QDF_STATUS dp_wds_hash_cleanup_by_peer_id(struct dp_soc *soc, uint8_t vdev_id,
+					  uint16_t peer_id);
+
+/**
+ * dp_wds_hash_print_wds_hash_table() - Print wds hash table
+ * @soc: datapath soc handle
+ *
+ * Return: none
+ */
+void dp_wds_hash_print_wds_hash_table(struct dp_soc *soc);
+
+#else /* !FEATURE_WDS_AST_LEARNING */
+static inline QDF_STATUS dp_wds_hash_attach(struct dp_soc *soc)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline void dp_wds_hash_detach(struct dp_soc *soc)
+{
+}
+
+static inline QDF_STATUS
+dp_wds_hash_add_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+			  uint16_t peer_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+dp_wds_hash_map_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+			  uint16_t peer_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+dp_wds_hash_update_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+			     uint16_t peer_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+dp_wds_hash_remove_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr,
+			     uint16_t peer_id)
+{
+	return QDF_STATUS_E_FAILURE;
+}
+
+static inline struct dp_wds_entry
+*dp_wds_hash_find_wds_entry(struct dp_soc *soc, uint8_t *wds_macaddr)
+{
+	return NULL;
+}
+
+static inline void dp_wds_hash_print_wds_hash_table(struct dp_soc *soc)
+{
+}
+#endif /* FEATURE_WDS_AST_LEARNING */
+
 #endif /* DP_TXRX_WDS*/

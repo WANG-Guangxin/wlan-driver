@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  *
  * Permission to use, copy, modify, and/or distribute this software for
@@ -279,14 +279,6 @@ bool reg_is_us_alpha2(uint8_t *alpha2);
 bool reg_is_etsi_alpha2(uint8_t *alpha2);
 
 /**
- * reg_ctry_support_vlp - Does country code supports VLP
- * @alpha2: country code pointer
- *
- * Return: true or false
- */
-bool reg_ctry_support_vlp(uint8_t *alpha2);
-
-/**
  * reg_set_country() - Set the current regulatory country
  * @pdev: pdev device for country information
  * @country: country value
@@ -340,6 +332,33 @@ reg_get_best_6g_power_type(struct wlan_objmgr_psoc *psoc,
 			   enum reg_6g_ap_type *pwr_type_6g,
 			   enum reg_6g_ap_type ap_pwr_type,
 			   uint32_t chan_freq);
+
+/**
+ * reg_get_best_6g_power_type_for_bw() - Return best power type for 6 GHz
+ * connection considering bandwidth
+ * @psoc: pointer to psoc
+ * @pdev: pointer to pdev
+ * @best_pwr_type_6g: pointer to best 6G power type
+ * @ap_pwr_type: AP's power type as advertised in HE ops IE
+ * @chan_freq: Connection channel frequency
+ * @cen320_freq: Center frequency for 320 MHz channel
+ * @chwidth: Channel width
+ *
+ * This function computes best power type for 6 GHz connection considering
+ * the channel bandwidth and center frequency using API
+ * reg_get_best_6g_power_type. And Validate the output best power
+ * type, if not supported by bonded channel, then downgrade to VLP.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+reg_get_best_6g_power_type_for_bw(struct wlan_objmgr_psoc *psoc,
+				  struct wlan_objmgr_pdev *pdev,
+				  enum reg_6g_ap_type *best_pwr_type_6g,
+				  enum reg_6g_ap_type ap_pwr_type,
+				  uint32_t chan_freq,
+				  qdf_freq_t cen320_freq,
+				  enum phy_ch_width chwidth);
 #endif
 
 /**
@@ -421,11 +440,6 @@ static inline QDF_STATUS reg_read_current_country(struct wlan_objmgr_psoc *psoc,
 }
 
 static inline bool reg_is_world_alpha2(uint8_t *alpha2)
-{
-	return false;
-}
-
-static inline bool reg_ctry_support_vlp(uint8_t *alpha2)
 {
 	return false;
 }
@@ -647,5 +661,70 @@ reg_get_6ghz_cli_pwr_type_per_ap_pwr_type(
 				struct wlan_objmgr_pdev *pdev,
 				enum reg_6g_ap_type ap_pwr_type,
 				enum supported_6g_pwr_types *cli_pwr_type);
-#endif
+
+/**
+ * reg_update_max_bw_6ghz_chan() - Update maximum bandwidth for each 6 GHz
+ * channel amongst all supported power types.
+ * @pdev: pointer to pdev
+ * @chan_list: current channel list
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+reg_update_max_bw_6ghz_chan(struct wlan_objmgr_pdev *pdev,
+			    struct regulatory_channel *chan_list);
+
+/**
+ * reg_check_if_6g_pwr_type_supp_for_chan() - Check if 6 GHz power type is
+ *                                            supported for the channel
+ * @pdev: Pointer to pdev
+ * @pwr_type: 6 GHz power type
+ * @chan_idx: Connection channel index
+ *
+ * Return: Return QDF_STATUS_SUCCESS if 6 GHz power type supported for
+ *         the given channel, else return QDF_STATUS_E_FAILURE.
+ */
+QDF_STATUS
+reg_check_if_6g_pwr_type_supp_for_chan(struct wlan_objmgr_pdev *pdev,
+				       enum reg_6g_ap_type pwr_type,
+				       enum channel_enum chan_idx);
+#else
+static inline QDF_STATUS
+reg_update_max_bw_6ghz_chan(struct wlan_objmgr_pdev *pdev,
+			    struct regulatory_channel *chan_list)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif /* defined(CONFIG_REG_CLIENT) && defined(CONFIG_BAND_6GHZ) */
+
+/**
+ * reg_disable_unii_1_2a_for_current_cc() - Check if disable of UNII 1 and
+ * 2A applicable to current country
+ *
+ * @pdev: Pointer to pdev
+ *
+ * Return: True if current country is CA else false
+ */
+bool reg_disable_unii_1_2a_for_current_cc(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * reg_set_disable_unii_1_2a() - apply disable unii 1 and 2A
+ * @pdev: The physical pdev to reduce tx power for
+ * @disable_unii_1_2a: true to disable UNII 1/2A band, false to enable
+ *
+ * This function sets disable_unii_1_2a flag to enable/disable
+ * UNII 1/2A band.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS reg_set_disable_unii_1_2a(struct wlan_objmgr_pdev *pdev,
+				     bool disable_unii_1_2a);
+
+/**
+ * reg_get_disable_unii_1_2a() - Get disable unii 1 and 2A
+ * @pdev: The physical pdev to reduce tx power for
+ *
+ * Return: disable_unii_1_2a
+ */
+bool reg_get_disable_unii_1_2a(struct wlan_objmgr_pdev *pdev);
 #endif

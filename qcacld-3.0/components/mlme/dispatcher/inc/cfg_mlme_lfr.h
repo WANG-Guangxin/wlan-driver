@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -74,6 +74,9 @@
 # define ROAMCU_6GRSSIRANGE_MAX -50
 # define ROAMCU_6GRSSIRANGE_DEFAULT -70
 # define RoamIdle_InactiveTime_default 5
+# define RoamScan_Period_min 0
+# define RoamScan_Period_max 20
+# define RoamScan_Period_default 0
 #else
 # define RoamScan_ActiveCH_DwellTime_min 3
 # define RoamScan_ActiveCH_DwellTime_max 300
@@ -126,6 +129,7 @@
 # define RoamIdle_InactiveTime_default 10
 #endif
 
+# define Aggressive_RoamRSSI_Trigger_default -65
 /*
  * <ini>
  * RoamScan_PassiveCH_DwellTime - Set max channel time for roam passive scan
@@ -625,6 +629,40 @@
 	40, \
 	CFG_VALUE_OR_DEFAULT, \
 	"RSSI threshold offset for 2G to 5G roam")
+/**
+ * enum roam_bg_scan - Background roam scan from 2.4 GHz to 2.4 GHz/5 GHz/6 GHz
+ * @BG_ROAM_SCAN_ALLOW_ALL_BANDS: Allow background roam scan from 2.4 GHz to
+ * 2.4 GHz/5 GHz/6 GHz
+ * @BG_ROAM_SCAN_ALLOW_2G_TO_OTHER: Allow background roam scan from 2.4 GHz to
+ * 5 GHz/6 GHz, 2.4 GHz to 2.4 GHz is not allowed.
+ */
+enum roam_bg_scan {
+	BG_ROAM_SCAN_ALLOW_ALL_BANDS = 0,
+	BG_ROAM_SCAN_ALLOW_2G_TO_OTHER = 1,
+};
+
+/*
+ * <ini>
+ * bg_roam_scan_flag - Enable/Disable background roam scan from 2.4 GHz to
+ * 2.4 GHz
+ * @Min: 0 - BG_ROAM_SCAN_ALLOW_ALL_BANDS
+ * @Max: 1 - BG_ROAM_SCAN_ALLOW_2G_TO_OTHER
+ * @Default: BG_ROAM_SCAN_ALLOW_2G_TO_OTHER
+ *
+ * This ini is used to enable or disable roaming from 2.4 GHz band to 2.4 GHz
+ * band. When enabled, the firmware will consider 5 GHz/6 GHz band APs as
+ * roaming candidates when performing background roam scans while connected to
+ * a 2.4 GHz AP. When disabled, background roam scans will consider
+ * 2.4 GHz/5 GHz/6 GHz band APs as candidates.
+ *
+ * Supported Feature: Roaming
+ *
+ * </ini>
+ */
+#define CFG_LFR_BG_ROAM_SCAN_FLAG CFG_INI_BOOL( \
+	"bg_roam_scan_flag", \
+	BG_ROAM_SCAN_ALLOW_2G_TO_OTHER, \
+	"Enable/Disable background roam scan from 2G to 5G")
 
 /*
  * <ini>
@@ -1407,6 +1445,38 @@
 
 /*
  * <ini>
+ * roam_rssi_delta_from_6ghz_to_non_6ghz - Enable roam to  Non 6 GHz AP based
+ * on rssi
+ * @Min: 0
+ * @Max: 100
+ * @Default: 0
+ *
+ * This INI is used to decide whether to roam to Non 6 GHz AP or not based on
+ * RSSI. AP1 is the currently associated AP(6 GHz) and AP2(2.4 GHz / 5 GHz) is
+ * chosen for roaming. The Roaming will happen only if AP2 has better Signal
+ * Quality and it has a RSSI better than AP1.
+ * roam_rssi_delta_from_6ghz_to_non_6ghz is the number of dB units AP2 is
+ * better than AP1.
+ *
+ *
+ * Related: None
+ *
+ * Supported Feature: Roaming
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_LFR_ROAM_RSSI_DELTA_6GHZ_TO_NON_6GHZ CFG_INI_UINT( \
+	"roam_rssi_delta_from_6ghz_to_non_6ghz", \
+	0, \
+	100, \
+	0, \
+	CFG_VALUE_OR_DEFAULT, \
+	"Enable 6 GHz to non 6 GHz roam based on rssi")
+
+/*
+ * <ini>
  * bg_rssi_threshold - To set RSSI Threshold for BG scan roaming
  * @Min: 0
  * @Max: 100
@@ -1579,6 +1649,32 @@
 	RoamRSSI_Trigger_min, \
 	RoamRSSI_Trigger_max, \
 	RoamRSSI_Trigger_default, \
+	CFG_VALUE_OR_DEFAULT, \
+	"Neighbor lookup rssi threshold")
+
+/*
+ * <ini>
+ * Aggressive_RoamRSSI_Trigger  - Set neighbor
+ * lookup rssi threshold
+ * @Min: -100
+ * @Max: -50
+ * @Default: -65
+ *
+ * This is used to control the Aggressive RSSI threshold for neighbor lookup.
+ *
+ * Related: None
+ *
+ * Supported Feature: LFR Scan
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_LFR_AGGRESSIVE_NEIGHBOR_LOOKUP_RSSI_THRESHOLD CFG_INI_INT( \
+	"Aggressive_RoamRSSI_Trigger", \
+	RoamRSSI_Trigger_min, \
+	RoamRSSI_Trigger_max, \
+	Aggressive_RoamRSSI_Trigger_default, \
 	CFG_VALUE_OR_DEFAULT, \
 	"Neighbor lookup rssi threshold")
 
@@ -2185,7 +2281,7 @@
 	"gDelayBeforeVdevStop", \
 	2, \
 	200, \
-	20, \
+	10, \
 	CFG_VALUE_OR_DEFAULT, \
 	"wait time for tx complete before vdev stop")
 /*
@@ -2942,6 +3038,28 @@
 		CFG_VALUE_OR_DEFAULT, \
 		"Enable roam on both STA vdev")
 
+/*
+ * <ini>
+ * support_single_mac_dual_sta_roam - single mac dual sta roaming feature
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This INI is used to enable/disable single mac dual sta roam feature
+ *
+ * Related: None
+ *
+ * Supported Feature: Dual station roaming on single mac card
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_SUPPORT_SINGLE_MAC_DUAL_STA_ROAM CFG_INI_BOOL( \
+	"support_single_mac_dual_sta_roam", \
+	0, \
+	"support single mac dual sta roam")
+
 #define ROAM_OFFLOAD_ALL \
 	CFG(CFG_LFR3_ROAMING_OFFLOAD) \
 	CFG(CFG_LFR3_ENABLE_SELF_BSS_ROAM) \
@@ -2956,6 +3074,7 @@
 	CFG(CFG_ROAM_TRIGGER_BITMAP) \
 	CFG(CFG_STA_DISABLE_ROAM) \
 	CFG(CFG_ENABLE_DUAL_STA_ROAM_OFFLOAD) \
+	CFG(CFG_SUPPORT_SINGLE_MAC_DUAL_STA_ROAM) \
 
 #else
 #define ROAM_OFFLOAD_ALL
@@ -3345,6 +3464,42 @@
 		true, \
 		"To Enable/disable BTM offload for hotspot 2.0")
 
+#ifdef CONNECTION_ROAMING_CFG
+/*
+ * <ini>
+ * RoamScan_Period - To configure the periodic roam scan period (in secs)
+ * to firmware.
+ * @Min: 0
+ * @Max: 20
+ * @Default: 0
+ *
+ * After low RSSI roaming is triggered, the STA performs periodic partial
+ * scans every RoamScan_Period interval until either either roaming is
+ * successful or RSSI recovers above the threshold. When this value is 0,
+ * we use gEmptyScanRefreshPeriod value which is not periodic.
+ *
+ * Related: None
+ *
+ * Supported Feature: Roaming
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ROAM_SCAN_PERIOD CFG_INI_UINT( \
+	"RoamScan_Period", \
+	RoamScan_Period_min, \
+	RoamScan_Period_max, \
+	RoamScan_Period_default, \
+	CFG_VALUE_OR_DEFAULT, \
+	"Roam Scan Period")
+
+#define CFG_CONNECTION_ROAMING_CFG \
+	CFG(CFG_ROAM_SCAN_PERIOD)
+#else
+#define CFG_CONNECTION_ROAMING_CFG
+#endif
+
 #define CFG_LFR_ALL \
 	CFG(CFG_LFR_MAWC_ROAM_ENABLED) \
 	CFG(CFG_LFR_MAWC_ROAM_TRAFFIC_THRESHOLD) \
@@ -3363,6 +3518,7 @@
 	CFG(CFG_LFR_ROAM_BG_SCAN_BAD_RSSI_THRESHOLD) \
 	CFG(CFG_LFR_ROAM_BG_SCAN_CLIENT_BITMAP) \
 	CFG(CFG_LFR_ROAM_BG_SCAN_BAD_RSSI_OFFSET_2G) \
+	CFG(CFG_LFR_BG_ROAM_SCAN_FLAG) \
 	CFG(CFG_ROAM_DATA_RSSI_THRESHOLD_TRIGGERS) \
 	CFG(CFG_ROAM_DATA_RSSI_THRESHOLD) \
 	CFG(CFG_RX_DATA_INACTIVITY_TIME) \
@@ -3392,6 +3548,7 @@
 	CFG(CFG_LFR_FAST_TRANSITION_ENABLED) \
 	CFG(CFG_LFR_ROAM_RSSI_DIFF) \
 	CFG(CFG_LFR_ROAM_RSSI_DIFF_6GHZ) \
+	CFG(CFG_LFR_ROAM_RSSI_DELTA_6GHZ_TO_NON_6GHZ) \
 	CFG(CFG_LFR_ROAM_BG_RSSI_TH) \
 	CFG(CFG_LFR_ENABLE_WES_MODE) \
 	CFG(CFG_LFR_ROAM_SCAN_OFFLOAD_ENABLED) \
@@ -3448,6 +3605,8 @@
 	CFG(CFG_LFR_BEACONLOSS_TIMEOUT_ON_WAKEUP) \
 	CFG(CFG_LFR_BEACONLOSS_TIMEOUT_ON_SLEEP) \
 	CFG(CFG_LFR3_ROAM_INFO_STATS_NUM) \
-	CFG(CFG_HS_20_BTM_OFFLOAD_DISABLE)
+	CFG(CFG_HS_20_BTM_OFFLOAD_DISABLE) \
+	CFG(CFG_LFR_AGGRESSIVE_NEIGHBOR_LOOKUP_RSSI_THRESHOLD) \
+	CFG_CONNECTION_ROAMING_CFG
 
 #endif /* CFG_MLME_LFR_H__ */

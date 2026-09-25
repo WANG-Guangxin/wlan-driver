@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015, 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -55,6 +55,7 @@
  * @assoc_link_id: Assoc link ID of an ML connection
  * @owe_trans_ssid: owe trans ssid to be used when scan entry ssid is wildcard
  * @req_fail_status_code: Connection request fail status code
+ * @rsno_gen_used: RSN generation of the candidate
  */
 struct cm_vdev_join_req {
 	uint8_t vdev_id;
@@ -72,6 +73,7 @@ struct cm_vdev_join_req {
 #endif
 	struct wlan_ssid owe_trans_ssid;
 	enum wlan_status_code req_fail_status_code;
+	uint8_t rsno_gen_used;
 };
 
 /**
@@ -436,7 +438,7 @@ cm_csr_connect_done_ind(struct wlan_objmgr_vdev *vdev,
 			struct wlan_cm_connect_resp *rsp);
 
 /**
- * cm_is_vdevid_connected() - check if vdev_id is in conneted state
+ * cm_is_vdevid_connected() - check if vdev_id is in connected state
  * @pdev: pdev pointer
  * @vdev_id: vdev ID
  *
@@ -445,7 +447,7 @@ cm_csr_connect_done_ind(struct wlan_objmgr_vdev *vdev,
 bool cm_is_vdevid_connected(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id);
 
 /**
- * cm_is_vdevid_active() - check if vdev_id is in conneted/roaming state
+ * cm_is_vdevid_active() - check if vdev_id is in connected/roaming state
  * @pdev: pdev pointer
  * @vdev_id: vdev ID
  *
@@ -504,6 +506,16 @@ QDF_STATUS
 cm_send_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev);
 
 /**
+ * cm_send_force_bss_peer_delete_req() - Connection manager ext bss peer delete
+ * request
+ * @vdev: VDEV object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+cm_send_force_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev);
+
+/**
  * cm_disconnect_complete_ind() - Connection manager ext disconnect
  * complete indication
  * @vdev: VDEV object
@@ -558,14 +570,38 @@ QDF_STATUS cm_flush_join_req(struct scheduler_msg *msg);
 
 /**
  * cm_process_join_req() - Process vdev join req
- * @msg: scheduler message
+ * @join_req: join request
  *
  * Process connect request in LIM and copy all join req params.
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS cm_process_join_req(struct scheduler_msg *msg);
+QDF_STATUS cm_process_join_req(struct cm_vdev_join_req *join_req);
 
+/**
+ * cm_remove_force_bss_on_join_fail() - Remove bss on join fail
+ * @join_req: join request
+ *
+ * Remove bss forcely on join fail in LIM.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+cm_remove_force_bss_on_join_fail(struct cm_vdev_join_req *join_req);
+
+#if defined(WLAN_FEATURE_11BE_MLO)
+/**
+ * cm_get_pre_auth_mld_addr - Get mld address from preauth list
+ * @mac: pointer to mac object
+ * @peer_addr : input peer link address
+ * @mld_addr: output mld address
+ *
+ * Return: None
+ */
+void cm_get_pre_auth_mld_addr(struct mac_context *mac,
+			      uint8_t *peer_addr,
+			      uint8_t *mld_addr);
+#endif
 #ifdef WLAN_FEATURE_HOST_ROAM
 /**
  * cm_process_preauth_req() - Process preauth request
@@ -767,13 +803,15 @@ cm_send_rso_stop(struct wlan_objmgr_vdev *vdev)
 #ifdef WLAN_FEATURE_11BE_MLO
 /**
  * cm_get_ml_partner_info() - Fill ML partner info from scan entry
- * @pdev: PDEV object
+ * @psoc: psoc object
  * @conn_req: Connect request pointer
+ * @mlo_support_link_num: Supported Link Count
  *
  * Return: QDF_STATUS
  */
 QDF_STATUS
-cm_get_ml_partner_info(struct wlan_objmgr_pdev *pdev,
-		       struct cm_connect_req *conn_req);
+cm_get_ml_partner_info(struct wlan_objmgr_psoc *psoc,
+		       struct cm_connect_req *conn_req,
+		       uint8_t mlo_support_link_num);
 #endif
 #endif /* __WLAN_CM_VDEV_API_H__ */

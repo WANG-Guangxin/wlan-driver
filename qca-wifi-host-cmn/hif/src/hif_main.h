@@ -95,6 +95,7 @@
 #define QCN6122_DEVICE_ID (0xFFFB)
 #define QCN9160_DEVICE_ID (0xFFF8)
 #define QCN6432_DEVICE_ID (0xFFF7)
+#define QCA5424_DEVICE_ID (0xFFF6)
 #define QCA6390_EMULATION_DEVICE_ID (0x0108)
 #define QCA6390_DEVICE_ID (0x1101)
 /* TODO: change IDs for HastingsPrime */
@@ -102,6 +103,7 @@
 #define QCA6490_DEVICE_ID (0x1103)
 #define MANGO_DEVICE_ID (0x110a)
 #define PEACH_DEVICE_ID (0x110e)
+#define FIG_DEVICE_ID (0x1111)
 
 /* TODO: change IDs for Moselle */
 #define QCA6750_EMULATION_DEVICE_ID (0x010c)
@@ -112,6 +114,10 @@
 
 /*TODO: change IDs for Evros */
 #define WCN6450_DEVICE_ID (0x1108)
+
+#define WCN7750_DEVICE_ID (0x1110)
+
+#define QCC2072_DEVICE_ID (0x1112)
 
 #define ADRASTEA_DEVICE_ID_P2_E12 (0x7021)
 #define AR9887_DEVICE_ID    (0x0050)
@@ -259,6 +265,42 @@ void hif_record_latest_evt(struct ce_desc_hist *ce_hist,
 			   int ce_id, uint64_t time,
 			   uint32_t hp, uint32_t tp);
 #endif /*HIF_CONFIG_SLUB_DEBUG_ON || HIF_CE_DEBUG_DATA_BUF|| RECORD_DP_CE_EVTS*/
+
+#ifdef HIF_CE_TX_DESC_DATA_DEBUG
+/*
+ * Must be a power of 2 -- hif_ce_tx_desc_data_next_record_index() masks
+ * the atomic index with (HIF_CE_TX_DESC_DATA_HIST_MAX - 1) to derive the
+ * next record index, which only wraps correctly within
+ * [0, HIF_CE_TX_DESC_DATA_HIST_MAX) when this is a power of 2.
+ */
+#define HIF_CE_TX_DESC_DATA_HIST_MAX 8
+#define HIF_CE_TX_DESC_DATA_BYTES 8
+
+/**
+ * struct ce_tx_desc_data_event - CE3 tx completion debug data record
+ * @dma_addr: dma address reaped from the CE3 source descriptor
+ * @pa: physical address corresponding to @dma_addr
+ * @skb_data8: first 8 bytes of skb->data for the completed tx buffer
+ * @va_data8: first 8 bytes read from the VA derived from @pa
+ */
+struct ce_tx_desc_data_event {
+	qdf_dma_addr_t dma_addr;
+	qdf_dma_addr_t pa;
+	uint8_t skb_data8[HIF_CE_TX_DESC_DATA_BYTES];
+	uint8_t va_data8[HIF_CE_TX_DESC_DATA_BYTES];
+};
+
+/**
+ * struct ce_tx_desc_data_hist - circular history of CE3 tx completion
+ *  debug data records
+ * @event: ring of debug data records
+ * @index: next slot to be written into @event
+ */
+struct ce_tx_desc_data_hist {
+	struct ce_tx_desc_data_event event[HIF_CE_TX_DESC_DATA_HIST_MAX];
+	qdf_atomic_t index;
+};
+#endif /* HIF_CE_TX_DESC_DATA_DEBUG */
 
 /**
  * struct hif_cfg() - store ini config parameters in hif layer
@@ -449,6 +491,9 @@ struct hif_softc {
 #endif /* defined(HIF_CONFIG_SLUB_DEBUG_ON) || defined(HIF_CE_DEBUG_DATA_BUF) ||
 	* defined(RECORD_DP_CE_EVTS)
 	*/
+#ifdef HIF_CE_TX_DESC_DATA_DEBUG
+	struct ce_tx_desc_data_hist ce_tx_desc_data_hist;
+#endif
 #ifdef IPA_OFFLOAD
 	qdf_shared_mem_t *ipa_ce_ring;
 #endif
@@ -527,6 +572,9 @@ struct hif_softc {
 	struct hif_reg_write_soc_stats wstats;
 	qdf_atomic_t active_work_cnt;
 #endif /* FEATURE_HIF_DELAYED_REG_WRITE */
+#ifdef WLAN_DP_LOAD_BALANCE_SUPPORT
+	bool is_load_balance_enabled;
+#endif
 #ifdef CE_CMN_REG_CFG_QMI
 	bool ce_cmn_reg_cfg_support_qmi;
 #endif
@@ -602,11 +650,7 @@ static inline int hif_get_num_active_oom_work(struct hif_softc *scn)
  * Max waiting time during Runtime PM suspend to finish all
  * the tasks. This is in the multiple of 10ms.
  */
-#ifdef PANIC_ON_BUG
 #define HIF_TASK_DRAIN_WAIT_CNT 200
-#else
-#define HIF_TASK_DRAIN_WAIT_CNT 25
-#endif
 
 /**
  * hif_try_complete_tasks() - Try to complete all the pending tasks
@@ -846,7 +890,6 @@ void hif_uninit_rri_on_ddr(struct hif_softc *scn);
 static inline
 void hif_uninit_rri_on_ddr(struct hif_softc *scn) {}
 #endif
-void hif_cleanup_static_buf_to_target(struct hif_softc *scn);
 
 #ifdef FEATURE_RUNTIME_PM
 /**
@@ -892,4 +935,9 @@ static inline bool hif_is_ep_vote_access_disabled(struct hif_softc *scn)
 	return false;
 }
 #endif
+
+#define BUSY_PRINT	0
+#define FULL_PRINT	1
+#define DIAG_PRINT	2
+QDF_STATUS hif_print_ce(struct hif_softc *scn, uint8_t print_type);
 #endif /* __HIF_MAIN_H__ */

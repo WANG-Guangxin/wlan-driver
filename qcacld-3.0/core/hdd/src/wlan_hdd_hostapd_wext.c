@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -367,7 +367,7 @@ static __iw_softap_setparam(struct net_device *dev,
 	QDF_STATUS status;
 	int ret = 0;
 	struct hdd_context *hdd_ctx;
-	bool bval = false;
+	uint8_t enable_mimo = WLAN_MIMO_CAP_DISABLE;
 	struct wlan_hdd_link_info *link_info = adapter->deflink;
 
 	hdd_enter_dev(dev);
@@ -426,9 +426,11 @@ static __iw_softap_setparam(struct net_device *dev,
 								hdd_ctx->pdev,
 								set_value);
 
-			ret = hdd_softap_set_channel_change(dev, set_value,
+			ret = hdd_softap_set_channel_change(link_info,
+							    set_value, 0,
 							    CH_WIDTH_MAX,
-							    false);
+							    NO_SCHANS_PUNC,
+							    false, true);
 		} else {
 			hdd_err("Channel Change Failed, Device in test mode");
 			ret = -EINVAL;
@@ -478,6 +480,12 @@ static __iw_softap_setparam(struct net_device *dev,
 			return -EINVAL;
 		}
 
+		if (ucfg_mlme_is_chan_switch_in_progress(link_info->vdev)) {
+			hdd_info("vdev: %d channel switch in progress",
+				 link_info->vdev_id);
+			return -EINVAL;
+		}
+
 		/*
 		 * Disable Roaming on all adapters before start of
 		 * start of Hidden ssid connection
@@ -502,12 +510,13 @@ static __iw_softap_setparam(struct net_device *dev,
 		hdd_debug("MC Target rate %d", set_value);
 		qdf_copy_macaddr(&rate_update.bssid,
 				 &adapter->mac_addr);
-		status = ucfg_mlme_get_vht_enable2x2(hdd_ctx->psoc, &bval);
+		status = ucfg_mlme_get_vht_mimo_cap(hdd_ctx->psoc,
+						    &enable_mimo);
 		if (!QDF_IS_STATUS_SUCCESS(status)) {
 			hdd_err("unable to get vht_enable2x2");
 			ret = -1;
 		}
-		rate_update.nss = (bval == 0) ? 0 : 1;
+		rate_update.nss = enable_mimo ? 1 : 0;
 
 		rate_update.dev_mode = adapter->device_mode;
 		rate_update.mcastDataRate24GHz = set_value;
@@ -855,8 +864,10 @@ static __iw_softap_setparam(struct net_device *dev,
 			return -EINVAL;
 
 		ret = wlansap_set_dfs_target_chnl(mac_handle,
-						  wlan_reg_legacy_chan_to_freq(hdd_ctx->pdev,
-									       set_value));
+						  wlan_reg_legacy_chan_to_freq(
+							hdd_ctx->pdev,
+							set_value),
+						  link_info->vdev_id);
 		break;
 	}
 
@@ -920,11 +931,28 @@ static __iw_softap_setparam(struct net_device *dev,
 
 	case QCASAP_RX_CHAINMASK_CMD:
 	{
+		uint8_t tx_mask;
+
 		hdd_debug("QCASAP_RX_CHAINMASK_CMD val %d", set_value);
 		ret = wma_cli_set_command(link_info->vdev_id,
 					  wmi_pdev_param_rx_chain_mask,
 					  set_value, PDEV_CMD);
+		if (ret)
+			break;
+
 		ret = hdd_set_antenna_mode(link_info, set_value);
+		if (ret)
+			break;
+
+		/* Save RX chain mask to MLME config for consistent reporting */
+		status = ucfg_mlme_get_chain_mask(hdd_ctx->psoc, &tx_mask,
+						  NULL);
+		if (QDF_IS_STATUS_SUCCESS(status)) {
+			status = ucfg_mlme_set_chain_mask(hdd_ctx->psoc,
+							  tx_mask, set_value);
+			if (QDF_IS_STATUS_ERROR(status))
+				hdd_err("failed to save RX chain mask to mlme");
+		}
 		break;
 	}
 
@@ -1319,10 +1347,19 @@ static __iw_softap_getparam(struct net_device *dev,
 
 	case QCASAP_RX_CHAINMASK_CMD:
 	{
+		uint8_t rx_mask;
+		QDF_STATUS status;
+
 		hdd_debug("QCASAP_RX_CHAINMASK_CMD");
-		*value = wma_cli_get_command(adapter->deflink->vdev_id,
-					     wmi_pdev_param_rx_chain_mask,
-					     PDEV_CMD);
+		status = ucfg_mlme_get_chain_mask(hdd_ctx->psoc, NULL,
+						  &rx_mask);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			hdd_err("failed to get RX chain mask from mlme");
+			ret = -EINVAL;
+			break;
+		}
+
+		*value = rx_mask;
 		break;
 	}
 
@@ -1521,7 +1558,8 @@ static __iw_softap_getchannel(struct net_device *dev,
 
 	*value = 0;
 	ap_ctx = WLAN_HDD_GET_AP_CTX_PTR(adapter->deflink);
-	if (test_bit(SOFTAP_BSS_STARTED, &adapter->deflink->link_flags))
+	if (qdf_atomic_test_bit(SOFTAP_BSS_STARTED,
+				adapter->deflink->link_flags))
 		*value = wlan_reg_freq_to_chan(
 				hdd_ctx->pdev,
 				ap_ctx->operating_chan_freq);
@@ -2173,7 +2211,8 @@ __iw_softap_stopbss(struct net_device *dev,
 	if (0 != ret)
 		return ret;
 
-	if (test_bit(SOFTAP_BSS_STARTED, &adapter->deflink->link_flags)) {
+	if (qdf_atomic_test_bit(SOFTAP_BSS_STARTED,
+				adapter->deflink->link_flags)) {
 		struct hdd_hostapd_state *hostapd_state =
 			WLAN_HDD_GET_HOSTAP_STATE_PTR(adapter->deflink);
 
@@ -2190,7 +2229,8 @@ __iw_softap_stopbss(struct net_device *dev,
 				QDF_ASSERT(0);
 			}
 		}
-		clear_bit(SOFTAP_BSS_STARTED, &adapter->deflink->link_flags);
+		qdf_atomic_clear_bit(SOFTAP_BSS_STARTED,
+				     adapter->deflink->link_flags);
 		policy_mgr_decr_session_set_pcl(hdd_ctx->psoc,
 					     adapter->device_mode,
 					     adapter->deflink->vdev_id);
@@ -2302,6 +2342,13 @@ static int hdd_softap_get_sta_info(struct hdd_adapter *adapter,
 				     " ecsa=%d\n",
 				     QDF_MAC_ADDR_REF(sta->sta_mac.bytes),
 				     sta->ecsa_capable);
+
+		if (!qdf_is_macaddr_zero(&sta->mld_addr))
+			written += scnprintf(buf + written, size - written,
+					     "MLD:"
+					     QDF_MAC_ADDR_FMT"\n",
+					     QDF_MAC_ADDR_REF(sta->mld_addr.bytes));
+
 		hdd_put_sta_info_ref(&adapter->sta_info_list, &sta, true,
 				     STA_INFO_SOFTAP_GET_STA_INFO);
 	}

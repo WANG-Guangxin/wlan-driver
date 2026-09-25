@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -121,11 +121,14 @@ struct hdd_config {
 	bool is_11k_offload_supported;
 	bool is_unit_test_framework_enabled;
 	bool disable_channel;
-
+#ifdef WLAN_FEATURE_UL_JITTER
+	bool ul_jitter_log;
+#endif
 	/* HDD converged ini items are listed below this*/
 	bool bug_on_reinit_failure;
 	bool is_ramdump_enabled;
 	uint32_t iface_change_wait_time;
+	bool shutdown_bootskip;
 	uint8_t multicast_host_fw_msgs;
 	enum hdd_wext_control private_wext_control;
 	bool enablefwprint;
@@ -204,13 +207,13 @@ struct hdd_config {
 	bool get_wifi_features;
 #endif
 #ifdef FEATURE_RUNTIME_PM
-	uint16_t cpu_cxpc_threshold;
+	unsigned long cpu_cxpc_threshold;
 #endif
-	bool exclude_selftx_from_cca_busy;
 #ifdef WLAN_FEATURE_11BE_MLO
 	/* ml link state cache expiry time*/
 	qdf_time_t link_state_cache_expiry_time;
 #endif
+	enum cfg_sub_20_channel_width sub_20_ch_width;
 };
 
 /**
@@ -516,4 +519,33 @@ int hdd_update_channel_width(struct wlan_hdd_link_info *link_info,
 			     enum eSirMacHTChannelWidth chwidth,
 			     uint32_t bonding_mode, uint8_t link_id,
 			     bool is_restore);
+
+/**
+ * hdd_convert_chwidth_to_phy_chwidth() - convert channel width of type enum
+ * eSirMacHTChannelWidth to enum phy_ch_width
+ * @chwidth: channel width of type enum eSirMacHTChannelWidth
+ *
+ * Return: channel width of type enum phy_ch_width
+ */
+enum phy_ch_width
+hdd_convert_chwidth_to_phy_chwidth(enum eSirMacHTChannelWidth chwidth);
+
+#ifdef FORCE_WAKE
+/**
+ * hdd_set_hif_init_phase() - Enable/disable the
+ * init_phase flag
+ * @hif_ctx: hif opaque handle
+ * @init_phase: init phase flag
+ *
+ * Return: None
+ */
+void hdd_set_hif_init_phase(struct hif_opaque_softc *hif_ctx,
+			    bool init_phase);
+#else
+static inline
+void hdd_set_hif_init_phase(struct hif_opaque_softc *hif_ctx,
+			    bool init_phase)
+{
+}
+#endif /* FORCE_WAKE */
 #endif /* end #if !defined(HDD_CONFIG_H__) */

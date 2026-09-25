@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -166,6 +166,13 @@ QDF_STATUS wlan_crypto_delkey(struct wlan_objmgr_vdev *vdev,
 					uint8_t key_idx);
 
 /**
+ * wlan_crypto_rsn_keymgmt_to_suite() - Convert an RSN key
+ * management/authentication algorithm to an internal code.
+ * @keymgmt : crypto value
+ */
+int32_t wlan_crypto_rsn_keymgmt_to_suite(uint32_t keymgmt);
+
+/**
  * wlan_crypto_default_key() - called by ucfg to set default tx key
  * @vdev: vdev
  * @macaddr: mac address of the peer for unicast key
@@ -252,22 +259,26 @@ QDF_STATUS wlan_crypto_demic(struct wlan_objmgr_vdev *vdev,
 /**
  * wlan_crypto_vdev_is_pmf_enabled() - called to check is pmf enabled in vdev
  * @vdev: vdev
+ * @rsno_gen: RSN(O) generation
  *
  * This function gets called to check is pmf enabled or not in vdev.
  *
  * Return: true or false
  */
-bool wlan_crypto_vdev_is_pmf_enabled(struct wlan_objmgr_vdev *vdev);
+bool wlan_crypto_vdev_is_pmf_enabled(struct wlan_objmgr_vdev *vdev,
+				     uint8_t rsno_gen);
 
 /**
  * wlan_crypto_vdev_is_pmf_required() - called to check is pmf required in vdev
  * @vdev: vdev
+ * @rsno_gen: RSN(O) generation
  *
  * This function gets called to check is pmf required or not in vdev.
  *
  * Return: true or false
  */
-bool wlan_crypto_vdev_is_pmf_required(struct wlan_objmgr_vdev *vdev);
+bool wlan_crypto_vdev_is_pmf_required(struct wlan_objmgr_vdev *vdev,
+				      uint8_t rsno_gen);
 
 /**
  * wlan_crypto_is_pmf_enabled() - called by mgmt txrx to check is pmf enabled
@@ -327,6 +338,7 @@ bool wlan_crypto_is_mmie_valid(struct wlan_objmgr_vdev *vdev,
  * wlan_crypto_wpaie_check() - called by mlme to check the wpaie
  * @crypto_params: crypto params
  * @frm: ie buffer
+ * @status_code: pointer to wlan status code to be retrieved, can be null
  *
  * This function gets called by mlme to check the contents of wpa is
  * matching with given crypto params
@@ -334,12 +346,14 @@ bool wlan_crypto_is_mmie_valid(struct wlan_objmgr_vdev *vdev,
  * Return: QDF_STATUS_SUCCESS - in case of success
  */
 QDF_STATUS wlan_crypto_wpaie_check(struct wlan_crypto_params *crypto_params,
-				   const uint8_t *frm);
+				   const uint8_t *frm,
+				   enum wlan_status_code *status_code);
 
 /**
  * wlan_crypto_rsnie_check() - called by mlme to check the rsnie
  * @crypto_params: crypto params
- * @frm: ie buffer
+ * @frm: rsn buffer beginning from RSN data
+ * @status_code: pointer to wlan status code to retrieve, can be null
  *
  * This function gets called by mlme to check the contents of rsn is
  * matching with given crypto params
@@ -347,7 +361,8 @@ QDF_STATUS wlan_crypto_wpaie_check(struct wlan_crypto_params *crypto_params,
  * Return: QDF_STATUS_SUCCESS - in case of success
  */
 QDF_STATUS wlan_crypto_rsnie_check(struct wlan_crypto_params *crypto_params,
-				   const uint8_t *frm);
+				   const uint8_t *frm,
+				   enum wlan_status_code *status_code);
 
 /**
  * wlan_crypto_rsnxie_check() - called by mlme to parse rsnx capabilities
@@ -430,6 +445,8 @@ uint8_t *wlan_crypto_build_wapiie(struct wlan_objmgr_vdev *vdev,
  * wlan_crypto_rsn_info() - check is given params matching with vdev params.
  * @vdev: vdev
  * @crypto_params: crypto params
+ * @status_code: pointer to wlan status code to be retrieved, can be null
+ * @rsno_gen: type of RSN used
  *
  * This function gets called by mlme to check is given params matching with
  * vdev params.
@@ -437,7 +454,9 @@ uint8_t *wlan_crypto_build_wapiie(struct wlan_objmgr_vdev *vdev,
  * Return: true success or false for failure.
  */
 bool wlan_crypto_rsn_info(struct wlan_objmgr_vdev *vdev,
-				struct wlan_crypto_params *crypto_params);
+			  struct wlan_crypto_params *crypto_params,
+			  enum wlan_status_code *status_code,
+			  uint8_t rsno_gen);
 
 /**
  * wlan_crypto_pn_check() - called by data patch for PN check
@@ -461,6 +480,17 @@ QDF_STATUS wlan_crypto_pn_check(struct wlan_objmgr_vdev *vdev,
  */
 struct wlan_crypto_params *wlan_crypto_vdev_get_crypto_params(
 						struct wlan_objmgr_vdev *vdev);
+
+/*
+ * wlan_crypto_vdev_get_rsno_crypto() - called by mlme to get crypto params
+ * based on the RSNO generation
+ * @vdev: vdev
+ * @gen: RSN generation
+ *
+ * Return: wlan_crypto_params or NULL in case of failure
+ */
+struct wlan_crypto_params *
+wlan_crypto_vdev_get_rsno_crypto(struct wlan_objmgr_vdev *vdev, uint8_t gen);
 
 /**
  * wlan_crypto_peer_get_crypto_params() - called by mlme to get crypto params
@@ -714,20 +744,23 @@ void wlan_crypto_restore_keys(struct wlan_objmgr_vdev *vdev);
 
 /**
  * wlan_crypto_check_rsn_match() - called by ucfg to check for RSN match
- * @psoc: psoc pointer
- * @vdev_id: vdev id
+ * @vdev: vdev
  * @ie_ptr: pointer to IEs
  * @ie_len: IE length
  * @peer_crypto_params: return peer crypto parameters
+ * @status_code: pointer to wlan status code to be retrieved, can be null
+ * @rsno_gen: rsno generation used
  *
  * This function gets called from ucfg to check RSN match.
  *
- * Return: true or false
+ * Return: QDF_STATUS
  */
-bool wlan_crypto_check_rsn_match(struct wlan_objmgr_psoc *psoc,
-				 uint8_t vdev_id, uint8_t *ie_ptr,
-				 uint16_t ie_len, struct wlan_crypto_params *
-				 peer_crypto_params);
+QDF_STATUS
+wlan_crypto_check_rsn_match(struct wlan_objmgr_vdev *vdev,
+			    uint8_t *ie_ptr, uint16_t ie_len,
+			    struct wlan_crypto_params *peer_crypto_params,
+			    enum wlan_status_code *status_code,
+			    uint8_t rsno_gen);
 
 /**
  * wlan_crypto_check_wpa_match() - called by ucfg to check for WPA match
@@ -736,15 +769,18 @@ bool wlan_crypto_check_rsn_match(struct wlan_objmgr_psoc *psoc,
  * @ie_ptr: pointer to IEs
  * @ie_len: IE length
  * @peer_crypto_params: return peer crypto parameters
+ * @status_code: pointer to wlan status code to be retrieved, can be null
  *
  * This function gets called from ucfg to check WPA match.
  *
- * Return: true or false
+ * Return: QDF_STATUS
  */
-bool wlan_crypto_check_wpa_match(struct wlan_objmgr_psoc *psoc,
-				 uint8_t vdev_id, uint8_t *ie_ptr,
-				 uint16_t ie_len, struct wlan_crypto_params *
-				 peer_crypto_params);
+QDF_STATUS
+wlan_crypto_check_wpa_match(struct wlan_objmgr_psoc *psoc,
+			    uint8_t vdev_id, uint8_t *ie_ptr,
+			    uint16_t ie_len,
+			    struct wlan_crypto_params *peer_crypto_params,
+			    enum wlan_status_code *status_code);
 
 /**
  * wlan_crypto_parse_rsnxe_ie() - parse RSNXE IE
@@ -788,6 +824,7 @@ wlan_get_crypto_params_from_wapi_ie(struct wlan_crypto_params *crypto_params,
  * @crypto_params: return crypto parameters
  * @ie_ptr: pointer to IEs
  * @ie_len: IE length
+ * @status_code: pointer to wlan status code to be retrieved, can be null
  *
  * This function is used to get the crypto parameters from wpa ie
  *
@@ -796,14 +833,16 @@ wlan_get_crypto_params_from_wapi_ie(struct wlan_crypto_params *crypto_params,
  */
 QDF_STATUS
 wlan_get_crypto_params_from_wpa_ie(struct wlan_crypto_params *crypto_params,
-				   const uint8_t *ie_ptr, uint16_t ie_len);
+				   const uint8_t *ie_ptr, uint16_t ie_len,
+				   enum wlan_status_code *status_code);
 
 /**
  * wlan_get_crypto_params_from_rsn_ie() - Function to get crypto params
  * from rsn ie
- * @crypto_params: return crypto parameters
+ * @crypto_params: vdev crypto parameters
  * @ie_ptr: pointer to IEs
  * @ie_len: IE length
+ * @status_code: pointer to wlan status code to be retrieved, can be null
  *
  * This function is used to get the crypto parameters from rsn ie
  *
@@ -812,10 +851,27 @@ wlan_get_crypto_params_from_wpa_ie(struct wlan_crypto_params *crypto_params,
  */
 QDF_STATUS
 wlan_get_crypto_params_from_rsn_ie(struct wlan_crypto_params *crypto_params,
-				   const uint8_t *ie_ptr, uint16_t ie_len);
+				   const uint8_t *ie_ptr, uint16_t ie_len,
+				   enum wlan_status_code *status_code);
 
 /**
- * wlan_set_vdev_crypto_prarams_from_ie() - Sets vdev crypto params from IE info
+ * wlan_get_crypto_params_from_mrsno_ie() - Function to set crypto params
+ * from MRSNO IE
+ * @crypto_params: vdev crypto parameters
+ * @ie_ptr: pointer to IEs
+ * @ie_len: IE length
+ * @rsno_gen: RSNO generation
+ *
+ * This function is used to get the crypto parameters from MRSNO IE
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_get_crypto_params_from_mrsno_ie(struct wlan_crypto_params *crypto_params,
+				     const uint8_t *ie_ptr, uint16_t ie_len,
+				     uint8_t rsno_gen);
+
+/*
+ * wlan_set_crypto_params_from_mrsno - Sets vdev crypto params from RSNO IE
  * @vdev: vdev pointer
  * @ie_ptr: pointer to IE
  * @ie_len: IE length
@@ -824,9 +880,22 @@ wlan_get_crypto_params_from_rsn_ie(struct wlan_crypto_params *crypto_params,
  *
  * Return: QDF_STATUS_SUCCESS or error code
  */
-QDF_STATUS wlan_set_vdev_crypto_prarams_from_ie(struct wlan_objmgr_vdev *vdev,
-						uint8_t *ie_ptr,
-						uint16_t ie_len);
+QDF_STATUS wlan_set_crypto_params_from_mrsno(struct wlan_objmgr_vdev *vdev,
+					     uint8_t *ie_ptr, uint16_t ie_len);
+
+/**
+ * wlan_set_vdev_crypto_params_from_ie() - Sets vdev crypto params from IE info
+ * @vdev: vdev pointer
+ * @ie_ptr: pointer to IE
+ * @ie_len: IE length
+ *
+ * This function gets called from ucfg to set crypto params from IE data.
+ *
+ * Return: QDF_STATUS_SUCCESS or error code
+ */
+QDF_STATUS wlan_set_vdev_crypto_params_from_ie(struct wlan_objmgr_vdev *vdev,
+					       uint8_t *ie_ptr,
+					       uint16_t ie_len);
 #ifdef WLAN_CRYPTO_GCM_OS_DERIVATIVE
 static inline int wlan_crypto_aes_gmac(const uint8_t *key, size_t key_len,
 				       uint8_t *iv, size_t iv_len,
@@ -900,7 +969,7 @@ wlan_crypto_get_cipher(struct wlan_objmgr_vdev *vdev, const uint8_t *peer_mac,
  * Return: enum wlan_crypto_key_mgmt
  */
 wlan_crypto_key_mgmt wlan_crypto_get_secure_akm_available(uint32_t akm);
-#ifdef CRYPTO_SET_KEY_CONVERGED
+
 /**
  * wlan_crypto_update_set_key_peer() - Update the peer for set key
  * @vdev: vdev object
@@ -1021,46 +1090,6 @@ void wlan_crypto_free_vdev_key(struct wlan_objmgr_vdev *vdev);
  * Return: None
  */
 void wlan_crypto_reset_vdev_params(struct wlan_objmgr_vdev *vdev);
-#else
-static inline void wlan_crypto_update_set_key_peer(
-						struct wlan_objmgr_vdev *vdev,
-						bool pairwise,
-						uint8_t key_index,
-						struct qdf_mac_addr *peer_mac)
-{
-}
-
-static inline QDF_STATUS
-wlan_crypto_save_key(struct wlan_objmgr_vdev *vdev,
-		     const uint8_t *peer_mac, uint8_t key_index,
-		     struct wlan_crypto_key *crypto_key)
-{
-	return QDF_STATUS_SUCCESS;
-}
-
-static inline struct wlan_crypto_key *
-wlan_crypto_get_key(struct wlan_objmgr_vdev *vdev,
-		    const uint8_t *peer_mac, uint8_t key_index)
-{
-	return NULL;
-}
-
-static inline
-QDF_STATUS wlan_crypto_set_key_req(struct wlan_objmgr_vdev *vdev,
-				   struct wlan_crypto_key *req,
-				   enum wlan_crypto_key_type key_type)
-{
-	return QDF_STATUS_SUCCESS;
-}
-
-static inline void wlan_crypto_free_vdev_key(struct wlan_objmgr_vdev *vdev)
-{
-}
-
-static inline void wlan_crypto_reset_vdev_params(struct wlan_objmgr_vdev *vdev)
-{
-}
-#endif /* CRYPTO_SET_KEY_CONVERGED */
 
 /**
  * wlan_crypto_vdev_set_param() - Send vdev set param to firmware.
@@ -1279,4 +1308,27 @@ void ucfg_crypto_flush_entries(struct wlan_objmgr_psoc *psoc);
 void ucfg_crypto_free_key_by_link_id(struct wlan_objmgr_psoc *psoc,
 				     struct qdf_mac_addr *link_addr,
 				     uint8_t link_id);
+
+#if defined(WLAN_FEATURE_11BE_MLO) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
+/**
+ * wlan_crypto_key_event_handler() - Handle key event and store the keys in
+ * crypto PSOC object.
+ * @psoc:  Pointer to PSOC object
+ * @keys:  Pointer to the keys
+ * @num_keys: Number of links for which keys entries are available
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_crypto_key_event_handler(struct wlan_objmgr_psoc *psoc,
+					 struct wlan_crypto_key_entry *keys,
+					 uint8_t num_keys);
+#else
+static inline
+QDF_STATUS wlan_crypto_key_event_handler(struct wlan_objmgr_psoc *psoc,
+					 struct wlan_crypto_key_entry *keys,
+					 uint8_t num_keys)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
 #endif /* end of _WLAN_CRYPTO_GLOBAL_API_H_ */

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2017-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "icnss2_qmi: " fmt
@@ -46,6 +46,10 @@
 #define BIN_BDF_FILE_NAME_PREFIX	"bdwlan."
 #define REGDB_FILE_NAME			"regdb.bin"
 
+#define DEFAULT_PHY_UCODE_FILE_NAME	"phy_ucode.elf"
+#define DEFAULT_AUX_FILE_NAME		"aux_ucode.elf"
+
+#define MAX_FIRMWARE_NAME_LEN		50
 #define HW_V1_NUMBER			"v1"
 #ifdef CONFIG_ICNSS2_DEBUG
 #define QDSS_FILE_BUILD_STR		"debug_"
@@ -53,7 +57,7 @@
 #define QDSS_FILE_BUILD_STR		"perf_"
 #endif
 
-#define QDSS_TRACE_CONFIG_FILE "qdss_trace_config"
+#define QDSS_TRACE_CONFIG_FILE		"qdss_trace_config"
 
 #define WLAN_BOARD_ID_INDEX		0x100
 #define DEVICE_BAR_SIZE			0x200000
@@ -279,6 +283,7 @@ int wlfw_device_info_send_msg(struct icnss_priv *priv)
 	struct wlfw_device_info_req_msg_v01 *req;
 	struct wlfw_device_info_resp_msg_v01 *resp;
 	struct qmi_txn txn;
+	int i = 0;
 
 	if (!priv)
 		return -ENODEV;
@@ -360,6 +365,19 @@ int wlfw_device_info_send_msg(struct icnss_priv *priv)
 
 	if (!priv->mhi_state_info_pa)
 		icnss_pr_err("Fail to get MHI info address\n");
+
+	if (resp->shared_mem_valid) {
+		for (i = 0; i < resp->shared_mem_len; i++) {
+			priv->shared_mem[i].pa_addr = resp->shared_mem[i].pa_addr;
+			priv->shared_mem[i].mem_client_id = resp->shared_mem[i].mem_client_id;
+			priv->shared_mem[i].size = resp->shared_mem[i].size;
+
+			icnss_pr_dbg(
+				"wlan fw shared mem info: pa_addr:0x%llx, mem_client_id:%d, size:%d",
+				priv->shared_mem[i].pa_addr, priv->shared_mem[i].mem_client_id,
+				priv->shared_mem[i].size);
+		}
+	}
 
 	kfree(resp);
 	kfree(req);
@@ -558,7 +576,9 @@ int wlfw_ind_register_send_sync_msg(struct icnss_priv *priv)
 			req->rejuvenate_enable = 1;
 		}
 	} else if (priv->device_id == WCN6750_DEVICE_ID ||
-		   priv->device_id == WCN6450_DEVICE_ID) {
+		   priv->device_id == WCN6450_DEVICE_ID ||
+		   priv->device_id == WCN7750_DEVICE_ID ||
+		   priv->device_id == WCN8750_DEVICE_ID) {
 		req->fw_init_done_enable_valid = 1;
 		req->fw_init_done_enable = 1;
 		req->cal_done_enable_valid = 1;
@@ -573,12 +593,21 @@ int wlfw_ind_register_send_sync_msg(struct icnss_priv *priv)
 		req->respond_get_info_enable = 1;
 		req->m3_dump_upload_segments_req_enable_valid = 1;
 		req->m3_dump_upload_segments_req_enable = 1;
+		req->wfc_call_twt_config_enable_valid = 1;
+		req->wfc_call_twt_config_enable = 1;
 	}
 
 	req->async_data_enable_valid = 1;
 	req->async_data_enable = 1;
 
 	priv->stats.ind_register_req++;
+
+	/* Enable only when XO trim related resources are valid */
+	if (!IS_ERR_OR_NULL(priv->xo_trim_conf.xo_calib_reg) &&
+	    !IS_ERR_OR_NULL(priv->xo_trim_conf.wcal_pbs)) {
+		req->xo_trim_enable_valid = 1;
+		req->xo_trim_enable = 1;
+	}
 
 	ret = qmi_txn_init(&priv->qmi, &txn,
 			   wlfw_ind_register_resp_msg_v01_ei, resp);
@@ -779,7 +808,7 @@ int wlfw_cap_send_sync_msg(struct icnss_priv *priv)
 	if (resp->fw_version_info_valid) {
 		priv->fw_version_info.fw_version =
 			resp->fw_version_info.fw_version;
-		strlcpy(priv->fw_version_info.fw_build_timestamp,
+		strscpy(priv->fw_version_info.fw_build_timestamp,
 				resp->fw_version_info.fw_build_timestamp,
 				WLFW_MAX_TIMESTAMP_LEN + 1);
 	}
@@ -804,7 +833,7 @@ int wlfw_cap_send_sync_msg(struct icnss_priv *priv)
 	}
 
 	if (resp->fw_build_id_valid)
-		strlcpy(priv->fw_build_id, resp->fw_build_id,
+		strscpy(priv->fw_build_id, resp->fw_build_id,
 			QMI_WLFW_MAX_BUILD_ID_LEN_V01 + 1);
 
 	if (resp->rd_card_chain_cap_valid) {
@@ -824,6 +853,17 @@ int wlfw_cap_send_sync_msg(struct icnss_priv *priv)
 
 	if (resp->phy_qam_cap_valid)
 		priv->phy_qam_cap = (enum icnss_phy_qam_cap)resp->phy_qam_cap;
+
+	if (resp->fw_caps_valid) {
+		priv->fw_aux_uc_support =
+			!!(resp->fw_caps & QMI_WLFW_AUX_UC_SUPPORT_V01);
+		icnss_pr_dbg("FW supports aux uc support capability");
+		priv->fw_direct_link_support =
+			!!(resp->fw_caps & QMI_WLFW_DIRECT_LINK_SUPPORT_V01);
+		icnss_pr_dbg("FW %s direct link",
+			     (priv->fw_direct_link_support) ?
+			     "supports" : "does not support");
+	}
 
 	if (resp->serial_id_valid) {
 		priv->serial_id = resp->serial_id;
@@ -976,6 +1016,24 @@ out:
 	return ret;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 19, 0))
+static int cnss_kernel_connect(struct socket *sock,
+			       struct sockaddr_qrtr *sq,
+			       int addrlen, int flags)
+{
+	return kernel_connect(sock, (struct sockaddr_unsized *)sq,
+			      addrlen, flags);
+}
+#else
+static int cnss_kernel_connect(struct socket *sock,
+			       struct sockaddr_qrtr *sq,
+			       int addrlen, int flags)
+{
+	return kernel_connect(sock, (struct sockaddr *)sq,
+			      addrlen, flags);
+}
+#endif
+
 static int icnss_dms_connect_to_server(struct icnss_priv *priv,
 				      unsigned int node, unsigned int port)
 {
@@ -987,8 +1045,7 @@ static int icnss_dms_connect_to_server(struct icnss_priv *priv,
 	sq.sq_node = node;
 	sq.sq_port = port;
 
-	ret = kernel_connect(qmi_dms->sock, (struct sockaddr *)&sq,
-			     sizeof(sq), 0);
+	ret = cnss_kernel_connect(qmi_dms->sock, &sq, sizeof(sq), 0);
 	if (ret < 0) {
 		icnss_pr_err("Failed to connect to QMI DMS remote service Node: %d Port: %d\n",
 			     node, port);
@@ -1089,13 +1146,13 @@ static int icnss_get_bdf_file_name(struct icnss_priv *priv,
 				 BIN_BDF_FILE_NAME_PREFIX "b%02x",
 				 priv->board_id);
 		if (priv->foundry_name) {
-			strlcpy(foundry_specific_filename, filename_tmp, ICNSS_MAX_FILE_NAME);
+			strscpy(foundry_specific_filename, filename_tmp, ICNSS_MAX_FILE_NAME);
 			memmove(foundry_specific_filename + BDWLAN_SIZE + 1,
 				foundry_specific_filename + BDWLAN_SIZE,
 				BDWLAN_SIZE - 1);
 			foundry_specific_filename[BDWLAN_SIZE] = priv->foundry_name;
 			foundry_specific_filename[ICNSS_MAX_FILE_NAME - 1] = '\0';
-			strlcpy(filename_tmp, foundry_specific_filename, ICNSS_MAX_FILE_NAME);
+			strscpy(filename_tmp, foundry_specific_filename, ICNSS_MAX_FILE_NAME);
 		}
 		break;
 	case ICNSS_BDF_REGDB:
@@ -1373,10 +1430,12 @@ end:
 static void icnss_get_qdss_cfg_filename(struct icnss_priv *priv,
 					char *filename, u32 filename_len)
 {
-	char filename_tmp[ICNSS_MAX_FILE_NAME];
+	char filename_tmp[MAX_FIRMWARE_NAME_LEN];
 	char *build_str = QDSS_FILE_BUILD_STR;
 
-	if (priv->device_id == WCN6450_DEVICE_ID)
+	if (priv->device_id == WCN7750_DEVICE_ID ||
+	    priv->device_id == WCN8750_DEVICE_ID ||
+	    priv->device_id == WCN6450_DEVICE_ID)
 		snprintf(filename_tmp, filename_len, QDSS_TRACE_CONFIG_FILE
 			"_%s%s.cfg", build_str, HW_V1_NUMBER);
 	else
@@ -1520,7 +1579,7 @@ int wlfw_wlan_mode_send_sync_msg(struct icnss_priv *priv,
 	    mode == QMI_WLFW_OFF_V01)
 		return 0;
 
-	icnss_pr_dbg("Sending Mode request, state: 0x%lx, mode: %d\n",
+	icnss_pr_info("Sending Mode request, state: 0x%lx, mode: %d\n",
 		     priv->state, mode);
 
 	req = kzalloc(sizeof(*req), GFP_KERNEL);
@@ -1688,6 +1747,81 @@ int wlfw_qdss_trace_stop(struct icnss_priv *priv, unsigned long long option)
 					     option);
 }
 
+/**
+ * icnss_wlfw_misc_req_send_sync() - Send QMI_WLFW_MISC_REQ with provided type
+ * @priv: ICNSS platform data
+ * @type: subtype for QMI_WLFW_MISC_REQ
+ *
+ * Return: 0 for success, negative values otherwise
+ */
+static int icnss_wlfw_misc_req_send_sync(struct icnss_priv *priv,
+					 enum wlfw_misc_req_enum_v01 type)
+{
+	int ret = 0;
+	struct wlfw_misc_req_msg_v01 *req;
+	struct wlfw_misc_resp_msg_v01 *resp;
+	struct qmi_txn txn;
+
+	if (type <= WLFW_MISC_REQ_ENUM_MIN_VAL_V01 ||
+	    type >= WLFW_MISC_REQ_ENUM_MAX_VAL_V01) {
+		icnss_pr_err("Invalid type[%d] for MISC_REQ\n", type);
+		return -EINVAL;
+	}
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req) {
+		icnss_pr_err("Failed to allocate req for MISC_REQ[%d]\n", type);
+		return -ENOMEM;
+	}
+
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
+	if (!resp) {
+		icnss_pr_err("Failed to allocate resp for MISC_REQ[%d]\n", type);
+		kfree(req);
+		return -ENOMEM;
+	}
+
+	ret = qmi_txn_init(&priv->qmi, &txn,
+			   wlfw_misc_resp_msg_v01_ei, resp);
+
+	if (ret < 0) {
+		icnss_pr_err("Fail to init txn for MISC_REQ[%d]: %d\n",
+			     type, ret);
+		goto end;
+	}
+
+	req->type = type;
+	ret = qmi_send_request(&priv->qmi, NULL, &txn,
+			       QMI_WLFW_MISC_REQ_V01,
+			       WLFW_MISC_REQ_MSG_V01_MAX_MSG_LEN,
+			       wlfw_misc_req_msg_v01_ei, req);
+	if (ret < 0) {
+		qmi_txn_cancel(&txn);
+		icnss_pr_err("Fail to send MISC_REQ[%d]: %d\n", type, ret);
+		goto end;
+	}
+
+	ret = qmi_txn_wait(&txn, priv->ctrl_params.qmi_timeout);
+	if (ret < 0) {
+		icnss_pr_err("Failed to wait for resp of MISC_REQ[%d]: %d\n",
+			     type, ret);
+		goto end;
+	} else if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
+		icnss_pr_err("MISC_REQ[%d] failed, result:%d error:%d\n",
+			     type, resp->resp.result, resp->resp.error);
+		ret = -resp->resp.result;
+		goto end;
+	} else {
+		icnss_pr_dbg("Sent MISC_REQ[%d] successfully\n", type);
+		ret = 0;
+	}
+
+end:
+	kfree(req);
+	kfree(resp);
+	return ret;
+}
+
 static int wlfw_wlan_cfg_send_sync_msg(struct icnss_priv *priv,
 				       struct wlfw_wlan_cfg_req_msg_v01 *req)
 {
@@ -1749,7 +1883,7 @@ out:
 	return ret;
 }
 
-int wlfw_send_modem_shutdown_msg(struct icnss_priv *priv)
+int wlfw_send_fw_shutdown_msg(struct icnss_priv *priv)
 {
 	int ret;
 	struct wlfw_shutdown_req_msg_v01 *req;
@@ -1762,7 +1896,7 @@ int wlfw_send_modem_shutdown_msg(struct icnss_priv *priv)
 	if (test_bit(ICNSS_FW_DOWN, &priv->state))
 		return -EINVAL;
 
-	icnss_pr_dbg("Sending modem shutdown request, state: 0x%lx\n",
+	icnss_pr_info("Sending FW shutdown request, state: 0x%lx\n",
 		     priv->state);
 
 	req = kzalloc(sizeof(*req), GFP_KERNEL);
@@ -1803,7 +1937,7 @@ int wlfw_send_modem_shutdown_msg(struct icnss_priv *priv)
 			     ret);
 		goto out;
 	} else if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
-		icnss_pr_err("QMI modem shutdown request rejected result:%d error:%d\n",
+		icnss_pr_err("QMI FW shutdown request rejected result:%d error:%d\n",
 			     resp->resp.result, resp->resp.error);
 		ret = -resp->resp.result;
 		goto out;
@@ -2616,7 +2750,9 @@ static void wlfw_qdss_trace_req_mem_ind_cb(struct qmi_handle *qmi,
 		return;
 	}
 
-	if (priv->device_id == WCN6450_DEVICE_ID)
+	if (priv->device_id == WCN6450_DEVICE_ID ||
+	    priv->device_id == WCN7750_DEVICE_ID ||
+	    priv->device_id == WCN8750_DEVICE_ID)
 		icnss_free_qdss_mem(priv);
 
 	if (priv->qdss_mem_seg_len) {
@@ -2697,18 +2833,18 @@ static void wlfw_qdss_trace_save_ind_cb(struct qmi_handle *qmi,
 	}
 
 	if (ind_msg->file_name_valid)
-		strlcpy(event_data->file_name, ind_msg->file_name,
+		strscpy(event_data->file_name, ind_msg->file_name,
 			QDSS_TRACE_FILE_NAME_MAX + 1);
 
 	if (ind_msg->source == 1) {
 		if (!ind_msg->file_name_valid)
-			strlcpy(event_data->file_name, "qdss_trace_wcss_etb",
+			strscpy(event_data->file_name, "qdss_trace_wcss_etb",
 				QDSS_TRACE_FILE_NAME_MAX + 1);
 	icnss_driver_event_post(priv, ICNSS_DRIVER_EVENT_QDSS_TRACE_REQ_DATA,
 				0, event_data);
 	} else {
 		if (!ind_msg->file_name_valid)
-			strlcpy(event_data->file_name, "qdss_trace_ddr",
+			strscpy(event_data->file_name, "qdss_trace_ddr",
 				QDSS_TRACE_FILE_NAME_MAX + 1);
 	icnss_driver_event_post(priv, ICNSS_DRIVER_EVENT_QDSS_TRACE_SAVE,
 				0, event_data);
@@ -2834,7 +2970,7 @@ static void icnss_wlfw_m3_dump_upload_segs_req_ind_cb(struct qmi_handle *qmi,
 		event_data->m3_segment[i].addr = segment_addr;
 		event_data->m3_segment[i].size = ind_msg->m3_segment[i].size;
 		event_data->m3_segment[i].type = ind_msg->m3_segment[i].type;
-		strlcpy(event_data->m3_segment[i].name,
+		strscpy(event_data->m3_segment[i].name,
 			ind_msg->m3_segment[i].name,
 			WLFW_MAX_STR_LEN + 1);
 
@@ -2942,6 +3078,35 @@ out:
 	kfree(req);
 	kfree(resp);
 	return ret;
+}
+
+static void icnss_wlfw_xo_trim_ind_cb(struct qmi_handle *qmi,
+				      struct sockaddr_qrtr *sq,
+				      struct qmi_txn *txn,
+				      const void *data)
+{
+	struct icnss_priv *priv =
+		container_of(qmi, struct icnss_priv, qmi);
+	const struct wlfw_xo_trim_ind_msg_v01 *ind_msg = data;
+	u8 *trim_value;
+
+	if (!txn) {
+		icnss_pr_err("Spurious XO_TRIM indication\n");
+		return;
+	}
+
+	icnss_pr_dbg("Received XO_TRIM with trim val: %d\n", ind_msg->trim_val);
+	trim_value = kzalloc(sizeof(*trim_value), GFP_KERNEL);
+	if (!trim_value) {
+		icnss_pr_err("Failed to allocate memory\n");
+		goto out;
+	}
+
+	*trim_value = ind_msg->trim_val;
+
+out:
+	icnss_driver_event_post(priv, ICNSS_DRIVER_EVENT_XO_TRIM_IND,
+				0, trim_value);
 }
 
 static int icnss_ims_wfc_call_twt_cfg_send_sync
@@ -3171,6 +3336,14 @@ static struct qmi_msg_handler wlfw_msg_handlers[] = {
 		sizeof(struct wlfw_driver_async_data_ind_msg_v01),
 		.fn = icnss_wlfw_driver_async_data_ind_cb
 	},
+	{
+		.type = QMI_INDICATION,
+		.msg_id = QMI_WLFW_XO_TRIM_IND_V01,
+		.ei = wlfw_xo_trim_ind_msg_v01_ei,
+		.decoded_size =
+		sizeof(struct wlfw_xo_trim_ind_msg_v01),
+		.fn = icnss_wlfw_xo_trim_ind_cb
+	},
 	{}
 };
 
@@ -3189,7 +3362,7 @@ int icnss_connect_to_fw_server(struct icnss_priv *priv, void *data)
 	sq.sq_family = AF_QIPCRTR;
 	sq.sq_node = event_data->node;
 	sq.sq_port = event_data->port;
-	ret = kernel_connect(qmi->sock, (struct sockaddr *)&sq, sizeof(sq), 0);
+	ret = cnss_kernel_connect(qmi->sock, &sq, sizeof(sq), 0);
 	if (ret < 0) {
 		icnss_pr_err("Fail to connect to remote service port\n");
 		goto out;
@@ -3297,6 +3470,8 @@ int icnss_register_fw_service(struct icnss_priv *priv)
 		return ret;
 
 	if (priv->device_id == WCN6750_DEVICE_ID ||
+	    priv->device_id == WCN7750_DEVICE_ID ||
+	    priv->device_id == WCN8750_DEVICE_ID ||
 	    priv->device_id == WCN6450_DEVICE_ID)
 		ret = qmi_add_lookup(&priv->qmi, WLFW_SERVICE_ID_V01,
 				     WLFW_SERVICE_VERS_V01,
@@ -3341,7 +3516,7 @@ int icnss_send_wlan_enable_to_fw(struct icnss_priv *priv,
 		return -ENOMEM;
 
 	req->host_version_valid = 1;
-	strlcpy(req->host_version, host_version,
+	strscpy(req->host_version, host_version,
 		WLFW_MAX_STR_LEN + 1);
 
 	req->tgt_cfg_valid = 1;
@@ -3390,7 +3565,9 @@ int icnss_send_wlan_enable_to_fw(struct icnss_priv *priv,
 
 		memcpy(req->shadow_reg, config->shadow_reg_cfg,
 		       sizeof(struct wlfw_msi_cfg_s_v01) * req->shadow_reg_len);
-	} else if (priv->device_id == WCN6450_DEVICE_ID) {
+	} else if (priv->device_id == WCN6450_DEVICE_ID ||
+		   priv->device_id == WCN7750_DEVICE_ID ||
+		   priv->device_id == WCN8750_DEVICE_ID) {
 		req->shadow_reg_v3_valid = 1;
 		if (config->num_shadow_reg_v3_cfg >
 			MAX_NUM_SHADOW_REG_V3)
@@ -3453,16 +3630,101 @@ static inline u32 icnss_get_host_build_type(void)
 }
 #endif
 
+static void icnss_wlfw_host_cap_parse_mlo(struct icnss_priv *priv,
+					 struct wlfw_host_cap_req_msg_v01 *req)
+{
+	if (priv->device_id == WCN7750_DEVICE_ID ||
+	    priv->device_id == WCN8750_DEVICE_ID) {
+		req->mlo_capable_valid = 1;
+		req->mlo_capable = 1;
+		req->mlo_chip_id_valid = 1;
+		req->mlo_chip_id = 0;
+		req->mlo_group_id_valid = 1;
+		req->mlo_group_id = 0;
+		req->max_mlo_peer_valid = 1;
+		/* Max peer number generally won't change for the same device
+		 * but needs to be synced with host driver.
+		 */
+		req->max_mlo_peer = 32;
+		req->mlo_num_chips_valid = 1;
+		req->mlo_num_chips = 1;
+		req->mlo_chip_info_valid = 1;
+		req->mlo_chip_info[0].chip_id = 0;
+		req->mlo_chip_info[0].num_local_links = 1;
+		req->mlo_chip_info[0].hw_link_id[0] = 0;
+		req->mlo_chip_info[0].valid_mlo_link_id[0] = 1;
+	}
+}
+
+static void icnss_populate_gpio_config(struct icnss_priv *priv,
+				       struct wlfw_host_cap_req_msg_v01 *req,
+				       int gpio_info_type, u32 *cfg_arr)
+{
+	/*parse GPIO config*/
+	if (cfg_arr[WLFW_GPIO_ARRAY_VALID_V01]) {
+		req->gpio_config[gpio_info_type].gpio_num = cfg_arr[WLFW_GPIO_NUM_V01];
+		req->gpio_config[gpio_info_type].gpio_name = cfg_arr[WLFW_GPIO_NAME_V01];
+		req->gpio_config[gpio_info_type].pmic_index = cfg_arr[WLFW_PMIC_INDEX_V01];
+		req->gpio_config[gpio_info_type].gpio_type = cfg_arr[WLFW_GPIO_TYPE_V01];
+		req->gpio_config[gpio_info_type].output_value = cfg_arr[WLFW_OUTPUT_VALUE_V01];
+		req->gpio_config[gpio_info_type].func = cfg_arr[WLFW_FUNC_V01];
+		req->gpio_config[gpio_info_type].direction = cfg_arr[WLFW_DIRECTION_V01];
+		req->gpio_config[gpio_info_type].drive_strength = cfg_arr[WLFW_DRIVE_V01];
+		req->gpio_config[gpio_info_type].bias = cfg_arr[WLFW_BIAS_V01];
+		req->gpio_config[gpio_info_type].is_clk = cfg_arr[WLFW_IS_CLK_V01];
+		req->gpio_config[gpio_info_type].is_wake = cfg_arr[WLFW_IS_WAKE_V01];
+		req->gpio_config[gpio_info_type].intrpt_trigger_type = cfg_arr[WLFW_INTRPT_TRIGGER_TYPE_V01];
+		req->gpio_config[gpio_info_type].priority = cfg_arr[WLFW_PRIORITY_V01];
+		req->gpio_config[gpio_info_type].gpio_bitreserved = cfg_arr[WLFW_GPIO_BITRESERVED_V01];
+		icnss_pr_dbg("GPIO_NUM: %d, GPIO_NAME: %s, PMIC_INDEX: %d, GPIO_TYPE: %s\n",
+			     req->gpio_config[gpio_info_type].gpio_num,
+			     icnss_gpio_name_str(req->gpio_config[gpio_info_type].gpio_name),
+			     req->gpio_config[gpio_info_type].pmic_index,
+			     icnss_gpio_type_str(req->gpio_config[gpio_info_type].gpio_type));
+		icnss_pr_dbg("OUTPUT_VALUE: %s, FUNC_SELECT: %d, GPIO_DIRECTION: %s, DRIVE_STRENGTH: %d\n",
+			     icnss_gpio_output_str(req->gpio_config[gpio_info_type].output_value),
+			     req->gpio_config[gpio_info_type].func,
+			     icnss_gpio_direction_str(req->gpio_config[gpio_info_type].direction),
+			     req->gpio_config[gpio_info_type].drive_strength);
+		icnss_pr_dbg("BIAS_TYPE: %s, IS_CLK: %d, IS_WAKE: %d, INTRPT_TRIGGER_TYPE: %s\n",
+			     icnss_gpio_bias_str(req->gpio_config[gpio_info_type].bias),
+			     req->gpio_config[gpio_info_type].is_clk,
+			     req->gpio_config[gpio_info_type].is_wake,
+			     icnss_gpio_intr_trigger_str(req->gpio_config[gpio_info_type].intrpt_trigger_type));
+		icnss_pr_dbg("PRIORITY: %d, GPIO_BITRESERVED: %d, GPIO_ARRAY_VALID: %d, GPIO_OWNER: %d\n",
+			     req->gpio_config[gpio_info_type].priority,
+			     req->gpio_config[gpio_info_type].gpio_bitreserved,
+			     priv->gpio_config_arr[gpio_info_type][WLFW_GPIO_ARRAY_VALID_V01],
+			     priv->gpio_config_arr[gpio_info_type][WLFW_GPIO_OWNER_V01]);
+
+		//Note: Cleanup this section later once FW has stable support for NEW gpio_config structure
+		if (cfg_arr[WLFW_GPIO_NUM_V01]) {
+			req->gpio_info[gpio_info_type] = cfg_arr[WLFW_GPIO_NUM_V01];
+			icnss_pr_dbg("GPIO_NUM: %d", req->gpio_info[gpio_info_type]);
+		} else {
+			req->gpio_info[gpio_info_type] = QMI_WLFW_GPIO_INVALID_V01;
+		}
+	} else {
+		//support backward compatibilty
+		if (cfg_arr[WLFW_GPIO_NUM_V01]) {
+			req->gpio_info[gpio_info_type] = cfg_arr[WLFW_GPIO_NUM_V01];
+			icnss_pr_dbg("GPIO_NUM: %d", req->gpio_info[gpio_info_type]);
+		} else {
+			req->gpio_info[gpio_info_type] = QMI_WLFW_GPIO_INVALID_V01;
+			req->gpio_config[gpio_info_type].gpio_num = QMI_WLFW_GPIO_INVALID_V01;
+		}
+	}
+}
+
 int wlfw_host_cap_send_sync(struct icnss_priv *priv)
 {
 	struct wlfw_host_cap_req_msg_v01 *req;
 	struct wlfw_host_cap_resp_msg_v01 *resp;
 	struct qmi_txn txn;
 	int ddr_type;
-	u32 gpio;
-	int ret = 0;
+	int ret = 0, i = 0;
 	u64 iova_start = 0, iova_size = 0,
-	    iova_ipa_start = 0, iova_ipa_size = 0;
+	    iova_ipa_start = 0, iova_ipa_size = 0, feature_list = 0;
 
 	icnss_pr_dbg("Sending host capability message, state: 0x%lx\n",
 		    priv->state);
@@ -3505,6 +3767,16 @@ int wlfw_host_cap_send_sync(struct icnss_priv *priv)
 	req->host_build_type_valid = 1;
 	req->host_build_type = icnss_get_host_build_type();
 
+	icnss_wlfw_host_cap_parse_mlo(priv, req);
+
+	ret = icnss_get_feature_list(priv, &feature_list);
+	if (!ret) {
+		req->feature_list_valid = 1;
+		req->feature_list = feature_list;
+		icnss_pr_dbg("Sending feature list 0x%llx\n",
+			     req->feature_list);
+	}
+
 	if (priv->wlan_en_delay_ms >= 100) {
 		icnss_pr_dbg("Setting WLAN_EN delay: %d ms\n",
 			     priv->wlan_en_delay_ms);
@@ -3513,53 +3785,26 @@ int wlfw_host_cap_send_sync(struct icnss_priv *priv)
 	}
 
 	/* ddr_type = 7(LPDDR4) and 8(LPDDR5) */
-	ddr_type = of_fdt_get_ddrtype();
+	ddr_type = priv->ddr_type;
 	if (ddr_type > 0) {
 		icnss_pr_dbg("DDR Type: %d\n", ddr_type);
 		req->ddr_type_valid = 1;
 		req->ddr_type = ddr_type;
 	}
 
-	ret = of_property_read_u32(priv->pdev->dev.of_node, "wlan-en-gpio",
-				   &gpio);
-	if (!ret) {
-		icnss_pr_dbg("WLAN_EN_GPIO modified through DT: %d\n", gpio);
-		req->gpio_info_valid = 1;
-		req->gpio_info[WLAN_EN_GPIO_V01] = gpio;
-	} else {
-		req->gpio_info[WLAN_EN_GPIO_V01] = 0xFFFF;
+	for (i = 0; i < GPIO_TYPE_MAX_V01; i++) {
+		if (priv->gpio_config_arr[i][WLFW_GPIO_ARRAY_VALID_V01]) {
+			if (priv->gpio_config_arr[i][WLFW_GPIO_OWNER_V01])
+				icnss_populate_gpio_config(priv, req, i, priv->gpio_config_arr[i]);
+
+			req->gpio_config_valid = 1;
+			req->gpio_config_len = GPIO_TYPE_MAX_V01;
+		} else {
+			icnss_populate_gpio_config(priv, req, i, priv->gpio_config_arr[i]);
+		}
 	}
 
-	ret = of_property_read_u32(priv->pdev->dev.of_node, "bt-en-gpio",
-				   &gpio);
-	if (!ret) {
-		icnss_pr_dbg("BT_EN_GPIO modified through DT: %d\n", gpio);
-		req->gpio_info_valid = 1;
-		req->gpio_info[BT_EN_GPIO_V01] = gpio;
-	} else {
-		req->gpio_info[BT_EN_GPIO_V01] = 0xFFFF;
-	}
-
-	ret = of_property_read_u32(priv->pdev->dev.of_node, "host-sol-gpio",
-				   &gpio);
-	if (!ret) {
-		icnss_pr_dbg("HOST_SOL_GPIO modified through DT: %d\n", gpio);
-		req->gpio_info_valid = 1;
-		req->gpio_info[HOST_SOL_GPIO_V01] = gpio;
-	} else {
-		req->gpio_info[HOST_SOL_GPIO_V01] = 0xFFFF;
-	}
-
-	ret = of_property_read_u32(priv->pdev->dev.of_node, "target-sol-gpio",
-				   &gpio);
-	if (!ret) {
-		icnss_pr_dbg("TARGET_SOL_GPIO modified through DT: %d\n", gpio);
-		req->gpio_info_valid = 1;
-		req->gpio_info[TARGET_SOL_GPIO_V01] = gpio;
-	} else {
-		req->gpio_info[TARGET_SOL_GPIO_V01] = 0xFFFF;
-	}
-
+	req->gpio_info_valid = 1;
 	req->gpio_info_len = GPIO_TYPE_MAX_V01;
 
 	ret = qmi_txn_init(&priv->qmi, &txn,
@@ -3613,7 +3858,6 @@ int icnss_wlfw_get_info_send_sync(struct icnss_priv *plat_priv, int type,
 	struct wlfw_get_info_resp_msg_v01 *resp;
 	struct qmi_txn txn;
 	int ret = 0;
-	int flags = GFP_KERNEL & ~__GFP_DIRECT_RECLAIM;
 
 	if (cmd_len > QMI_WLFW_MAX_DATA_SIZE_V01)
 		return -EINVAL;
@@ -3621,11 +3865,11 @@ int icnss_wlfw_get_info_send_sync(struct icnss_priv *plat_priv, int type,
 	if (test_bit(ICNSS_FW_DOWN, &plat_priv->state))
 		return -EINVAL;
 
-	req = kzalloc(sizeof(*req), flags);
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
 	if (!req)
 		return -ENOMEM;
 
-	resp = kzalloc(sizeof(*resp), flags);
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
 	if (!resp) {
 		kfree(req);
 		return -ENOMEM;
@@ -3654,19 +3898,7 @@ int icnss_wlfw_get_info_send_sync(struct icnss_priv *plat_priv, int type,
 		goto out;
 	}
 
-	ret = qmi_txn_wait(&txn, plat_priv->ctrl_params.qmi_timeout);
-	if (ret < 0) {
-		icnss_pr_err("Failed to wait for response of get info request, err: %d\n",
-			    ret);
-		goto out;
-	}
-
-	if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
-		icnss_pr_err("Get info request failed, result: %d, err: %d\n",
-			    resp->resp.result, resp->resp.error);
-		ret = -resp->resp.result;
-		goto out;
-	}
+	qmi_txn_cancel(&txn);
 
 	kfree(req);
 	kfree(resp);
@@ -3885,6 +4117,23 @@ out:
 	return ret;
 }
 
+/**
+ * icnss_wlfw_xo_trim_result_send_sync - Notify the XO trim result to target.
+ * @plat_priv: Pointer to platform driver context.
+ * @result: XO trim result.
+ *
+ * Return: 0 on success, errno othrewise
+ */
+int icnss_wlfw_xo_trim_result_send_sync(struct icnss_priv *priv,
+					int result)
+{
+	enum wlfw_misc_req_enum_v01 type = (result ?
+					    WLFW_REQ_XO_TRIM_FAIL_V01 :
+					    WLFW_REQ_XO_TRIM_SUCCESS_V01);
+
+	return icnss_wlfw_misc_req_send_sync(priv, type);
+}
+
 /* IMS Service */
 static int ims_subscribe_for_indication_send_async(struct icnss_priv *priv)
 {
@@ -4037,7 +4286,7 @@ static int ims_new_server(struct qmi_handle *qmi,
 	sq.sq_family = AF_QIPCRTR;
 	sq.sq_node = service->node;
 	sq.sq_port = service->port;
-	ret = kernel_connect(qmi->sock, (struct sockaddr *)&sq, sizeof(sq), 0);
+	ret = cnss_kernel_connect(qmi->sock, &sq, sizeof(sq), 0);
 	if (ret < 0) {
 		icnss_pr_err("Fail to connect to remote service port\n");
 		return ret;
@@ -4085,4 +4334,244 @@ int icnss_register_ims_service(struct icnss_priv *priv)
 void icnss_unregister_ims_service(struct icnss_priv *priv)
 {
 	qmi_handle_release(&priv->ims_qmi);
+}
+
+int icnss_set_feature_list(struct icnss_priv *priv,
+			   enum cnss_feature_v01 feature)
+{
+	if (unlikely(!priv || feature >= CNSS_MAX_FEATURE_V01))
+		return -EINVAL;
+
+	priv->feature_list |= 1 << feature;
+	return 0;
+}
+
+int icnss_get_feature_list(struct icnss_priv *priv,
+			   u64 *feature_list)
+{
+	if (unlikely(!priv))
+		return -EINVAL;
+
+	*feature_list = priv->feature_list;
+	return 0;
+}
+
+int icnss_load_phy_ucode(struct icnss_priv *priv)
+{
+	struct icnss_fw_mem *phy_ucode_mem = &priv->phy_ucode_mem;
+	char filename[ICNSS_MAX_FILE_NAME];
+	const struct firmware *fw_entry = NULL;
+	int ret = 0;
+
+	if (!phy_ucode_mem->va && !phy_ucode_mem->size) {
+		icnss_add_fw_prefix_name(priv, filename, DEFAULT_PHY_UCODE_FILE_NAME);
+		ret = firmware_request_nowarn(&fw_entry, filename,
+					      &priv->pdev->dev);
+		if (ret) {
+			icnss_pr_err("Failed to load M3 image: %s\n", filename);
+			return ret;
+		}
+
+		phy_ucode_mem->va = dma_alloc_coherent(&priv->pdev->dev,
+						       fw_entry->size, &phy_ucode_mem->pa,
+						       GFP_KERNEL);
+		if (!phy_ucode_mem->va) {
+			icnss_pr_err("Failed to allocate memory for M3, size: 0x%zx\n",
+				     fw_entry->size);
+			release_firmware(fw_entry);
+			return -ENOMEM;
+		}
+
+		memcpy(phy_ucode_mem->va, fw_entry->data, fw_entry->size);
+		phy_ucode_mem->size = fw_entry->size;
+		release_firmware(fw_entry);
+	}
+
+	return 0;
+}
+
+int icnss_wlfw_phy_ucode_dnld_send_sync(struct icnss_priv *priv)
+{
+	struct wlfw_m3_info_req_msg_v01 *req;
+	struct wlfw_m3_info_resp_msg_v01 *resp;
+	struct qmi_txn txn;
+	struct icnss_fw_mem *phy_ucode_mem = &priv->phy_ucode_mem;
+	int ret = 0;
+
+	icnss_pr_dbg("Sending Phy ucode information message, state");
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
+
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
+	if (!resp) {
+		kfree(req);
+		return -ENOMEM;
+	}
+
+	if (!phy_ucode_mem->pa || !phy_ucode_mem->size) {
+		icnss_pr_err("Memory for Phy ucode is not available\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	icnss_pr_dbg("Phy ucode memory, va: 0x%pK, pa: %pa, size: 0x%zx\n",
+		     phy_ucode_mem->va, &phy_ucode_mem->pa, phy_ucode_mem->size);
+
+	req->addr = priv->phy_ucode_mem.pa;
+	req->size = priv->phy_ucode_mem.size;
+
+	ret = qmi_txn_init(&priv->qmi, &txn,
+			   wlfw_m3_info_resp_msg_v01_ei, resp);
+	if (ret < 0) {
+		icnss_pr_err("Failed to initialize txn for Phy ucode information request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&priv->qmi, NULL, &txn,
+			       QMI_WLFW_M3_INFO_REQ_V01,
+			       WLFW_M3_INFO_REQ_MSG_V01_MAX_MSG_LEN,
+			       wlfw_m3_info_req_msg_v01_ei, req);
+	if (ret < 0) {
+		qmi_txn_cancel(&txn);
+		icnss_pr_err("Failed to send Phy ucode information request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, priv->ctrl_params.qmi_timeout);
+	if (ret < 0) {
+		icnss_pr_err("Failed to wait for response of Phy ucode information request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
+		icnss_pr_err("Phy ucode information request failed, result: %d, err: %d\n",
+			     resp->resp.result, resp->resp.error);
+		ret = -resp->resp.result;
+		goto out;
+	}
+
+	kfree(req);
+	kfree(resp);
+	return 0;
+
+out:
+	ICNSS_QMI_ASSERT();
+	kfree(req);
+	kfree(resp);
+	return ret;
+}
+
+int icnss_load_aux(struct icnss_priv *priv)
+{
+	struct icnss_fw_mem *aux_mem = &priv->aux_mem;
+	char filename[ICNSS_MAX_FILE_NAME];
+	const struct firmware *fw_entry = NULL;
+	int ret = 0;
+
+	if (!aux_mem->va && !aux_mem->size) {
+		icnss_add_fw_prefix_name(priv, filename, DEFAULT_AUX_FILE_NAME);
+		ret = firmware_request_nowarn(&fw_entry, filename,
+					      &priv->pdev->dev);
+		if (ret) {
+			icnss_pr_err("Failed to load AUX image: %s\n", filename);
+			return ret;
+		}
+
+		aux_mem->va = dma_alloc_coherent(&priv->pdev->dev,
+						 fw_entry->size, &aux_mem->pa,
+						 GFP_KERNEL);
+		if (!aux_mem->va) {
+			icnss_pr_err("Failed to allocate memory for AUX, size: 0x%zx\n",
+				     fw_entry->size);
+			release_firmware(fw_entry);
+			return -ENOMEM;
+		}
+
+		memcpy(aux_mem->va, fw_entry->data, fw_entry->size);
+		aux_mem->size = fw_entry->size;
+		release_firmware(fw_entry);
+	}
+
+	return 0;
+}
+
+int icnss_wlfw_aux_dnld_send_sync(struct icnss_priv *priv)
+{
+	struct wlfw_aux_uc_info_req_msg_v01 *req;
+	struct wlfw_aux_uc_info_resp_msg_v01 *resp;
+	struct qmi_txn txn;
+	struct icnss_fw_mem *aux_mem = &priv->aux_mem;
+	int ret = 0;
+
+	icnss_pr_dbg("Sending Aux file download message");
+
+	req = kzalloc(sizeof(*req), GFP_KERNEL);
+	if (!req)
+		return -ENOMEM;
+
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
+	if (!resp) {
+		kfree(req);
+		return -ENOMEM;
+	}
+
+	if (!aux_mem->pa || !aux_mem->size) {
+		icnss_pr_err("Memory for AUX is not available\n");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	icnss_pr_dbg("AUX memory, va: 0x%pK, pa: %pa, size: 0x%zx\n",
+		     aux_mem->va, &aux_mem->pa, aux_mem->size);
+
+	req->addr = priv->aux_mem.pa;
+	req->size = priv->aux_mem.size;
+
+	ret = qmi_txn_init(&priv->qmi, &txn,
+			   wlfw_aux_uc_info_resp_msg_v01_ei, resp);
+	if (ret < 0) {
+		icnss_pr_err("Failed to initialize txn for QMI_WLFW_AUX_UC_INFO_REQ_V01 request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_send_request(&priv->qmi, NULL, &txn,
+			       QMI_WLFW_AUX_UC_INFO_REQ_V01,
+			       WLFW_AUX_UC_INFO_REQ_MSG_V01_MAX_MSG_LEN,
+			       wlfw_aux_uc_info_req_msg_v01_ei, req);
+	if (ret < 0) {
+		qmi_txn_cancel(&txn);
+		icnss_pr_err("Failed to send QMI_WLFW_AUX_UC_INFO_REQ_V01 request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	ret = qmi_txn_wait(&txn, priv->ctrl_params.qmi_timeout);
+	if (ret < 0) {
+		icnss_pr_err("Failed to wait for response of QMI_WLFW_AUX_UC_INFO_REQ_V01 request, err: %d\n",
+			     ret);
+		goto out;
+	}
+
+	if (resp->resp.result != QMI_RESULT_SUCCESS_V01) {
+		icnss_pr_err("QMI_WLFW_AUX_UC_INFO_REQ_V01 request failed, result: %d, err: %d\n",
+			     resp->resp.result, resp->resp.error);
+		ret = -resp->resp.result;
+		goto out;
+	}
+
+	kfree(req);
+	kfree(resp);
+	return 0;
+
+out:
+	ICNSS_QMI_ASSERT();
+	kfree(req);
+	kfree(resp);
+	return ret;
 }

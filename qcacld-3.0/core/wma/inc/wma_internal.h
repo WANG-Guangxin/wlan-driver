@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -574,8 +574,8 @@ __wma_handle_vdev_stop_rsp(struct vdev_stop_response *resp_event);
 void wma_hold_req_timer(void *data);
 struct wma_target_req *wma_fill_hold_req(tp_wma_handle wma,
 				    uint8_t vdev_id, uint32_t msg_type,
-				    uint8_t type, void *params,
-				    uint32_t timeout);
+				    uint8_t type, uint8_t *mac_addr,
+				    void *params, uint32_t timeout);
 
 /**
  * wma_add_bss() - Add BSS request to fw as per opmode
@@ -938,7 +938,8 @@ QDF_STATUS wma_set_mcc_channel_time_latency
 QDF_STATUS wma_set_mcc_channel_time_quota
 	(tp_wma_handle wma,
 	uint32_t adapter_1_chan_number,
-	uint32_t adapter_1_quota, uint32_t adapter_2_chan_number);
+	uint32_t adapter_1_quota, uint32_t adapter_2_chan_number,
+	uint8_t band_1, uint8_t band_2);
 
 /**
  * wma_process_rate_update_indate() - rate update indication
@@ -974,18 +975,6 @@ QDF_STATUS wma_tx_detach(tp_wma_handle wma_handle);
  */
 int wma_mcc_vdev_tx_pause_evt_handler(void *handle, uint8_t *event,
 					     uint32_t len);
-#endif
-
-#if defined(CONFIG_HL_SUPPORT) && defined(QCA_BAD_PEER_TX_FLOW_CL)
-QDF_STATUS wma_process_init_bad_peer_tx_ctl_info(tp_wma_handle wma,
-					struct t_bad_peer_txtcl_config *config);
-#else
-static inline QDF_STATUS
-wma_process_init_bad_peer_tx_ctl_info(tp_wma_handle wma,
-			struct t_bad_peer_txtcl_config *config)
-{
-	return QDF_STATUS_E_FAILURE;
-}
 #endif
 
 QDF_STATUS wma_process_init_thermal_info(tp_wma_handle wma,
@@ -1166,6 +1155,8 @@ int wma_wow_wakeup_host_event(void *handle, uint8_t *event,
 
 int wma_d0_wow_disable_ack_event(void *handle, uint8_t *event, uint32_t len);
 
+void wma_wow_log_deferred_wakeup(struct wlan_objmgr_psoc *psoc);
+
 int wma_pdev_resume_event_handler(void *handle, uint8_t *event, uint32_t len);
 
 void wma_del_ts_req(tp_wma_handle wma, struct del_ts_params *msg);
@@ -1239,7 +1230,7 @@ wma_set_auto_shutdown_timer_req(tp_wma_handle wma_handle,
 				struct auto_shutdown_cmd *auto_sh_cmd);
 #endif
 
-#ifdef WLAN_FEATURE_TSF
+#ifdef WLAN_FEATURE_TSF_PLUS
 int wma_vdev_tsf_handler(void *handle, uint8_t *data, uint32_t data_len);
 QDF_STATUS wma_capture_tsf(tp_wma_handle wma_handle, uint32_t vdev_id);
 QDF_STATUS wma_reset_tsf_gpio(tp_wma_handle wma_handle, uint32_t vdev_id);
@@ -1289,6 +1280,13 @@ static inline QDF_STATUS wma_set_tsf_gpio_pin(WMA_HANDLE handle, uint32_t pin)
 {
 	return QDF_STATUS_E_INVAL;
 }
+
+static inline QDF_STATUS wma_set_tsf_auto_report(WMA_HANDLE handle,
+						 uint32_t vdev_id,
+						 uint32_t param_id, bool ena)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
 #endif
 
 QDF_STATUS wma_set_wisa_params(tp_wma_handle wma, struct sir_wisa_params *wisa);
@@ -1330,6 +1328,17 @@ QDF_STATUS wma_process_ch_avoid_update_req(tp_wma_handle wma_handle,
 #ifdef FEATURE_WLAN_TDLS
 int wma_update_tdls_peer_state(WMA_HANDLE handle,
 			       struct tdls_peer_update_state *peer_state);
+
+/*
+ * wma_update_tdls_off_chan_mode() - Process the message from TDLS to send
+ * off-channel mode to firmware
+ * @handle: ol scn handle
+ * @ch_params: off-channel params
+ *
+ * Return: 0 for success or error code
+ */
+int wma_update_tdls_off_chan_mode(WMA_HANDLE handle,
+				  struct tdls_channel_switch_params *ch_params);
 #endif
 
 void wma_set_vdev_mgmt_rate(tp_wma_handle wma, uint8_t vdev_id);
@@ -1377,6 +1386,7 @@ void wma_remove_req(tp_wma_handle wma, uint8_t vdev_id,
  * wma_find_remove_req_msgtype() - find and remove request for vdev id
  * @wma: wma handle
  * @vdev_id: vdev id
+ * @macaddr: MAC address
  * @msg_type: message request type
  *
  * Find target request for given vdev id & sub type of request.
@@ -1386,6 +1396,7 @@ void wma_remove_req(tp_wma_handle wma, uint8_t vdev_id,
  */
 struct wma_target_req *wma_find_remove_req_msgtype(tp_wma_handle wma,
 						   uint8_t vdev_id,
+						   struct qdf_mac_addr *macaddr,
 						   uint32_t msg_type);
 
 /**

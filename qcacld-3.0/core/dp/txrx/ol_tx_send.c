@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -269,7 +269,7 @@ ol_tx_send_nonstd(struct ol_txrx_pdev_t *pdev,
 
 static inline bool
 ol_tx_download_done_base(struct ol_txrx_pdev_t *pdev,
-			 A_STATUS status, qdf_nbuf_t msdu, uint16_t msdu_id)
+			 QDF_STATUS status, qdf_nbuf_t msdu, uint16_t msdu_id)
 {
 	struct ol_tx_desc_t *tx_desc;
 	bool is_frame_freed = false;
@@ -287,11 +287,12 @@ ol_tx_download_done_base(struct ol_txrx_pdev_t *pdev,
 			pdev->tx_mgmt_cb.download_cb;
 		if (download_cb) {
 			download_cb(pdev->tx_mgmt_cb.ctxt,
-				    tx_desc->netbuf, status != A_OK);
+				    tx_desc->netbuf,
+				    status != QDF_STATUS_SUCCESS);
 		}
 	}
 
-	if (status != A_OK) {
+	if (status != QDF_STATUS_SUCCESS) {
 		ol_tx_target_credit_incr(pdev, msdu);
 		ol_tx_desc_frame_free_nonstd(pdev, tx_desc,
 					     1 /* download err */);
@@ -314,7 +315,7 @@ ol_tx_download_done_base(struct ol_txrx_pdev_t *pdev,
 
 void
 ol_tx_download_done_ll(void *pdev,
-		       A_STATUS status, qdf_nbuf_t msdu, uint16_t msdu_id)
+		       QDF_STATUS status, qdf_nbuf_t msdu, uint16_t msdu_id)
 {
 	ol_tx_download_done_base((struct ol_txrx_pdev_t *)pdev, status, msdu,
 				 msdu_id);
@@ -322,7 +323,7 @@ ol_tx_download_done_ll(void *pdev,
 
 void
 ol_tx_download_done_hl_retain(void *txrx_pdev,
-			      A_STATUS status,
+			      QDF_STATUS status,
 			      qdf_nbuf_t msdu, uint16_t msdu_id)
 {
 	struct ol_txrx_pdev_t *pdev = txrx_pdev;
@@ -332,23 +333,26 @@ ol_tx_download_done_hl_retain(void *txrx_pdev,
 
 void
 ol_tx_download_done_hl_free(void *txrx_pdev,
-			    A_STATUS status, qdf_nbuf_t msdu, uint16_t msdu_id)
+			    QDF_STATUS status,
+			    qdf_nbuf_t msdu, uint16_t msdu_id)
 {
 	struct ol_txrx_pdev_t *pdev = txrx_pdev;
 	struct ol_tx_desc_t *tx_desc;
 	bool is_frame_freed;
 	uint8_t dp_status;
+	enum QDF_OPMODE opmode = QDF_MAX_NO_OF_MODE;
 
 	tx_desc = ol_tx_desc_find(pdev, msdu_id);
 	qdf_assert(tx_desc);
 	dp_status = qdf_dp_get_status_from_a_status(status);
+	if (qdf_likely(tx_desc->vdev))
+		opmode = tx_desc->vdev->qdf_opmode;
 	DPTRACE(qdf_dp_trace_ptr(msdu,
 				 QDF_DP_TRACE_FREE_PACKET_PTR_RECORD,
 				 QDF_TRACE_DEFAULT_PDEV_ID,
 				 qdf_nbuf_data_addr(msdu),
 				 sizeof(qdf_nbuf_data(msdu)), tx_desc->id,
-				 dp_status, 0,
-				 tx_desc->vdev->qdf_opmode
+				 dp_status, 0, opmode
 				 ));
 
 	is_frame_freed = ol_tx_download_done_base(pdev, status, msdu, msdu_id);
@@ -364,7 +368,8 @@ ol_tx_download_done_hl_free(void *txrx_pdev,
 	if ((tx_desc->pkt_type != OL_TX_FRM_NO_FREE) &&
 	    (tx_desc->pkt_type < OL_TXRX_MGMT_TYPE_BASE)) {
 		qdf_atomic_add(1, &pdev->tx_queue.rsrc_cnt);
-		ol_tx_desc_frame_free_nonstd(pdev, tx_desc, status != A_OK);
+		ol_tx_desc_frame_free_nonstd(pdev, tx_desc,
+					     status != QDF_STATUS_SUCCESS);
 	}
 }
 
@@ -952,7 +957,7 @@ static void ol_tx_update_connectivity_stats(struct ol_tx_desc_t *tx_desc,
 	stats_rx = tx_desc->vdev->stats_rx;
 	ol_tx_flow_pool_unlock(tx_desc);
 
-	pkt_type_bitmap = wlan_dp_intf_get_pkt_type_bitmap_value(tx_desc->vdev);
+	pkt_type_bitmap = wlan_dp_intf_get_pkt_type_bitmap_value(osif_dev);
 
 	if (pkt_type_bitmap) {
 		if (status != htt_tx_status_download_fail)
@@ -1043,6 +1048,7 @@ ol_tx_completion_handler(ol_txrx_pdev_handle pdev,
 	uint64_t tx_tsf64;
 	uint8_t tid;
 	uint8_t dp_status;
+	enum QDF_OPMODE opmode = QDF_MAX_NO_OF_MODE;
 
 	TAILQ_INIT(&tx_descs);
 
@@ -1114,14 +1120,14 @@ ol_tx_completion_handler(ol_txrx_pdev_handle pdev,
 				  QDF_TX_DATA_PKT);
 
 		dp_status = ol_tx_comp_hw_to_qdf_status(status);
-
+		if (qdf_likely(tx_desc->vdev))
+			opmode = tx_desc->vdev->qdf_opmode;
 		DPTRACE(qdf_dp_trace_ptr(netbuf,
 			QDF_DP_TRACE_FREE_PACKET_PTR_RECORD,
 			QDF_TRACE_DEFAULT_PDEV_ID,
 			qdf_nbuf_data_addr(netbuf),
 			sizeof(qdf_nbuf_data(netbuf)), tx_desc->id, status,
-			dp_status,
-			tx_desc->vdev->qdf_opmode));
+			dp_status, opmode));
 
 		/*
 		 * If credits are reported through credit_update_ind then do not

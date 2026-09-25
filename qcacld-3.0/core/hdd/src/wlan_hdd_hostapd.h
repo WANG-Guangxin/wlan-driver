@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -63,23 +63,29 @@ void *hdd_filter_ft_info(const uint8_t *frame,
  * This function to support SAP channel change with CSA IE
  * set in the beacons.
  *
- * @dev: pointer to the net device.
+ * @link_info: pointer to hdd link info.
  * @target_chan_freq: target channel frequency.
+ * @ccfs1:  Value of CCFS1 in MHz
  * @target_bw: Target bandwidth to move.
  * If no bandwidth is specified, the value is CH_WIDTH_MAX
+ * @punct_bitmap: Puncturing bitmap of CSA, follows same convention as
+ * Disabled Subchannel Bitmap in 802.11be EHT-OP IE
  * @forced: Force to switch channel, ignore SCC/MCC check
+ * @allow_blocking: the calling thread allows be blocked
  *
  * Return: 0 for success, non zero for failure
  */
-int hdd_softap_set_channel_change(struct net_device *dev,
-					int target_chan_freq,
-					enum phy_ch_width target_bw,
-					bool forced);
+int hdd_softap_set_channel_change(struct wlan_hdd_link_info *link_info,
+				  int target_chan_freq, uint32_t ccfs1,
+				  enum phy_ch_width target_bw,
+				  uint32_t punct_bitmap,
+				  bool forced,
+				  bool allow_blocking);
 /**
  * hdd_stop_sap_set_tx_power() - Function to set tx power
  * for unsafe channel if restriction bit mask is set else stop the SAP.
  * @psoc: PSOC object information
- * @adapter: AP/SAP adapter
+ * @link_info: pointer of link info
  *
  * This function set tx power/stop the SAP interface
  *
@@ -87,13 +93,13 @@ int hdd_softap_set_channel_change(struct net_device *dev,
  *
  */
 void hdd_stop_sap_set_tx_power(struct wlan_objmgr_psoc *psoc,
-			       struct hdd_adapter *adapter);
+			       struct wlan_hdd_link_info *link_info);
 
 #ifdef FEATURE_WLAN_MCC_TO_SCC_SWITCH
 /**
  * hdd_sap_restart_with_channel_switch() - SAP channel change with E/CSA
  * @psoc: psoc common object
- * @ap_adapter: HDD adapter
+ * @link_info: hdd link info
  * @target_chan_freq: Channel frequency to which switch must happen
  * @target_bw: Bandwidth of the target channel
  * @forced: Force to switch channel, ignore SCC/MCC check
@@ -103,10 +109,10 @@ void hdd_stop_sap_set_tx_power(struct wlan_objmgr_psoc *psoc,
  * Return: QDF_STATUS_SUCCESS if successfully
  */
 QDF_STATUS hdd_sap_restart_with_channel_switch(struct wlan_objmgr_psoc *psoc,
-					       struct hdd_adapter *ap_adapter,
-					       uint32_t target_chan_freq,
-					       uint32_t target_bw,
-					       bool forced);
+					struct wlan_hdd_link_info *link_info,
+					uint32_t target_chan_freq,
+					uint32_t target_bw,
+					bool forced);
 
 /**
  * hdd_sap_restart_chan_switch_cb() - Function to restart SAP with
@@ -231,26 +237,53 @@ hdd_translate_wpa_to_csr_auth_type(uint8_t auth_suite[4]);
 eCsrEncryptionType
 hdd_translate_wpa_to_csr_encryption_type(uint8_t cipher_suite[4]);
 
-QDF_STATUS hdd_softap_sta_deauth(struct hdd_adapter *adapter,
+/**
+ * hdd_softap_sta_deauth() - handle deauth req from HDD
+ * @link_info: Pointer to hdd link info
+ * @param: Params to the operation
+ *
+ * This to take counter measure to handle deauth req from HDD
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS hdd_softap_sta_deauth(struct wlan_hdd_link_info *link_info,
 				 struct csr_del_sta_params *param);
 void hdd_softap_sta_disassoc(struct hdd_adapter *adapter,
 			     struct csr_del_sta_params *param);
 
-QDF_STATUS hdd_hostapd_sap_event_cb(struct sap_event *sap_event,
-				    void *context);
+/**
+ * hdd_hostapd_sap_event_cb() - callback to process sap event
+ * @sap_ctx: SAP context
+ * @sap_event: SAP event buffer
+ *
+ * Function for HDD to process event notification from sap
+ * module
+ * return: QDF_STATUS
+ */
+QDF_STATUS hdd_hostapd_sap_event_cb(struct sap_context *sap_ctx,
+				    struct sap_event *sap_event);
 /**
  * hdd_init_ap_mode() - to init the AP adaptor
- * @adapter: SAP/GO adapter
+ * @link_info: pointer of link_info
  * @reinit: true if re-init, otherwise initial init
- * @rtnl_held: true if rtnl lock is taken, otherwise false
  *
  * This API can be called to open the SAP session as well as
  * to create and store the vdev object. It also initializes necessary
  * SAP adapter related params.
  */
-QDF_STATUS hdd_init_ap_mode(struct hdd_adapter *adapter,
-			    bool reinit,
-			    bool rtnl_held);
+QDF_STATUS hdd_init_ap_mode(struct wlan_hdd_link_info *link_info,
+			    bool reinit);
+
+/**
+ * hdd_indicate_peers_deleted() - indicate peer delete for vdev
+ * @psoc: PSOC object information
+ * @vdev_id: vdev id
+ *
+ * This is callback for PE to call deauth from HDD layer.
+ * return: void
+ */
+void
+hdd_indicate_peers_deleted(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id);
 
 /**
  * hdd_deinit_ap_mode() - to deinit the AP adaptor
@@ -265,14 +298,14 @@ void hdd_deinit_ap_mode(struct wlan_hdd_link_info *link_info);
 void hdd_set_ap_ops(struct net_device *dev);
 /**
  * hdd_sap_create_ctx() - Wrapper API to create SAP context
- * @adapter: pointer to adapter
+ * @link_info: pointer to link info
  *
  * This wrapper API can be called to create the sap context. It will
  * eventually calls SAP API to create the sap context
  *
  * Return: true or false based on overall success or failure
  */
-bool hdd_sap_create_ctx(struct hdd_adapter *adapter);
+bool hdd_sap_create_ctx(struct wlan_hdd_link_info *link_info);
 /**
  * hdd_sap_destroy_ctx() - Wrapper API to destroy SAP context
  * @link_info: Pointer of link_info in adapter
@@ -311,27 +344,35 @@ int hdd_hostapd_stop(struct net_device *dev);
 int hdd_sap_context_init(struct hdd_context *hdd_ctx);
 void hdd_sap_context_destroy(struct hdd_context *hdd_ctx);
 #ifdef QCA_HT_2040_COEX
-QDF_STATUS hdd_set_sap_ht2040_mode(struct hdd_adapter *adapter,
-				   uint8_t channel_type);
-
 /**
- * hdd_get_sap_ht2040_mode() - get ht2040 mode
- * @adapter: pointer to adapter
+ * hdd_set_sap_ht2040_mode() - set ht2040 mode
+ * @link_info: pointer to link_info
  * @channel_type: given channel type
  *
  * Return: QDF_STATUS_SUCCESS if successfully
  */
-QDF_STATUS hdd_get_sap_ht2040_mode(struct hdd_adapter *adapter,
+QDF_STATUS hdd_set_sap_ht2040_mode(struct wlan_hdd_link_info *link_info,
+				   uint8_t channel_type);
+
+/**
+ * hdd_get_sap_ht2040_mode() - get ht2040 mode
+ * @link_info: pointer to link_info
+ * @channel_type: given channel type
+ *
+ * Return: QDF_STATUS_SUCCESS if successfully
+ */
+QDF_STATUS hdd_get_sap_ht2040_mode(struct wlan_hdd_link_info *link_info,
 				   enum eSirMacHTChannelType *channel_type);
 #else
-static inline QDF_STATUS hdd_set_sap_ht2040_mode(struct hdd_adapter *adapter,
-						 uint8_t channel_type)
+static inline QDF_STATUS
+hdd_set_sap_ht2040_mode(struct wlan_hdd_link_info *link_info,
+			uint8_t channel_type)
 {
 	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS hdd_get_sap_ht2040_mode(
-				struct hdd_adapter *adapter,
+				struct wlan_hdd_link_info *link_info,
 				enum eSirMacHTChannelType *channel_type)
 {
 	return QDF_STATUS_E_FAILURE;
@@ -357,11 +398,15 @@ int wlan_hdd_cfg80211_stop_ap(struct wiphy *wiphy,
 int wlan_hdd_cfg80211_start_ap(struct wiphy *wiphy,
 			       struct net_device *dev,
 			       struct cfg80211_ap_settings *params);
-
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
+int wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
+				    struct net_device *dev,
+				    struct cfg80211_ap_update *params);
+#else
 int wlan_hdd_cfg80211_change_beacon(struct wiphy *wiphy,
 				    struct net_device *dev,
 				    struct cfg80211_beacon_data *params);
-
+#endif
 /**
  * hdd_is_peer_associated - is peer connected to softap
  * @adapter: pointer to softap adapter
@@ -458,26 +503,82 @@ enum qca_wlan_802_11_mode hdd_convert_dot11mode_from_phymode(int phymode);
 void hdd_stop_sap_due_to_invalid_channel(struct work_struct *work);
 
 /**
- * hdd_is_any_sta_connecting() - check if any sta is connecting
+ * hdd_is_sta_connect_or_link_switch_in_prog() - check if any sta is connecting
+ * or in the middle of a link switch or or eapol is in progress
  * @hdd_ctx: hdd context
  * @op_mode: adapter mode
  *
- * Return: true if any sta is connecting
+ * Return: true if any sta is connecting/in link switch
  */
-bool hdd_is_any_sta_connecting(struct hdd_context *hdd_ctx,
-			       enum QDF_OPMODE op_mode);
+bool hdd_is_sta_connect_or_link_switch_in_prog(struct hdd_context *hdd_ctx,
+					       enum QDF_OPMODE op_mode);
 
 /**
  * wlan_hdd_configure_twt_responder() - configure twt responder in sap_config
  * @hdd_ctx: Pointer to hdd context
  * @twt_responder: twt responder configure value
+ * @vdev_id: Vdev id
+ * @sap_hw_mode: sap hardware mode
  *
  * Return: none
  */
 void
 wlan_hdd_configure_twt_responder(struct hdd_context *hdd_ctx,
-				 bool twt_responder);
+				 bool twt_responder, uint8_t vdev_id,
+				 eCsrPhyMode sap_hw_mode);
 #ifdef WLAN_FEATURE_11BE_MLO
+#ifdef WLAN_FEATURE_MULTI_LINK_SAP
+/**
+ * hdd_multi_link_sap_vdev_attach() - attach vdev with link_id
+ * update multi link parameter to vdev and sap_config.
+ * @link_info: Pointer to wlan_hdd_link_info
+ * @link_id: link id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS hdd_multi_link_sap_vdev_attach(struct wlan_hdd_link_info *link_info,
+					  unsigned int link_id);
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * wlan_hdd_validate_mlo_link_removal_request() - check link removal request
+ * @link_info: link info structure
+ * @config_tbtt: tbtt count from use space
+ *
+ * This API use to check if link removal is allow for current state and active
+ * link number
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_hdd_validate_mlo_link_removal_request(struct wlan_hdd_link_info *link_info,
+					   uint32_t config_tbtt);
+
+/**
+ * wlan_hdd_process_mlo_link_removal_cmd() - send link removal request to FW
+ * @link_info: link info structure
+ * @psoc: PSOC object information
+ * @params: link removal params
+ *
+ * This API use to send link removal request with WMI_MLO_LINK_REMOVAL_CMDID
+ * to FW.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_hdd_process_mlo_link_removal_cmd(struct wlan_hdd_link_info *link_info,
+				      struct wlan_objmgr_psoc *psoc,
+				      const struct  cfg80211_link_reconfig_removal_params *params);
+
+#endif
+#else
+static inline QDF_STATUS
+hdd_multi_link_sap_vdev_attach(struct wlan_hdd_link_info *link_info,
+			       unsigned int link_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
 /**
  * wlan_hdd_mlo_reset() - reset mlo configuration if start bss fails
  * @link_info: Pointer to link_info in hostapd adapter
@@ -491,6 +592,26 @@ static inline void wlan_hdd_mlo_reset(struct wlan_hdd_link_info *link_info)
 }
 #endif /* end WLAN_FEATURE_11BE_MLO */
 
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * wlan_hdd_mlo_sap_link_removal_cap() - get mlo sap link removal support
+ * @hdd_ctx: Pointer to hdd context
+ *
+ * Get link removal support from fw wmi service, if support set wiphy flag of
+ * NL80211_EXT_FEATURE_MLD_LINK_REMOVAL_OFFLOAD which hostapd/kernel will
+ * check when link removal request from user space.
+ *
+ * Return: true if support,false if not support
+ */
+bool wlan_hdd_mlo_sap_link_removal_cap(struct hdd_context *hdd_ctx);
+#else
+static inline
+bool wlan_hdd_mlo_sap_link_removal_cap(struct hdd_context *hdd_ctx)
+{
+	return false;
+}
+#endif
+
 #ifdef WLAN_FEATURE_SAP_ACS_OPTIMIZE
 /**
  * hdd_sap_is_acs_in_progress() - API to return if ACS is in progress
@@ -502,6 +623,30 @@ bool hdd_sap_is_acs_in_progress(struct wlan_objmgr_vdev *vdev);
 #else
 static inline
 bool hdd_sap_is_acs_in_progress(struct wlan_objmgr_vdev *vdev)
+{
+	return false;
+}
+#endif
+
+#ifdef WLAN_FEATURE_MULTI_LINK_SAP
+/**
+ * hdd_mlosap_check_support_link_num() - mlo sap to check if link
+ *                               number exceed max support link number
+ * @adapter: pointer to adapter
+ * Return: true if not exceed max support num.
+ */
+bool hdd_mlosap_check_support_link_num(struct hdd_adapter *adapter);
+
+/**
+ * hdd_mlosap_check_support_multi_link() - check if support multi-link
+ * @hdd_ctx: @hdd_ctx: Pointer to hdd context
+ *
+ * Return: true if support multi link.
+ */
+bool hdd_mlosap_check_support_multi_link(struct hdd_context *hdd_ctx);
+#else
+static inline
+bool hdd_mlosap_check_support_multi_link(struct hdd_context *hdd_ctx)
 {
 	return false;
 }
@@ -601,4 +746,59 @@ hdd_cp_stats_cstats_log_sap_go_dfs_event(struct wlan_hdd_link_info *li,
 {
 }
 #endif /* WLAN_CHIPSET_STATS */
+
+#ifdef WLAN_FEATURE_FILS_SK_SAP
+void hdd_hlp_work_queue(struct work_struct *work);
+void hdd_fils_hlp_rx(uint8_t vdev_id, hdd_cb_handle ctx, qdf_nbuf_t netbuf);
+static inline void hdd_fils_hlp_init(struct hdd_context *hdd_ctx)
+{
+	qdf_spinlock_create(&hdd_ctx->hdd_hlp_data_lock);
+	qdf_list_create(&hdd_ctx->hdd_hlp_data_list, 0);
+}
+
+static inline void hdd_fils_hlp_deinit(struct hdd_context *hdd_ctx)
+{
+	qdf_list_destroy(&hdd_ctx->hdd_hlp_data_list);
+	qdf_spinlock_destroy(&hdd_ctx->hdd_hlp_data_lock);
+}
+
+static inline void hdd_fils_hlp_workqueue_init(struct hdd_context *hdd_ctx)
+{
+	hdd_debug("HLP Processing WorkQueue Initialised");
+	INIT_WORK(&hdd_ctx->hlp_processing_work,
+		  hdd_hlp_work_queue);
+}
+#else
+static inline void hdd_fils_hlp_init(struct hdd_context *hdd_ctx)
+{}
+
+static inline void hdd_fils_hlp_deinit(struct hdd_context *hdd_ctx)
+{}
+
+static inline void hdd_fils_hlp_rx(uint8_t vdev_id, hdd_cb_handle ctx,
+				   qdf_nbuf_t netbuf)
+{}
+
+static inline void hdd_fils_hlp_workqueue_init(struct hdd_context *hdd_ctx)
+{}
+#endif
+
+/**
+ * hdd_ssr_restart_sap_cac_link() - Whether postpone sap link or not for SSR
+ * @adapter: adapter structure
+ * @link_info: link info structure
+ *
+ * This API use to check if the DFS sap link need to be postponed start or not
+ * in the SSR case if there is another partner link.
+ * And it can cover below cases:
+ * 1. If there is only one created/remaining DFS sap link not started, do not postpone.
+ * 2. If there is another 6GHz sap link not started, postpone the DFS sap link.
+ * 3. If there is another non-6GHz sap link not started, do not postpone.
+ *
+ * Return: True if need postpone otherwise false.
+ */
+bool
+hdd_ssr_restart_sap_cac_link(struct hdd_adapter *adapter,
+			     struct wlan_hdd_link_info *link_info);
+
 #endif /* end #if !defined(WLAN_HDD_HOSTAPD_H) */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -37,6 +37,7 @@
 #include <wlan_mlme_twt_public_struct.h>
 #endif
 #include <wlan_mlme_api.h>
+#include <wlan_reg_services_api.h>
 
 #ifdef WLAN_SUPPORT_TWT
 
@@ -354,7 +355,8 @@ QDF_STATUS wlan_cp_stats_vdev_cs_deinit(struct vdev_cp_stats *vdev_cs)
 
 QDF_STATUS wlan_cp_stats_pdev_cs_init(struct pdev_cp_stats *pdev_cs)
 {
-	pdev_cs->pdev_stats = qdf_mem_malloc(sizeof(struct pdev_mc_cp_stats));
+	pdev_cs->pdev_stats = qdf_mem_malloc(
+				MAX_MAC * sizeof(struct pdev_mc_cp_stats));
 	if (!pdev_cs->pdev_stats)
 		return QDF_STATUS_E_NOMEM;
 
@@ -459,6 +461,10 @@ QDF_STATUS ucfg_mc_cp_stats_inc_wake_lock_stats_by_protocol(
 	case QDF_PROTO_ICMPV6_NA:
 		stats->icmpv6_count++;
 		stats->ipv6_mcast_na_stats++;
+		break;
+	case QDF_PROTO_ICMPV6_MLQ:
+		stats->icmpv6_count++;
+		stats->ipv6_mcast_mlq_stats++;
 		break;
 	default:
 		break;
@@ -580,6 +586,7 @@ static void vdev_iterator(struct wlan_objmgr_psoc *psoc, void *vdev, void *arg)
 	stats->ipv6_mcast_ra_stats += vdev_stats->ipv6_mcast_ra_stats;
 	stats->ipv6_mcast_ns_stats += vdev_stats->ipv6_mcast_ns_stats;
 	stats->ipv6_mcast_na_stats += vdev_stats->ipv6_mcast_na_stats;
+	stats->ipv6_mcast_mlq_stats += vdev_stats->ipv6_mcast_mlq_stats;
 	stats->icmpv4_count += vdev_stats->icmpv4_count;
 	stats->icmpv6_count += vdev_stats->icmpv6_count;
 	stats->rssi_breach_wake_up_count +=
@@ -697,6 +704,7 @@ QDF_STATUS ucfg_mc_cp_stats_write_wow_stats(
 			     "\tIPv6 multicast RA: %u\n"
 			     "\tIPv6 multicast NS: %u\n"
 			     "\tIPv6 multicast NA: %u\n"
+			     "\tIPv6 multicast MLQ: %u\n"
 			     "\tICMPv4: %u\n"
 			     "\tICMPv6: %u\n"
 			     "\tRSSI Breach: %u\n"
@@ -717,6 +725,7 @@ QDF_STATUS ucfg_mc_cp_stats_write_wow_stats(
 			     wow_stats.ipv6_mcast_ra_stats,
 			     wow_stats.ipv6_mcast_ns_stats,
 			     wow_stats.ipv6_mcast_na_stats,
+			     wow_stats.ipv6_mcast_mlq_stats,
 			     wow_stats.icmpv4_count,
 			     wow_stats.icmpv6_count,
 			     wow_stats.rssi_breach_wake_up_count,
@@ -737,17 +746,30 @@ QDF_STATUS ucfg_mc_cp_stats_send_stats_request(struct wlan_objmgr_vdev *vdev,
 					       enum stats_req_type type,
 					       struct request_info *info)
 {
-	QDF_STATUS status;
+	QDF_STATUS status = QDF_STATUS_E_INVAL;
+	bool pending = false;
+	struct wlan_objmgr_psoc *psoc = wlan_vdev_get_psoc(vdev);
 
-	status = ucfg_mc_cp_stats_set_pending_req(wlan_vdev_get_psoc(vdev),
-						  type, info);
+	if (!psoc) {
+		cp_stats_err("psoc is null");
+		return status;
+	}
+
+	status = ucfg_mc_cp_stats_set_pending_req(psoc, type, info);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		cp_stats_err("ucfg_mc_cp_stats_set_pending_req pdev failed: %d",
 			     status);
 		return status;
 	}
 
-	return tgt_send_mc_cp_stats_req(wlan_vdev_get_psoc(vdev), type, info);
+	status = tgt_send_mc_cp_stats_req(psoc, type, info);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		cp_stats_err("send cp stats req type %d failed %d",
+			     type, status);
+		ucfg_mc_cp_stats_reset_pending_req(psoc, type, info, &pending);
+	}
+
+	return status;
 }
 
 #ifdef WLAN_FEATURE_BIG_DATA_STATS
@@ -812,7 +834,9 @@ QDF_STATUS ucfg_mc_cp_stats_get_tx_power(struct wlan_objmgr_vdev *vdev,
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 	struct vdev_mc_cp_stats *vdev_mc_stats;
 	struct vdev_cp_stats *vdev_cp_stat;
+	struct wlan_objmgr_psoc *psoc;
 	uint32_t vdev_power = 0;
+	uint32_t mac_id;
 
 	vdev_cp_stat = wlan_cp_stats_get_vdev_stats_obj(vdev);
 	if (vdev_cp_stat) {
@@ -827,6 +851,24 @@ QDF_STATUS ucfg_mc_cp_stats_get_tx_power(struct wlan_objmgr_vdev *vdev,
 	}
 
 	pdev = wlan_vdev_get_pdev(vdev);
+	if (!pdev) {
+		cp_stats_err("pdev is null");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	psoc = pdev->pdev_objmgr.wlan_psoc;
+	if (!psoc) {
+		cp_stats_err("psoc is null");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	mac_id = policy_mgr_mode_get_macid_by_vdev_id(psoc,
+						vdev->vdev_objmgr.vdev_id);
+	if (mac_id >= MAX_MAC) {
+		cp_stats_rl_err("invalid mac_id %d", mac_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
 	pdev_cp_stats_priv = wlan_cp_stats_get_pdev_stats_obj(pdev);
 	if (!pdev_cp_stats_priv) {
 		cp_stats_err("pdev cp stats object is null");
@@ -834,7 +876,7 @@ QDF_STATUS ucfg_mc_cp_stats_get_tx_power(struct wlan_objmgr_vdev *vdev,
 	}
 
 	wlan_cp_stats_pdev_obj_lock(pdev_cp_stats_priv);
-	pdev_mc_stats = pdev_cp_stats_priv->pdev_stats;
+	pdev_mc_stats = &pdev_cp_stats_priv->pdev_stats[mac_id];
 	*dbm = pdev_mc_stats->max_pwr;
 	wlan_cp_stats_pdev_obj_unlock(pdev_cp_stats_priv);
 
@@ -887,6 +929,13 @@ QDF_STATUS ucfg_mc_cp_stats_set_pending_req(struct wlan_objmgr_psoc *psoc,
 		wlan_cp_stats_psoc_obj_unlock(psoc_cp_stats_priv);
 		return QDF_STATUS_E_AGAIN;
 	}
+
+	if (psoc_mc_stats->pending.type_map & (1 << type)) {
+		cp_stats_err("Stats request of type %d is in progress", type);
+		wlan_cp_stats_psoc_obj_unlock(psoc_cp_stats_priv);
+		return QDF_STATUS_E_INVAL;
+	}
+
 	psoc_mc_stats->pending.type_map |= (1 << type);
 	psoc_mc_stats->pending.req[type] = *req;
 	wlan_cp_stats_psoc_obj_unlock(psoc_cp_stats_priv);
@@ -991,6 +1040,8 @@ void ucfg_mc_cp_stats_free_stats_resources(struct stats_event *ev)
 	qdf_mem_free(ev->peer_extended_stats);
 	ucfg_mc_cp_stats_free_peer_stats_info_ext(ev);
 	qdf_mem_free(ev->vdev_extd_stats);
+	if (ev->bcn_stats)
+		qdf_mem_free(ev->bcn_stats);
 	qdf_mem_zero(ev, sizeof(*ev));
 }
 
@@ -1057,10 +1108,12 @@ uint8_t wlan_cp_stats_get_rx_clear_count(struct wlan_objmgr_psoc *psoc,
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 	struct per_channel_stats *channel_stats;
 	struct channel_status *channel_status_list;
+	struct pdev_mc_cp_stats *pdev_mc_stats;
 	uint8_t total_channel, chan_load = 0;
 	uint8_t i;
 	uint32_t rx_clear_count = 0, cycle_count = 0;
 	bool found = false;
+	uint32_t mac_id;
 
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
 						    WLAN_CP_STATS_ID);
@@ -1073,13 +1126,20 @@ uint8_t wlan_cp_stats_get_rx_clear_count(struct wlan_objmgr_psoc *psoc,
 		goto release_ref;
 	}
 
+	mac_id = policy_mgr_mode_get_macid_by_vdev_id(psoc, vdev_id);
+	if (mac_id >= MAX_MAC) {
+		cp_stats_err("invalid mac_id %d", mac_id);
+		goto release_ref;
+	}
+
 	pdev_cp_stats_priv = wlan_cp_stats_get_pdev_stats_obj(pdev);
 	if (!pdev_cp_stats_priv) {
 		cp_stats_err("pdev cp stats object is null");
 		goto release_ref;
 	}
 
-	channel_stats = &pdev_cp_stats_priv->pdev_stats->chan_stats;
+	pdev_mc_stats = &pdev_cp_stats_priv->pdev_stats[mac_id];
+	channel_stats = &pdev_mc_stats->chan_stats;
 	channel_status_list = channel_stats->channel_status_list;
 	total_channel = channel_stats->total_channel;
 
@@ -1295,10 +1355,13 @@ wlan_cp_stats_update_channel_stats(struct per_channel_stats *channel_stats,
 	if (scanned_ch_width == CH_WIDTH_20MHZ) {
 		start_freq = ev_channel_stat->channel_freq;
 		end_freq = ev_channel_stat->channel_freq;
+	} else if (scanned_ch_width == CH_WIDTH_40MHZ &&
+		   wlan_reg_is_24ghz_ch_freq(ev_channel_stat->channel_freq)) {
+		start_freq = ev_channel_stat->channel_freq - 20;
+		end_freq = ev_channel_stat->channel_freq + 20;
 	} else {
-		range =
-		   wlan_reg_get_bonded_chan_entry(ev_channel_stat->channel_freq,
-						  scanned_ch_width, 0);
+		range = wlan_reg_get_bonded_chan_entry(ev_channel_stat->channel_freq,
+						       scanned_ch_width, 0);
 		if (!range) {
 			cp_stats_debug("range is NULL for freq %d, ch_width %d",
 				       ev_channel_stat->channel_freq,
@@ -1340,6 +1403,7 @@ void wlan_cp_stats_update_chan_info(struct wlan_objmgr_psoc *psoc,
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 	struct per_channel_stats *channel_stats;
 	struct channel_status *channel_status_list;
+	struct pdev_mc_cp_stats *pdev_mc_stats;
 	uint8_t total_channel;
 	uint8_t i;
 	bool found = false;
@@ -1363,7 +1427,12 @@ void wlan_cp_stats_update_chan_info(struct wlan_objmgr_psoc *psoc,
 		return;
 	}
 
-	channel_stats = &pdev_cp_stats_priv->pdev_stats->chan_stats;
+	/**
+	 * Store cp stats in mac0 always as vdev will not be up when
+	 * driver receives cp stats of each channel during ACS.
+	 */
+	pdev_mc_stats = &pdev_cp_stats_priv->pdev_stats[0];
+	channel_stats = &pdev_mc_stats->chan_stats;
 	channel_status_list = channel_stats->channel_status_list;
 	total_channel = channel_stats->total_channel;
 
@@ -1422,7 +1491,8 @@ ucfg_mc_cp_stats_get_channel_status(struct wlan_objmgr_pdev *pdev,
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 	struct per_channel_stats *channel_stats;
 	struct channel_status *entry;
-	uint8_t i;
+	struct pdev_mc_cp_stats *pdev_mc_stats;
+	uint8_t i, mac_id;
 
 	pdev_cp_stats_priv = wlan_cp_stats_get_pdev_stats_obj(pdev);
 	if (!pdev_cp_stats_priv) {
@@ -1430,14 +1500,16 @@ ucfg_mc_cp_stats_get_channel_status(struct wlan_objmgr_pdev *pdev,
 		return NULL;
 	}
 
-	channel_stats = &pdev_cp_stats_priv->pdev_stats->chan_stats;
+	for (mac_id = 0; mac_id < MAX_MAC; mac_id++) {
+		pdev_mc_stats = &pdev_cp_stats_priv->pdev_stats[mac_id];
+		channel_stats = &pdev_mc_stats->chan_stats;
 
-	for (i = 0; i < channel_stats->total_channel; i++) {
-		entry = &channel_stats->channel_status_list[i];
-		if (entry->channel_freq == chan_freq)
-			return entry;
+		for (i = 0; i < channel_stats->total_channel; i++) {
+			entry = &channel_stats->channel_status_list[i];
+			if (entry->channel_freq == chan_freq)
+				return entry;
+		}
 	}
-	cp_stats_err("Channel %d status info not exist", chan_freq);
 
 	return NULL;
 }
@@ -1446,6 +1518,8 @@ void ucfg_mc_cp_stats_clear_channel_status(struct wlan_objmgr_pdev *pdev)
 {
 	struct pdev_cp_stats *pdev_cp_stats_priv;
 	struct per_channel_stats *channel_stats;
+	struct pdev_mc_cp_stats *pdev_mc_stats;
+	uint8_t mac_id;
 
 	pdev_cp_stats_priv = wlan_cp_stats_get_pdev_stats_obj(pdev);
 	if (!pdev_cp_stats_priv) {
@@ -1453,8 +1527,11 @@ void ucfg_mc_cp_stats_clear_channel_status(struct wlan_objmgr_pdev *pdev)
 		return;
 	}
 
-	channel_stats = &pdev_cp_stats_priv->pdev_stats->chan_stats;
-	channel_stats->total_channel = 0;
+	for (mac_id = 0; mac_id < MAX_MAC; mac_id++) {
+		pdev_mc_stats = &pdev_cp_stats_priv->pdev_stats[mac_id];
+		channel_stats = &pdev_mc_stats->chan_stats;
+		channel_stats->total_channel = 0;
+	}
 }
 
 #endif

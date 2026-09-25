@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -207,6 +207,29 @@ QDF_STATUS mlo_mlme_clone_sta_security(struct wlan_objmgr_vdev *vdev,
 QDF_STATUS mlo_mlme_sta_op_class(struct wlan_objmgr_vdev *vdev,
 				 uint8_t *ml_ie);
 
+#ifdef ENABLE_CFG80211_BACKPORTS_MLO
+/**
+ * mlo_mlme_connect_get_partner_info() - Get partner link info from connect
+ * @vdev: Object manager vdev
+ * @req: cfg80211_connect_params data object to be passed to callback
+ * @partner_info: mlo_partner_info data object containing partner link info
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlo_mlme_connect_get_partner_info(struct wlan_objmgr_vdev *vdev,
+				  const struct cfg80211_connect_params *req,
+				  struct mlo_partner_info *partner_info);
+
+/**
+ * mlo_mlme_set_ieee_link_id() - Update ieee_link_id in vap
+ * @vdev: Object manager vdev
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS mlo_mlme_set_ieee_link_id(struct wlan_objmgr_vdev *vdev);
+#endif
+
 /**
  * mlo_mlme_validate_conn_req() - Validate connect request
  * @vdev: Object manager vdev
@@ -360,6 +383,19 @@ void mlo_get_ml_vdev_list(struct wlan_objmgr_vdev *vdev,
 			  struct wlan_objmgr_vdev **wlan_vdev_list);
 
 /**
+ * mlo_get_partner_vdev_list() - get partner vdev list
+ * @vdev: vdev pointer
+ * @vdev_count: vdev count
+ * @wlan_vdev_list: vdev list
+ *
+ * Caller should release ref of the vdevs in wlan_vdev_list
+ * Return: None
+ */
+void mlo_get_partner_vdev_list(struct wlan_objmgr_vdev *vdev,
+			       uint16_t *vdev_count,
+			       struct wlan_objmgr_vdev **wlan_vdev_list);
+
+/**
  * mlo_mlme_handle_sta_csa_param() - process saved mlo sta csa param
  * @vdev: vdev pointer
  * @csa_param: saved csa_param
@@ -401,6 +437,14 @@ int8_t wlan_mlo_get_num_active_links(uint8_t grp_id);
  * Return: Valid link bitmap
  */
 uint16_t wlan_mlo_get_valid_link_bitmap(uint8_t grp_id);
+
+/**
+ * wlan_mlo_is_wsi_remap_in_progress() - Check if WSI remap is in progress
+ * @grp_id: Id of the required MLO Group
+ *
+ * Return: True if WSI remap in progress
+ */
+bool wlan_mlo_is_wsi_remap_in_progress(uint8_t grp_id);
 
 /**
  * wlan_mlo_get_pdev_hw_link_id() - Get hw_link_id of pdev
@@ -483,6 +527,12 @@ wlan_mlo_get_valid_link_bitmap(uint8_t grp_id)
 	return 0;
 }
 
+static inline
+bool wlan_mlo_is_wsi_remap_in_progress(uint8_t grp_id)
+{
+	return false;
+}
+
 static inline struct wlan_objmgr_pdev *
 wlan_mlo_get_pdev_by_hw_link_id(uint16_t hw_link_id, uint8_t ml_grp_id,
 				wlan_objmgr_ref_dbgid refdbgid)
@@ -528,6 +578,15 @@ mlo_process_link_set_active_resp(struct wlan_objmgr_psoc *psoc,
  * Return: QDF_STATUS
  */
 QDF_STATUS mlo_ser_set_link_req(struct mlo_link_set_active_req *req);
+
+/**
+ * mlo_link_recfg_set_link_resp_timeout() - handle set link timeout for
+ * link recfg
+ * @mlo_dev_ctx: mlo dev context
+ * Return: QDF_STATUS
+ */
+void
+mlo_link_recfg_set_link_resp_timeout(struct wlan_mlo_dev_context *mlo_dev_ctx);
 
 /**
  * typedef mlo_vdev_ops_handler() - API to have operation on ml vdevs
@@ -636,7 +695,34 @@ mlo_get_link_state_register_resp_cb(struct wlan_objmgr_vdev *vdev,
  * @vdev: vdev handler
  */
 QDF_STATUS ml_post_get_link_state_msg(struct wlan_objmgr_vdev *vdev);
+#endif
 
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * wlan_mlo_link_remove_event_handler() - handler target report tbtt event
+ * @psoc: psoc pointer
+ * @evt_params: parameters corresponding to the current link removal event
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_mlo_link_remove_event_handler(struct wlan_objmgr_psoc *psoc,
+					      struct mlo_link_removal_evt_params *evt_params);
+#else
+static inline
+QDF_STATUS wlan_mlo_link_remove_event_handler(struct wlan_objmgr_psoc *psoc,
+					      struct mlo_link_removal_evt_params *evt_params)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
+#ifdef WLAN_FEATURE_11BE_MLO_TTLM
+/**
+ * mlo_ttlm_send_cmd_register_resp_cb() - Register TTLM send command callback
+ * @vdev: vdev handler
+ * @req: pointer to request parameter of structure
+ */
+QDF_STATUS mlo_ttlm_send_cmd_register_resp_cb(struct wlan_objmgr_vdev *vdev,
+					      struct ttlm_send_cmd_info *req);
 #endif
 #ifdef WLAN_FEATURE_11BE
 /**
@@ -694,6 +780,155 @@ QDF_STATUS wlan_mlo_set_ptqm_migration(struct wlan_objmgr_vdev *vdev,
 				       bool link_migration,
 				       uint32_t link_id,
 				       bool force_mig);
+
+#define HW_LINK_ID_ANY 0xff
+
+/*
+ * enum ptqm_migration_module_id: PTQM migration user module ids
+ *
+ * @PTQM_MIGRATION_MODULE_FWR: Firmware recovery
+ * @PTQM_MIGRATION_MODULE_MLR: ML reconfiguration
+ * @PTQM_MIGRATION_MODULE_NW: Network application
+ * @PTQM_MIGRATION_MODULE_MAX: Max module id
+ * @PTQM_MIGRATION_MODULE_LINK_REQ: Module id for internal link request
+ * @PTQM_MIGRATION_MODULE_TEST: Test module id
+ */
+enum ptqm_migration_module_id {
+	PTQM_MIGRATION_MODULE_FWR = 0,
+	PTQM_MIGRATION_MODULE_MLR = 1,
+	PTQM_MIGRATION_MODULE_NW = 2,
+	PTQM_MIGRATION_MODULE_MAX,
+
+	PTQM_MIGRATION_MODULE_LINK_REQ = 254,
+	PTQM_MIGRATION_MODULE_TEST = 255,
+};
+
+/*
+ * struct ptqm_link_migration_rsp_params: Link migration status
+ *
+ * @total_peer_count: Total MLO peer count
+ * @fail_peer_count: Peer count for which migration failed
+ */
+struct ptqm_link_migration_rsp_params {
+	uint16_t total_peer_count;
+	uint16_t fail_peer_count;
+};
+
+/*
+ * struct ptqm_peer_migrate_params
+ *
+ * @module_id: Module id
+ * @src_link_id: Source link id
+ * @dst_link_id: Destination link id
+ * @begin: Callback to be called at the beginning
+ * @end: Callback to be called at the end
+ * @user_data: Opaque user data
+ * @force_mig: allow migration to vdevs which are disabled to be primary umac
+ */
+struct ptqm_peer_migrate_params {
+	enum ptqm_migration_module_id module_id;
+	uint8_t src_link_id;
+	uint8_t dst_link_id;
+	void (*begin)(struct wlan_mlo_peer_context *ml_peer, void *user_data);
+	void (*end)(struct wlan_mlo_peer_context *ml_peer,
+		    enum primary_link_peer_migration_evenr_status status,
+		    void *user_data);
+	void *user_data;
+	bool force_mig;
+};
+
+/*
+ * struct ptqm_link_migrate_params
+ *
+ * @module_id: Module id
+ * @src_link_id: Source link id
+ * @begin: Callback to be called at the beginning
+ * @end: Callback to be called at the end
+ * @user_data: Opaque user data
+ * @link_disable: Link disable flag
+ * @force_mig: allow migration to vdevs which are disabled to be primary umac
+ */
+struct ptqm_link_migrate_params {
+	enum ptqm_migration_module_id module_id;
+	uint8_t src_link_id;
+	void (*begin)(struct wlan_objmgr_vdev *vdev, void *user_data);
+	void (*end)(struct wlan_objmgr_vdev *vdev,
+		    QDF_STATUS status, void *user_data,
+		    struct ptqm_link_migration_rsp_params *rsp_params);
+	void *user_data;
+	bool link_disable;
+	bool force_mig;
+};
+
+/*
+ * wlan_ptqm_peer_migrate_ctx_alloc: Allocate PTQM migration peer context
+ *
+ * @ml_peer: ML peer object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_ptqm_peer_migrate_ctx_alloc(struct wlan_mlo_peer_context *ml_peer);
+
+/*
+ * wlan_ptqm_peer_migrate_ctx_free: Free PTQM migration peer context
+ *
+ * @ml_peer: ML peer object
+ *
+ * Return: None
+ */
+void
+wlan_ptqm_peer_migrate_ctx_free(struct wlan_mlo_peer_context *ml_peer);
+
+/*
+ * wlan_ptqm_peer_migrate_req_add: API to add PTQM peer migration request
+ *
+ * @vdev: VDEV object
+ * @ml_peer: ML peer object
+ * @params: Request parameters
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_ptqm_peer_migrate_req_add(struct wlan_objmgr_vdev *vdev,
+			       struct wlan_mlo_peer_context *ml_peer,
+			       struct ptqm_peer_migrate_params *params);
+
+/*
+ * wlan_ptqm_peer_migrate_completion: API to indicate completion
+ *
+ * @ml_dev: ML device object
+ * @ml_peer: ML peer object
+ * @status: Completion status
+ *
+ * Return: None
+ */
+void
+wlan_ptqm_peer_migrate_completion(struct wlan_mlo_dev_context *ml_dev,
+				  struct wlan_mlo_peer_context *ml_peer,
+				  uint8_t status);
+
+/*
+ * wlan_ptqm_link_migrate_req_add: API to add PTQM link request
+ *
+ * @vdev: VDEV object
+ * @params: Request params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_ptqm_link_migrate_req_add(struct wlan_objmgr_vdev *vdev,
+			       struct ptqm_link_migrate_params *params);
+#else
+static inline QDF_STATUS
+wlan_ptqm_peer_migrate_ctx_alloc(struct wlan_mlo_peer_context *ml_peer)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline void
+wlan_ptqm_peer_migrate_ctx_free(struct wlan_mlo_peer_context *ml_peer)
+{}
 #endif
 
 /*

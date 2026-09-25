@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019, 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -201,12 +201,26 @@ QDF_STATUS tgt_vdev_mgr_sta_ps_param_send(
 				struct sta_ps_params *param);
 
 /**
+ * tgt_vdev_mgr_tm_param_send() - API to send traffic monitoring
+ * configuration.
+ * @mlme_obj: pointer to vdev_mlme_obj
+ * @param: pointer to traffic_monitoring_params
+ *
+ * Return: QDF_STATUS - Success or Failure
+ */
+
+QDF_STATUS tgt_vdev_mgr_tm_param_send(
+				struct vdev_mlme_obj *mlme_obj,
+				struct traffic_monitoring_params *param);
+
+/**
  * tgt_vdev_mgr_beacon_cmd_send() - API to send beacon
  * @mlme_obj: pointer to vdev_mlme_obj
  * @param: pointer to beacon_params
  *
  * Return: QDF_STATUS - Success or Failure
  */
+
 QDF_STATUS tgt_vdev_mgr_beacon_cmd_send(
 				struct vdev_mlme_obj *mlme_obj,
 				struct beacon_params *param);
@@ -262,18 +276,6 @@ QDF_STATUS tgt_vdev_mgr_multiple_vdev_restart_send(
 				struct multiple_vdev_restart_params *param);
 
 /**
- * tgt_vdev_mgr_multiple_vdev_set_param() - API to send multiple vdev
- * param
- * @pdev: pointer to pdev
- * @param: pointer to multiple_vdev_set_param
- *
- * Return: QDF_STATUS - Success or Failure
- */
-QDF_STATUS tgt_vdev_mgr_multiple_vdev_set_param(
-				struct wlan_objmgr_pdev *pdev,
-				struct multiple_vdev_set_param *param);
-
-/**
  * tgt_vdev_mgr_set_tx_rx_decap_type() - API to send tx rx decap type
  * @mlme_obj: pointer to vdev mlme obj
  * @param_id: param id
@@ -306,14 +308,14 @@ QDF_STATUS tgt_vdev_mgr_bcn_miss_offload_send(struct vdev_mlme_obj *mlme_obj);
 
 /**
  * tgt_vdev_mgr_peer_delete_all_send() - API to send peer delete all request
- * @mlme_obj: pointer to vdev_mlme_obj
+ * @vdev: Pointer to object manager VDEV
  * @param: pointer to peer_delete_all_params
  *
  * Return: QDF_STATUS - Success or Failure
  */
-QDF_STATUS tgt_vdev_mgr_peer_delete_all_send(
-				struct vdev_mlme_obj *mlme_obj,
-				struct peer_delete_all_params *param);
+QDF_STATUS
+tgt_vdev_mgr_peer_delete_all_send(struct wlan_objmgr_vdev *vdev,
+				  struct peer_delete_all_params *param);
 
 #ifdef WLAN_FEATURE_DYNAMIC_MAC_ADDR_UPDATE
 /**
@@ -360,4 +362,21 @@ QDF_STATUS tgt_vdev_peer_set_param_send(struct wlan_objmgr_vdev *vdev,
 					uint8_t *peer_mac_addr,
 					uint32_t param_id,
 					uint32_t param_value);
+/*
+ * tgt_sap_is_suspend_supported() - API to get SAP vdev suspend support
+ * @vdev: Pointer to object manager VDEV
+ *
+ * Return: bool support enabled or disabled
+ */
+bool tgt_sap_is_suspend_supported(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * tgt_sap_suspend_param_send() - API to send SAP vdev suspend cmd
+ * @psoc: Pointer to psoc
+ * @param: vdev suspend params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS tgt_sap_suspend_param_send(struct wlan_objmgr_psoc *psoc,
+				      struct vdev_suspend_params *param);
 #endif /* __WLAN_VDEV_MGR_TX_OPS_API_H__ */

@@ -1,4 +1,4 @@
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -76,6 +76,15 @@ void mlo_get_soc_list(struct wlan_objmgr_psoc **soc_list, uint8_t grp_id,
 		      uint8_t tot_socs, enum MLO_SOC_LIST curr);
 
 /**
+ * mlo_set_soc_list() - API to set the SOC participating in MLO
+ * @grp_id: ID of the required mlo group
+ * @psoc: Soc to be added in the list.
+ *
+ * Return: None
+ */
+void mlo_set_soc_list(uint8_t grp_id, struct wlan_objmgr_psoc *psoc);
+
+/**
  * mlo_setup_update_soc_id_list() - API to update the list of SOCs ids
  *                                  participating in that MLO group
  * @grp_id: ID of the required mlo group
@@ -144,6 +153,20 @@ void mlo_setup_update_num_links(struct wlan_objmgr_psoc *psoc,
  */
 void mlo_setup_update_chip_info(struct wlan_objmgr_psoc *psoc, uint8_t chip_id,
 				uint8_t *adj_chip_id);
+
+/**
+ * mlo_set_3_link_forced_primary_umac() - API to force primary_umac
+ *
+ * @ml_peer: mlo peer
+ * @link_vdevs: list of link vdevs
+ * @psoc_id: Return the PSOC-ID to force the primary umac
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS mlo_set_3_link_forced_primary_umac(
+		struct wlan_mlo_peer_context *ml_peer,
+		struct wlan_objmgr_vdev *link_vdevs[],
+		uint8_t *psoc_id);
 
 /**
  * mlo_chip_adjacent() - API to return if two chips are adjacent
@@ -273,6 +296,16 @@ void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
 				 bool tsf_sync_enab);
 
 /**
+ * mlo_update_wsi_remap_support() - API to get WSI remap info support
+ *
+ * @psoc: Pointer to psoc object
+ * @wsi_remap_support: Indicates WSI remap support to be enabled or not
+ *
+ * Return: None
+ */
+void mlo_update_wsi_remap_support(struct wlan_objmgr_psoc *psoc,
+				  bool wsi_remap_support);
+/**
  * mlo_pdev_derive_bridge_link_pdevs() - API to get the list of pdevs
  *					 for creating bridge vdevs.
  *
@@ -283,6 +316,45 @@ void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
  */
 bool mlo_pdev_derive_bridge_link_pdevs(struct wlan_objmgr_pdev *pdev,
 				       struct wlan_objmgr_pdev **pdev_list);
+#elif defined(WLAN_FEATURE_11BE_MLO) && !defined(WLAN_MLO_MULTI_CHIP)
+static inline void mlo_setup_init(uint8_t total_grp)
+{
+}
+
+static inline void mlo_setup_deinit(void)
+{
+}
+
+static inline bool
+mlo_vdevs_check_single_soc(struct wlan_objmgr_vdev **wlan_vdev_list,
+			   uint8_t vdev_count)
+{
+	return true;
+}
+
+static inline
+QDF_STATUS mlo_check_all_pdev_state(struct wlan_objmgr_psoc *psoc,
+				    uint32_t state)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+bool mlo_psoc_get_grp_id(struct wlan_objmgr_psoc *psoc, uint8_t *grp_id)
+{
+	return 0;
+}
+
+void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
+				 bool tsf_sync_enab);
+
+/**
+ * mlo_get_tsf_sync_support() - API to get TSF sync support per MLO
+ *
+ * Return: None
+ */
+bool mlo_get_tsf_sync_support(void);
+
 #else
 static inline void mlo_setup_init(uint8_t total_grp)
 {
@@ -323,5 +395,11 @@ void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
 				 bool tsf_sync_enab)
 {
 }
+
+void mlo_update_wsi_remap_support(struct wlan_objmgr_psoc *psoc,
+				  bool wsi_remap_support)
+{
+}
+
 #endif /* WLAN_MLO_MULTI_CHIP */
 #endif /* _WLAN_MLO_MGR_SETUP_H_ */

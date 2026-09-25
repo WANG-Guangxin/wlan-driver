@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -51,6 +51,7 @@
 #include "wlan_dp_ucfg_api.h"
 #include "qdf_ssr_driver_dump.h"
 #include "wlan_hdd_ioctl.h"
+#include "wlan_hdd_wondertap.h"
 
 #ifdef MODULE
 #ifdef WLAN_WEAR_CHIPSET
@@ -308,7 +309,6 @@ static inline void hdd_wlan_ssr_shutdown_event(void) { }
 static void hdd_psoc_shutdown_notify(struct hdd_context *hdd_ctx)
 {
 	hdd_enter();
-	wlan_cfg80211_cleanup_scan_queue(hdd_ctx->pdev, NULL);
 
 	cds_shutdown_notifier_call();
 	cds_shutdown_notifier_purge();
@@ -342,11 +342,6 @@ static void hdd_soc_recovery_cleanup(void)
 	/* nothing to do if the soc is already unloaded */
 	if (hdd_ctx->driver_status == DRIVER_MODULES_CLOSED) {
 		hdd_info("Driver modules are already closed");
-		return;
-	}
-
-	if (cds_is_load_or_unload_in_progress()) {
-		hdd_info("Load/unload in progress, ignore SSR shutdown");
 		return;
 	}
 
@@ -830,11 +825,12 @@ static int __hdd_soc_probe(struct device *dev,
 	probe_fail_cnt = 0;
 	cds_set_driver_loaded(true);
 	cds_set_load_in_progress(false);
-	hdd_start_complete(0);
 	hdd_thermal_mitigation_register(hdd_ctx, dev);
+	hdd_ddr_bw_mitigation_register(hdd_ctx, dev);
 
 	hdd_set_sar_init_index(hdd_ctx);
 	hdd_soc_load_unlock(dev);
+	wlan_hdd_wondertap_register_ops(dev);
 
 	return 0;
 
@@ -892,9 +888,12 @@ static int hdd_soc_probe(struct device *dev,
 
 	osif_psoc_sync_trans_stop(psoc_sync);
 
+	hdd_start_complete(0);
+
 	return 0;
 
 destroy_sync:
+	hdd_start_complete(errno);
 	osif_psoc_sync_unregister(dev);
 	osif_psoc_sync_wait_for_ops(psoc_sync);
 
@@ -1012,6 +1011,9 @@ static int hdd_soc_recovery_reinit(struct device *dev,
 	osif_psoc_sync_trans_stop(psoc_sync);
 	hdd_start_complete(0);
 
+	if (!errno)
+		wlan_hdd_wondertap_register_ops(dev);
+
 	return errno;
 }
 
@@ -1026,6 +1028,7 @@ static void __hdd_soc_remove(struct device *dev)
 	pr_info("%s: Removing driver v%s\n", WLAN_MODULE_NAME,
 		QWLAN_VERSIONSTR);
 
+	wlan_hdd_wondertap_unregister_ops(dev, true);
 	qdf_rtpm_sync_resume();
 	cds_set_driver_loaded(false);
 	cds_set_unload_in_progress(true);
@@ -1037,6 +1040,7 @@ static void __hdd_soc_remove(struct device *dev)
 		qdf_nbuf_deinit_replenish_timer();
 	} else {
 		hdd_thermal_mitigation_unregister(hdd_ctx, dev);
+		hdd_ddr_bw_mitigation_unregister(hdd_ctx, dev);
 		hdd_wlan_exit(hdd_ctx);
 	}
 
@@ -2218,6 +2222,7 @@ wlan_hdd_pld_uevent(struct device *dev, struct pld_uevent_data *event_data)
 	case PLD_FW_DOWN:
 		hdd_debug("Received firmware down indication");
 		hdd_dump_log_buffer(NULL, NULL);
+		hif_set_target_access_allowed(false);
 		cds_set_target_ready(false);
 		cds_set_recovery_in_progress(true);
 		hdd_init_start_completion();
@@ -2275,17 +2280,17 @@ wlan_hdd_pld_uevent(struct device *dev, struct pld_uevent_data *event_data)
 		break;
 	case PLD_BUS_EVENT:
 		hdd_debug("Bus event received");
+		hif_set_target_access_allowed(false);
 
-		/* Currently only link_down taken care.
+		/* Currently only link_down and link_resume_fail taken care.
 		 * Need to extend event buffer to define more bus info,
 		 * if need later.
 		 */
+		cds_set_recovery_in_progress(true);
 		if (event_data->bus_data.etype == PLD_BUS_EVENT_PCIE_LINK_DOWN)
 			host_log_device_status(WLAN_STATUS_BUS_EXCEPTION);
-		break;
-	case PLD_SYS_REBOOT:
-		hdd_info("Received system reboot");
-		cds_set_sys_rebooting();
+		if (event_data->bus_data.etype == PLD_BUS_EVENT_PCIE_LINK_RESUME_FAIL)
+			cds_set_driver_state(CDS_DRIVER_STATE_PCIE_LINK_RESUME_FAIL);
 		break;
 	default:
 		/* other events intentionally not handled */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -118,12 +118,15 @@ struct hdd_conn_flag {
 #define ANTENNA_SEL_INFO_TX_SOUNDING_PPDU	0x40
 #define ANTENNA_SEL_INFO_RSVD			0x80
 
+#define WLAN_INVALID_RSSI_VALUE -128
+
 /**
  * struct hdd_connection_info - structure to store connection information
  * @conn_state: connection state of the NIC
  * @bssid: BSSID
  * @ssid: SSID Info
  * @peer_macaddr:Peer Mac Address of the IBSS Stations
+ * @peer_bw: Bandwidth of connected peers
  * @auth_type: Auth Type
  * @uc_encrypt_type: Unicast Encryption Type
  * @is_authenticated: Remembers authenticated state
@@ -143,6 +146,7 @@ struct hdd_conn_flag {
  * @hs20vendor_ie: holds passpoint/hs20 info
  * @ht_operation: HT operation info
  * @vht_operation: VHT operation info
+ * @he_cap_elem: HE capabilities info
  * @he_operation: HE operation info
  * @he_oper_len: length of @he_operation
  * @roam_count: roaming counter
@@ -158,14 +162,19 @@ struct hdd_conn_flag {
  * to which currently sta is connected.
  * @prev_ap_bcn_ie: ap beacon IE information to which sta is currently connected
  * @ieee_link_id: AP Link Id valid for MLO connection
+ * @mld_addr: AP MLD addr for MLO connection
  * @eht_operation: EHT operation info
  * @eht_oper_len: length of @eht_operation
+ * @ap_nss: AP advertised nss
  */
 struct hdd_connection_info {
 	eConnectionState conn_state;
 	struct qdf_mac_addr bssid;
 	tCsrSSIDInfo ssid;
 	struct qdf_mac_addr peer_macaddr[MAX_PEERS];
+#ifdef NDP_TX_BW_FLOW_CTRL
+	enum phy_ch_width peer_bw[MAX_PEERS];
+#endif
 	enum csr_akm_type auth_type;
 	eCsrEncryptionType uc_encrypt_type;
 	uint8_t is_authenticated;
@@ -187,6 +196,7 @@ struct hdd_connection_info {
 	struct ieee80211_vht_operation vht_operation;
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)) \
      && defined(WLAN_FEATURE_11AX)
+	struct ieee80211_he_cap_elem he_cap_elem;
 	struct ieee80211_he_operation *he_operation;
 	uint32_t he_oper_len;
 #endif
@@ -202,12 +212,14 @@ struct hdd_connection_info {
 	struct element_info prev_ap_bcn_ie;
 #ifdef WLAN_FEATURE_11BE_MLO
 	int32_t ieee_link_id;
+	struct qdf_mac_addr mld_addr;
 #endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)) && \
 	defined(WLAN_FEATURE_11BE)
 	struct ieee80211_eht_operation eht_operation;
 	uint32_t eht_oper_len;
 #endif
+	uint8_t ap_nss;
 };
 
 /* Forward declarations */
@@ -301,15 +313,25 @@ void hdd_abort_ongoing_sta_sae_connection(struct hdd_context *hdd_ctx);
 bool hdd_is_any_sta_connected(struct hdd_context *hdd_ctx);
 
 /**
- * hdd_get_first_connected_sta_vdev_id() - check if any sta in connected state
- * and exteact the vdev id of connected STA.
+ * hdd_is_any_cli_connected() - check if any p2p client in connected state
+ * @hdd_ctx: hdd context
+ *
+ * Return: true if any connected p2p client
+ */
+bool hdd_is_any_cli_connected(struct hdd_context *hdd_ctx);
+
+/**
+ * hdd_get_first_connected_sta_cli_vdev_id() - check if any sta/cli in
+ * connected state and extract the vdev id of connected STA.
  * @hdd_ctx: hdd context
  * @vdev_id: pointer to vdev id
+ * @device_mode: STA or P2P CLI mode
  *
  * Return: QDF_STATUS enumeration
  */
-QDF_STATUS hdd_get_first_connected_sta_vdev_id(struct hdd_context *hdd_ctx,
-					       uint32_t *vdev_id);
+QDF_STATUS hdd_get_first_connected_sta_cli_vdev_id(struct hdd_context *hdd_ctx,
+						   uint32_t *vdev_id,
+						   enum QDF_OPMODE device_mode);
 
 /**
  * hdd_sme_roam_callback() - hdd sme roam callback
@@ -414,12 +436,14 @@ bool hdd_save_peer(struct hdd_station_ctx *sta_ctx,
 
 /**
  * hdd_delete_peer() - removes peer from hdd station context peer table
+ * @adapter: pointer to adapter
  * @sta_ctx: pointer to hdd station context
  * @peer_mac_addr: mac address of peer to be deleted
  *
  * Return: None
  */
-void hdd_delete_peer(struct hdd_station_ctx *sta_ctx,
+void hdd_delete_peer(struct hdd_adapter *adapter,
+		     struct hdd_station_ctx *sta_ctx,
 		     struct qdf_mac_addr *peer_mac_addr);
 
 /**
@@ -436,11 +460,12 @@ void hdd_copy_ht_caps(struct ieee80211_ht_cap *hdd_ht_cap,
 
 /**
  * hdd_add_beacon_filter() - add beacon filter
- * @adapter: Pointer to the hdd adapter
+ * @hdd_ctx: hdd ctx
+ * @vdev_id: vdev to set it on
  *
  * Return: 0 on success and errno on failure
  */
-int hdd_add_beacon_filter(struct hdd_adapter *adapter);
+int hdd_add_beacon_filter(struct hdd_context *hdd_ctx, uint8_t vdev_id);
 
 /**
  * hdd_copy_vht_caps()- copy vht caps info from roam vht caps
@@ -511,13 +536,15 @@ void hdd_conn_remove_connect_info(struct hdd_station_ctx *sta_ctx);
  */
 void hdd_clear_roam_profile_ie(struct hdd_adapter *adapter);
 
+
 /**
  * hdd_remove_beacon_filter() - remove beacon filter
- * @adapter: Pointer to the hdd adapter
+ * @hdd_ctx: Pointer to the hdd ctx
+ * @vdev_id: vdve id
  *
  * Return: 0 on success and errno on failure
  */
-int hdd_remove_beacon_filter(struct hdd_adapter *adapter);
+int hdd_remove_beacon_filter(struct hdd_context *hdd_ctx, uint8_t vdev_id);
 
 /**
  * hdd_copy_ht_operation()- copy HT operation element to
@@ -568,6 +595,16 @@ static inline void hdd_copy_eht_operation(struct hdd_station_ctx *hdd_sta_ctx,
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)) && \
      defined(WLAN_FEATURE_11AX)
 /**
+ * hdd_copy_he_caps()- copy HE capabilities element to
+ * hdd station context.
+ * @hdd_sta_ctx: pointer to hdd station context
+ * @he_caps: pointer to he capabilities
+ *
+ * Return: None
+ */
+void hdd_copy_he_caps(struct hdd_station_ctx *hdd_sta_ctx,
+		      tDot11fIEhe_cap * he_caps);
+/**
  * hdd_copy_he_operation()- copy HE operations element to
  * hdd station context.
  * @hdd_sta_ctx: pointer to hdd station context
@@ -580,6 +617,11 @@ void hdd_copy_he_operation(struct hdd_station_ctx *hdd_sta_ctx,
 #else
 static inline void hdd_copy_he_operation(struct hdd_station_ctx *hdd_sta_ctx,
 					 tDot11fIEhe_op *he_operation)
+{
+}
+
+static inline void hdd_copy_he_caps(struct hdd_station_ctx *hdd_sta_ctx,
+				    tDot11fIEhe_cap *he_caps)
 {
 }
 #endif

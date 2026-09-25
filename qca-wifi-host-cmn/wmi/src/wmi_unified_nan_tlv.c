@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -23,16 +23,45 @@
 #include <nan_public_structs.h>
 #include <wmi_unified_nan_api.h>
 #include <wlan_nan_msg_common_v2.h>
+#include <wlan_nan_msg.h>
+
+/**
+ * wmi_nan_get_tlv_type() - get TLV type from NAN DE event
+ * @ptlv: pointer to TLV header
+ *
+ * Return: 16 bit TLV type
+ */
+static inline uint16_t wmi_nan_get_tlv_type(uint8_t *ptlv)
+{
+	return (uint16_t)((*ptlv & 0xFF) | ((*(ptlv + 1) & 0xFF) << 8));
+}
+
+/**
+ * wmi_nan_get_tlv_len() - get TLV length from NAN DE event
+ * @ptlv: pointer to TLV header
+ *
+ * Return: 16 bit TLV length
+ */
+static inline uint16_t wmi_nan_get_tlv_len(uint8_t *ptlv)
+{
+	return (uint16_t)((*(ptlv + 2) & 0xFF) | ((*(ptlv + 3) & 0xFF) << 8));
+}
 
 static QDF_STATUS
 extract_nan_event_rsp_tlv(wmi_unified_t wmi_handle, void *evt_buf,
 			  struct nan_event_params *evt_params,
-			  uint8_t **msg_buf)
+			  uint8_t **msg_buf, uint32_t nan_config)
 {
 	WMI_NAN_EVENTID_param_tlvs *event;
 	wmi_nan_event_hdr *nan_rsp_event_hdr;
 	nan_msg_header_t *nan_msg_hdr;
 	wmi_nan_event_info *nan_evt_info;
+	uint8_t *ptlv;
+	tNanEventIndMsg *nan_evt_msg;
+	uint16_t tlv_type;
+	uint16_t tlv_len;
+	tpNanCapabilitiesRspMsg capabilities_rsp_msg;
+	tpNanCapabilitiesRspParams capabilities_rsp;
 
 	/*
 	 * This is how received evt looks like
@@ -73,6 +102,12 @@ extract_nan_event_rsp_tlv(wmi_unified_t wmi_handle, void *evt_buf,
 			 nan_rsp_event_hdr->data_len);
 		return QDF_STATUS_E_INVAL;
 	}
+
+	if (!event->data) {
+		wmi_err("event data is null");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
 	nan_msg_hdr = (nan_msg_header_t *)event->data;
 
 	switch (nan_msg_hdr->msg_id) {
@@ -96,16 +131,68 @@ extract_nan_event_rsp_tlv(wmi_unified_t wmi_handle, void *evt_buf,
 		evt_params->is_nan_enable_success = (nan_evt_info->status == 0);
 		evt_params->vdev_id = nan_evt_info->vdev_id;
 		break;
+	case NAN_MSG_ID_DISABLE_RSP:
+		evt_params->evt_type = nan_event_id_disable_rsp;
+		break;
 	case NAN_MSG_ID_DISABLE_IND:
 		evt_params->evt_type = nan_event_id_disable_ind;
 		break;
 	case NAN_MSG_ID_ERROR_RSP:
 		evt_params->evt_type = nan_event_id_error_rsp;
 		break;
+	case NAN_MSG_ID_DE_EVENT_IND:
+		evt_params->evt_type = nan_event_id_de_ind;
+		nan_evt_msg = (tNanEventIndMsg *)event->data;
+		ptlv = (uint8_t *)nan_evt_msg + sizeof(nan_msg_header_t);
+		if (!ptlv) {
+			wmi_err("DE event TLV is null");
+			return QDF_STATUS_E_NULL_VALUE;
+		}
+
+		tlv_type = wmi_nan_get_tlv_type(ptlv);
+		tlv_len = wmi_nan_get_tlv_len(ptlv);
+
+		if (tlv_len < QDF_MAC_ADDR_SIZE) {
+			wmi_err("TLV len %d is less than MAC addr size",
+				tlv_len);
+			return QDF_STATUS_E_INVAL;
+		}
+
+		if (evt_params->buf_len <
+		    sizeof(nan_msg_header_t) + WMI_TLV_HDR_SIZE + tlv_len) {
+			wmi_err("buf len %d is invalid", evt_params->buf_len);
+			return QDF_STATUS_E_INVAL;
+		}
+
+		switch (tlv_type) {
+		case NAN_TLV_TYPE_SELF_STA_MAC_ADDR:
+			ptlv += WMI_TLV_HDR_SIZE;
+			qdf_mem_copy(evt_params->nan_mac_addr.bytes, ptlv,
+				     QDF_MAC_ADDR_SIZE);
+			break;
+		default:
+			wmi_debug("not parsed tlv_type %d", tlv_type);
+			evt_params->evt_type = nan_event_id_generic_rsp;
+			break;
+		}
+		break;
+	case NAN_MSG_ID_CAPABILITIES_RSP:
+		evt_params->evt_type = nan_event_id_generic_rsp;
+		capabilities_rsp_msg = (tNanCapabilitiesRspMsg *)event->data;
+		capabilities_rsp = &capabilities_rsp_msg->capabilitiesRspParams;
+		wmi_debug("NAN pairing support: %d", nan_config);
+		if (!(nan_config & NAN_PARING_BIT)) {
+			capabilities_rsp->nanPairingSupported = 0;
+			wmi_err("NAN pairing support disabled");
+		}
+		break;
 	default:
 		evt_params->evt_type = nan_event_id_generic_rsp;
 		break;
 	}
+
+	wmi_debug("msg_id %d, evt_type %d", nan_msg_hdr->msg_id,
+		  evt_params->evt_type);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -666,6 +753,54 @@ static QDF_STATUS nan_ndp_end_req_tlv(wmi_unified_t wmi_handle,
 }
 
 static QDF_STATUS
+nan_ndp_update_config_tlv(wmi_unified_t wmi_handle,
+			  struct nan_datapath_update_config *req)
+{
+	uint16_t len;
+	wmi_buf_t buf;
+	QDF_STATUS status;
+	wmi_ndp_set_latency_tput_fixed_param *cmd;
+	uint32_t vdev_id = 0;
+
+	vdev_id = wlan_vdev_get_id(req->vdev);
+	wmi_debug("vdev_id: %d, ndp_instance_id: %d, latency_ms: %d, tput_mbps: %d",
+		  vdev_id,
+		  req->ndp_instance_id,
+		  req->latency_ms,
+		  req->tput_mbps);
+
+	/* allocated memory for fixed params as well as variable size data  */
+	len = sizeof(*cmd);
+
+	buf = wmi_buf_alloc(wmi_handle, len);
+	if (!buf)
+		return QDF_STATUS_E_NOMEM;
+
+	cmd = (wmi_ndp_set_latency_tput_fixed_param *)wmi_buf_data(buf);
+	WMITLV_SET_HDR(&cmd->tlv_header,
+		       WMITLV_TAG_STRUC_wmi_ndp_set_latency_tput_fixed_param,
+		       WMITLV_GET_STRUCT_TLVLEN(
+			       wmi_ndp_set_latency_tput_fixed_param));
+	cmd->vdev_id = vdev_id;
+	cmd->ndp_instance_id = req->ndp_instance_id;
+	cmd->latency_ms = req->latency_ms;
+	cmd->tput_mbps = req->tput_mbps;
+
+	wmi_debug("latency_ms: %d, tput_mbps: %d",
+		  cmd->latency_ms, cmd->tput_mbps);
+
+	wmi_mtrace(WMI_NDP_SET_LATENCY_TPUT_CMDID, cmd->vdev_id, 0);
+	status = wmi_unified_cmd_send(wmi_handle, buf, len,
+				      WMI_NDP_SET_LATENCY_TPUT_CMDID);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		wmi_err("WMI_NDP_SET_LATENCY_TPUT_CMDID failed, ret: %d",
+			status);
+		wmi_buf_free(buf);
+	}
+	return status;
+}
+
+static QDF_STATUS
 extract_ndp_host_event_tlv(wmi_unified_t wmi_handle, uint8_t *data,
 			   struct nan_datapath_host_event *evt)
 {
@@ -997,6 +1132,7 @@ static QDF_STATUS extract_ndp_confirm_tlv(wmi_unified_t wmi_handle,
 		rsp->ch[i].freq = event->ndp_channel_list[i].mhz;
 		rsp->ch[i].nss = event->nss_list[i];
 		ch_mode = WMI_GET_CHANNEL_MODE(&event->ndp_channel_list[i]);
+		rsp->ch[i].phymode = ch_mode;
 		rsp->ch[i].ch_width = wmi_get_ch_width_from_phy_mode(wmi_handle,
 								     ch_mode);
 		if (ndi_dbs) {
@@ -1224,6 +1360,7 @@ static QDF_STATUS extract_ndp_sch_update_tlv(wmi_unified_t wmi_handle,
 		ind->ch[i].freq = event->ndl_channel_list[i].mhz;
 		ind->ch[i].nss = event->nss_list[i];
 		ch_mode = WMI_GET_CHANNEL_MODE(&event->ndl_channel_list[i]);
+		ind->ch[i].phymode = ch_mode;
 		ind->ch[i].ch_width = wmi_get_ch_width_from_phy_mode(wmi_handle,
 								     ch_mode);
 		if (ndi_dbs) {
@@ -1256,6 +1393,7 @@ void wmi_nan_attach_tlv(wmi_unified_t wmi_handle)
 	ops->send_ndp_initiator_req_cmd = nan_ndp_initiator_req_tlv;
 	ops->send_ndp_responder_req_cmd = nan_ndp_responder_req_tlv;
 	ops->send_ndp_end_req_cmd = nan_ndp_end_req_tlv;
+	ops->send_ndp_update_config_cmd = nan_ndp_update_config_tlv;
 	ops->extract_ndp_initiator_rsp = extract_ndp_initiator_rsp_tlv;
 	ops->extract_ndp_ind = extract_ndp_ind_tlv;
 	ops->extract_nan_msg = extract_nan_msg_tlv,

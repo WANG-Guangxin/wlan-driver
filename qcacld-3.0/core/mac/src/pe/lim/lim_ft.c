@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -551,11 +551,16 @@ static QDF_STATUS lim_fill_session_power_info(
 	mlme_obj->reg_tpc_obj.is_power_constraint_abs = !is_pwr_constraint;
 
 	if (wlan_reg_is_6ghz_chan_freq(pbssDescription->chan_freq)) {
-		status = wlan_reg_get_best_6g_power_type(
-				mac->psoc, mac->pdev,
-				&power_type_6g,
-				ft_session->ap_defined_power_type_6g,
-				pbssDescription->chan_freq);
+		if (ft_session->ap_defined_power_type_6g == REG_VERY_LOW_POWER_AP &&
+		    wlan_reg_is_indoor_ap_detected(mac->pdev))
+			ft_session->ap_defined_power_type_6g = REG_INDOOR_ENABLED_AP;
+
+		status = lim_get_6g_power_type_with_bw(
+						mac,
+						ft_session,
+						pbssDescription->chan_freq,
+						&power_type_6g,
+						false);
 		if (QDF_IS_STATUS_ERROR(status))
 			return status;
 
@@ -798,6 +803,12 @@ lim_fill_ft_session(struct mac_context *mac,
 					     pe_session);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		pe_err("Failed to fill power info in ft session");
+		goto exit;
+	}
+
+	status = lim_set_session_channel_params(mac, ft_session);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		pe_err("Failed to set session channel params");
 		goto exit;
 	}
 
@@ -1096,7 +1107,7 @@ QDF_STATUS lim_process_ft_aggr_qos_req(struct mac_context *mac,
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	else {
 		/* Implies it is a LFR3.0 based 11r connection
-		 * so donot send add ts request to firmware since it
+		 * so do not send add ts request to firmware since it
 		 * already has the RIC IEs */
 
 		/* Send the Aggr QoS response to SME */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -94,6 +94,7 @@
 #define REASON_ROAM_SET_PRIMARY                     54
 #define REASON_ROAM_LINK_SWITCH_ASSOC_VDEV_CHANGE   55
 #define REASON_VDEV_RESTART_FROM_HOST               56
+#define REASON_AGGRESSIVE_ROAM_ENABLED              57
 
 #define FILS_MAX_KEYNAME_NAI_LENGTH WLAN_CM_FILS_MAX_KEYNAME_NAI_LENGTH
 #define WLAN_FILS_MAX_REALM_LEN WLAN_CM_FILS_MAX_REALM_LEN
@@ -113,6 +114,8 @@
 #define MAX_BSSID_AVOID_LIST     16
 #define MAX_BSSID_FAVORED      16
 #define WLAN_MAX_BTM_CANDIDATES      8
+
+#define FW_ROAM_SYNC_TIMEOUT 7000
 
 /* Default value of WTC reason code */
 #define DISABLE_VENDOR_BTM_CONFIG 2
@@ -164,18 +167,16 @@
 #define NEIGHBOR_REPORT_PARAM_INVALID (0xFFFFFFFFU)
 
 /*
- * Currently roam score delta value is sent for 2 triggers and min rssi
- * values are sent for 3 triggers
+ * Currently  min rssi values are sent for 3 triggers
  */
-#define NUM_OF_ROAM_TRIGGERS 2
-#define IDLE_ROAM_TRIGGER 0
-#define BTM_ROAM_TRIGGER  1
-
 #define NUM_OF_ROAM_MIN_RSSI 3
 #define DEAUTH_MIN_RSSI 0
 #define BMISS_MIN_RSSI  1
 #define MIN_RSSI_2G_TO_5G_ROAM 2
 #define CM_CFG_VALID_CHANNEL_LIST_LEN 100
+
+#define WLAN_ROAM_SCAN_TYPE_PARTIAL_SCAN 0
+#define WLAN_ROAM_SCAN_TYPE_FULL_SCAN 1
 
 /**
  * enum roam_trigger_sub_reason - Roam trigger sub reasons
@@ -200,6 +201,8 @@
  * @ROAM_TRIGGER_SUB_REASON_INACTIVITY_TIMER_CU: Roam scan triggered due to
  * first periodic timer exiry when full scan count is 0 and roam scan trigger
  * is CU load
+ * @ROAM_TRIGGER_SUB_REASON_MLD_EXTRA_PARTIAL_SCAN: Additional partial roam scan
+ * triggered during MLO usecase.
  */
 enum roam_trigger_sub_reason {
 	ROAM_TRIGGER_SUB_REASON_PERIODIC_TIMER = 1,
@@ -211,6 +214,7 @@ enum roam_trigger_sub_reason {
 	ROAM_TRIGGER_SUB_REASON_PERIODIC_TIMER_AFTER_INACTIVITY,
 	ROAM_TRIGGER_SUB_REASON_PERIODIC_TIMER_AFTER_INACTIVITY_CU,
 	ROAM_TRIGGER_SUB_REASON_INACTIVITY_TIMER_CU,
+	ROAM_TRIGGER_SUB_REASON_MLD_EXTRA_PARTIAL_SCAN,
 };
 
 /**
@@ -248,6 +252,46 @@ enum wlan_roam_frame_subtype {
 	ROAM_FRAME_SUBTYPE_M4,
 	ROAM_FRAME_SUBTYPE_GTK_M1,
 	ROAM_FRAME_SUBTYPE_GTK_M2,
+};
+
+/**
+ * enum wlan_roam_frame_tx_status - TX/RX packet status
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_INVALID:
+ * Invalid status
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_ACK:
+ * successfully sent + acked
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_NO_ACK:
+ * packet sent but no ack received
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_FAIL:
+ * Transmission failure during packet transfer
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_DROP:
+ * packet dropped due to congestion
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_FILTERED:
+ * Packet dropped due TX filter
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TXOP_ABORT:
+ * TX operation is aborted
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_TID_DEL:
+ * TX TID deleted
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_SW_ABORT:
+ * operation aborted by FW
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_MIG_DROP:
+ * Packet Dropped to TX Migration
+ * @ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_MLO_TID_MIG:
+ * Packet Dropped due to TX TID Migration
+ */
+enum wlan_roam_frame_tx_status {
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_INVALID = 0,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_ACK = 1,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_NO_ACK = 2,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_FAIL = 3,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_DROP =
+		ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_FAIL,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_FILTERED = 4,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TXOP_ABORT = 5,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_TID_DEL = 6,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_SW_ABORT = 7,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_MIG_DROP = 8,
+	ROAM_FRAME_INFO_FRAME_TYPE_EXT_STATUS_TX_MLO_TID_MIG = 9,
 };
 
 /**
@@ -320,6 +364,23 @@ struct rso_chan_info {
  * @roam_scan_n_probes:
  * @roam_scan_inactivity_time:
  * @roam_inactive_data_packet_count:
+ * @band_2g_weightage: 2.4 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 2.4 GHz band
+ * @band_5g_weightage: 5 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 5 GHz band
+ * @band_6g_weightage: 6 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 6 GHz band
+ * @roam_periodic_scan_interval: the interval in seconds after which STA
+ * performs periodic partial scans till roaming succeeds or RSSI recovers
+ * above threshold
+ * @roam_score_delta: delta value expected over the roam score of the candidate
+ * ap over the roam score of the current AP
+ * @roam_rssi_delta_6ghz_to_non_6ghz: RSSI Delta value to be used for roaming
+ * from 6 GHz to Non 6GHz AP.
+ * @min_roam_score_delta: Minimum difference between connected AP's and
+ * candidate AP's roam score to start roaming.
+ * @reconnect_disallow_period: duration after which STA is allowed
+ * to reconnect to the same BSSID sending DEAUTH/DISASSOC frames.
  */
 struct rso_cfg_params {
 	uint32_t neighbor_scan_period;
@@ -351,6 +412,14 @@ struct rso_cfg_params {
 	uint8_t roam_scan_n_probes;
 	uint32_t roam_scan_inactivity_time;
 	uint32_t roam_inactive_data_packet_count;
+	uint32_t band_2g_weightage;
+	uint32_t band_5g_weightage;
+	uint32_t band_6g_weightage;
+	uint32_t roam_periodic_scan_interval;
+	uint32_t roam_score_delta;
+	uint8_t roam_rssi_delta_6ghz_to_non_6ghz;
+	uint32_t min_roam_score_delta;
+	uint32_t reconnect_disallow_period;
 };
 
 /**
@@ -434,6 +503,9 @@ enum roam_fail_params {
  * command rejected due to reassociation request received for same AP.
  * @ROAM_FAIL_REASON_MLD_EXTRA_SCAN_REQUIRED: Roaming is not triggered as part
  * of the first roam scan as additional scan is required to scan all MLD links
+ * @ROAM_FAIL_REASON_TTLM_REQUIRED: Roaming is not triggered as TTLM is required
+ * @ROAM_FAIL_REASON_LINKRECONFIG_REQUIRED: Roaming is not triggered as
+ * linkreconfig is required.
  * @ROAM_FAIL_REASON_UNKNOWN: Default reason
  */
 enum wlan_roam_failure_reason_code {
@@ -479,6 +551,8 @@ enum wlan_roam_failure_reason_code {
 	ROAM_FAIL_REASON_OTHER_PRIORITY_ROAM_SCAN,
 	ROAM_FAIL_REASON_REASSOC_TO_SAME_AP,
 	ROAM_FAIL_REASON_MLD_EXTRA_SCAN_REQUIRED,
+	ROAM_FAIL_REASON_TTLM_REQUIRED,
+	ROAM_FAIL_REASON_LINKRECONFIG_REQUIRED,
 	ROAM_FAIL_REASON_UNKNOWN = 255,
 };
 
@@ -612,6 +686,10 @@ struct sae_roam_auth_map {
  * @rso_rsn_caps: rsn caps with global user MFP which can be used for
  *                cross-AKM roaming
  * @is_disable_btm: btm roaming disabled or not from userspace
+ * @is_aggressive_roaming_mode: Aggressive roaming is set or not
+ * @roam_cfg_rt_params_enabled: Flag used to cache the status of if real time
+ * roam control param values changed by vendor commands.The same shall be
+ * returned whenever queried for roam_cfg_rt_params_enabled status.
  */
 struct rso_config {
 #ifdef WLAN_FEATURE_HOST_ROAM
@@ -667,6 +745,8 @@ struct rso_config {
 	struct wlan_chan_list tried_candidate_freq_list;
 	uint16_t rso_rsn_caps;
 	bool is_disable_btm;
+	bool is_aggressive_roaming_mode;
+	bool roam_cfg_rt_params_enabled;
 };
 
 /**
@@ -710,6 +790,14 @@ struct rso_roam_policy_params {
 
 #define DEFAULT_RSSI_DB_GAP     30  /* every 30 dbm for one category */
 #define ENABLE_FT_OVER_DS      1   /* enable ft_over_ds */
+
+/*
+ * Default value for the reconnect disallow period. This parameter is
+ * used to configure the duration in seconds for which FW disallows to select
+ * a target AP that has transmitted a deauthentication frame or disassociation
+ * frame to avoid repeated roaming and disconnections.
+ */
+#define DEFAULT_RECONNECT_DISALLOW_PERIOD 0
 
 /**
  * struct rso_config_params - global RSO params
@@ -782,7 +870,24 @@ struct rso_config_params {
  * @ROAM_BAND: Allowed band for roaming in FW
  * @HI_RSSI_SCAN_RSSI_DELTA:
  * @ROAM_RSSI_DIFF_6GHZ: roam rssi diff for 6 GHz AP
+ * @ROAM_RSSI_DELTA_6GHZ_TO_NON_6GHZ: roam rssi diff for Non 6 GHz AP
  * @IS_DISABLE_BTM: disable btm roaming
+ * @IS_ROAM_AGGRESSIVE : Aggressive Roaming mode
+ * @ROAM_COMMON_AGGRESSIVE_MIN_ROAM_DELTA: Roam min roam delta in aggressive
+ *                                         mode
+ * @ROAM_AGGRESSIVE_SCORE_DELTA: Roam score delta in aggressive mode
+ * @ROAM_AGGRESSIVE_SCAN_STEP_RSSI: Roam scan step rssi in aggressive mode
+ * @ROAM_AGGRESSIVE_NEIGHBOR_LOOKUP_RSSI_THRESHOLD: Roam neighbour lookup
+ *                                                  threshold in aggressive mode
+ * @ROAM_2P4GHZ_BAND_WEIGHTAGE: 2.4 GHz band weight value for roaming
+ * @ROAM_5GHZ_BAND_WEIGHTAGE: 5 GHz band weight value for roaming
+ * @ROAM_6GHZ_BAND_WEIGHTAGE: 6 GHz band weight value for roaming
+ * @ROAM_RESCAN_RSSI_DIFF : Roam rescan rssi difference value
+ * @ROAM_PERIODIC_SCAN_INTERVAL: Roam periodic scan interval value
+ * @ROAM_SCORE_DELTA: Roam score delta value
+ * @ROAM_CONFIG_RT_PARAMS_ENABLED: Roam config RT params enabled
+ * @MIN_ROAM_SCORE_DELTA: Min roam score delta value
+ * @RECONNECT_DISALLOW_PERIOD: Reconnect disallow period value.
  */
 enum roam_cfg_param {
 	RSSI_CHANGE_THRESHOLD,
@@ -815,7 +920,22 @@ enum roam_cfg_param {
 	ROAM_BAND,
 	HI_RSSI_SCAN_RSSI_DELTA,
 	ROAM_RSSI_DIFF_6GHZ,
+	ROAM_RSSI_DELTA_6GHZ_TO_NON_6GHZ,
 	IS_DISABLE_BTM,
+	IS_ROAM_AGGRESSIVE,
+	ROAM_COMMON_AGGRESSIVE_MIN_ROAM_DELTA,
+	ROAM_AGGRESSIVE_SCORE_DELTA,
+	ROAM_AGGRESSIVE_SCAN_STEP_RSSI,
+	ROAM_AGGRESSIVE_NEIGHBOR_LOOKUP_RSSI_THRESHOLD,
+	ROAM_2P4GHZ_BAND_WEIGHTAGE,
+	ROAM_5GHZ_BAND_WEIGHTAGE,
+	ROAM_6GHZ_BAND_WEIGHTAGE,
+	ROAM_RESCAN_RSSI_DIFF,
+	ROAM_PERIODIC_SCAN_INTERVAL,
+	ROAM_SCORE_DELTA,
+	ROAM_CONFIG_RT_PARAMS_ENABLED,
+	MIN_ROAM_SCORE_DELTA,
+	RECONNECT_DISALLOW_PERIOD,
 };
 
 /**
@@ -965,6 +1085,13 @@ struct ap_profile {
  *                BITS 16-23 :- It contains scoring percentage of WPA3 security
  *                BITS 24-31 :- reserved
  *                The value of each index must be 0-100
+ * @sta_sap_mcc_weightage: STA + SAP MCC weightage
+ * @band_2g_weightage: 2.4 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 2.4 GHz band
+ * @band_5g_weightage: 5 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 5 GHz band
+ * @band_6g_weightage: 6 GHz band weight value in percentage used to
+ * individually manage the calculated scores for candidates in 6 GHz band
  */
 struct scoring_param {
 	uint32_t disable_bitmap;
@@ -994,10 +1121,14 @@ struct scoring_param {
 	struct per_slot_score oce_wan_scoring;
 #ifdef WLAN_FEATURE_11BE_MLO
 	uint8_t eht_caps_weightage;
-	uint8_t mlo_weightage;
+	uint32_t mlo_weightage;
 #endif
 	int32_t security_weightage;
 	uint32_t security_index_score;
+	uint32_t sta_sap_mcc_weightage;
+	uint32_t band_2g_weightage;
+	uint32_t band_5g_weightage;
+	uint32_t band_6g_weightage;
 };
 
 /**
@@ -1222,7 +1353,7 @@ struct wlan_roam_triggers {
 	uint32_t roam_scan_scheme_bitmap;
 	struct wlan_cm_roam_vendor_btm_params vendor_btm_param;
 	struct roam_trigger_min_rssi min_rssi_params[NUM_OF_ROAM_MIN_RSSI];
-	struct roam_trigger_score_delta score_delta_param[NUM_OF_ROAM_TRIGGERS];
+	struct roam_trigger_score_delta score_delta_param[ROAM_TRIGGER_REASON_MAX];
 };
 
 /**
@@ -1239,7 +1370,7 @@ struct ap_profile_params {
 	struct ap_profile profile;
 	struct scoring_param param;
 	struct roam_trigger_min_rssi min_rssi_params[NUM_OF_ROAM_MIN_RSSI];
-	struct roam_trigger_score_delta score_delta_param[NUM_OF_ROAM_TRIGGERS];
+	struct roam_trigger_score_delta score_delta_param[ROAM_TRIGGER_REASON_MAX];
 	struct owe_transition_mode_info owe_ap_profile;
 };
 
@@ -1445,10 +1576,13 @@ struct vendor_handoff_cfg {
  * struct wlan_roam_disconnect_params - Emergency deauth/disconnect roam params
  * @vdev_id: VDEV on which the parameters should be applied
  * @enable: Enable or disable disconnect roaming.
+ * @reconnect_disallow_period: duration after which STA is allowed
+ * to reconnect to the same BSSID sending DEAUTH/DISASSOC frames
  */
 struct wlan_roam_disconnect_params {
 	uint32_t vdev_id;
 	bool enable;
+	uint32_t reconnect_disallow_period;
 };
 
 /**
@@ -1862,6 +1996,8 @@ enum wlan_roam_offload_scan_rssi_flags {
  * @roam_data_rssi_threshold: Bad data RSSI threshold to roam
  * @rx_data_inactivity_time: Rx duration to check data RSSI
  * @flags: Flags for roam scan RSSI threshold params
+ * @bg_roam_scan_flag: To set bg_roam_scan flag
+ *		       WMI_ROAM_BG_SCAN_FLAGS_2G_TO_5G_ONLY
  */
 struct wlan_roam_offload_scan_rssi_params {
 	int8_t rssi_thresh;
@@ -1894,6 +2030,7 @@ struct wlan_roam_offload_scan_rssi_params {
 	int32_t roam_data_rssi_threshold;
 	uint32_t rx_data_inactivity_time;
 	uint32_t flags;
+	bool bg_roam_scan_flag;
 };
 
 /**
@@ -1943,6 +2080,9 @@ struct wlan_roam_reason_vsie_enable {
  * roam_scan_inactivity_time.
  * @full_scan_period: Full scan period is the idle period in seconds
  * between two successive full channel roam scans.
+ * @roam_periodic_scan_interval: the interval in seconds after which STA
+ * performs periodic partial scans till roaming succeeds or RSSI recovers
+ * above threshold.
  */
 struct wlan_roam_scan_period_params {
 	uint32_t vdev_id;
@@ -1952,6 +2092,7 @@ struct wlan_roam_scan_period_params {
 	uint32_t roam_scan_inactivity_time;
 	uint32_t roam_inactive_data_packet_count;
 	uint32_t full_scan_period;
+	uint32_t roam_periodic_scan_interval;
 };
 
 /**
@@ -2054,6 +2195,8 @@ struct wlan_roam_mlo_config {
  * scan only on prior discovery of any 6 GHz support in the environment.
  * @wlan_roam_rssi_diff_6ghz: This value is used as to how better the RSSI of
  * the new/roamable 6GHz AP should be for roaming.
+ * @wlan_roam_rssi_delta_6ghz_to_non_6ghz: This value is used as to how better
+ * the RSSI of the new/roamable non 6GHz AP should be for roaming.
  */
 struct wlan_roam_start_config {
 	struct wlan_roam_offload_scan_rssi_params rssi_params;
@@ -2079,6 +2222,7 @@ struct wlan_roam_start_config {
 	uint8_t wlan_exclude_rm_partial_scan_freq;
 	uint8_t wlan_roam_full_scan_6ghz_on_disc;
 	uint8_t wlan_roam_rssi_diff_6ghz;
+	uint8_t wlan_roam_rssi_delta_6ghz_to_non_6ghz;
 	/* other wmi cmd structures */
 };
 
@@ -2136,6 +2280,8 @@ struct wlan_roam_stop_config {
  * scan only on prior discovery of any 6 GHz support in the environment.
  * @wlan_roam_rssi_diff_6ghz: This value is used as to how better the RSSI of
  * the new/roamable 6GHz AP should be for roaming.
+ * @wlan_roam_rssi_delta_6ghz_to_non_6ghz: This value is used as to how better
+ * the RSSI of the new/roamable non 6GHz AP should be for roaming.
  */
 struct wlan_roam_update_config {
 	struct wlan_roam_beacon_miss_cnt beacon_miss_cnt;
@@ -2155,6 +2301,7 @@ struct wlan_roam_update_config {
 	uint8_t wlan_exclude_rm_partial_scan_freq;
 	uint8_t wlan_roam_full_scan_6ghz_on_disc;
 	uint8_t wlan_roam_rssi_diff_6ghz;
+	uint8_t wlan_roam_rssi_delta_6ghz_to_non_6ghz;
 };
 
 #if defined(WLAN_FEATURE_HOST_ROAM) || defined(WLAN_FEATURE_ROAM_OFFLOAD)
@@ -2182,6 +2329,21 @@ enum roam_offload_state {
 	WLAN_ROAMING_IN_PROG,
 	WLAN_ROAM_SYNCH_IN_PROG,
 	WLAN_MLO_ROAM_SYNCH_IN_PROG,
+};
+
+/**
+ * enum wlan_roam_policy - Represents the policies for roaming.
+ * @WLAN_ROAMING_NOT_ALLOWED: Roaming is not allowed/disabled.
+ * @WLAN_ROAMING_ALLOWED_WITHIN_ESS: Roaming is allowed with in an ESS with
+ * default RSSI thresholds.
+ * @WLAN_ROAMING_MODE_AGGRESSIVE: This mode is an extension of
+ * WLAN_ROAMING_MODE_AGGRESSIVE. The driver/firmware roams on higher RSSI
+ * thresholds when compared to WLAN_ROAMING_ALLOWED_WITHIN_ESS.
+ */
+enum wlan_roam_policy {
+	WLAN_ROAMING_NOT_ALLOWED,
+	WLAN_ROAMING_ALLOWED_WITHIN_ESS,
+	WLAN_ROAMING_MODE_AGGRESSIVE,
 };
 
 #define WLAN_ROAM_SCAN_CANDIDATE_AP 0
@@ -2317,7 +2479,7 @@ enum roam_rt_stats_type {
  * @status_code: Status code from 802.11 spec, section 9.4.1.9
  * @auth_algo: Authentication algorithm as defined in 802.11 spec,
  * 9.4.1.1 Authentication Algorithm Number field
- * @tx_status: Frame TX status defined by enum qdf_dp_tx_rx_status
+ * @tx_status: Frame TX status defined by enum wlan_diag_tx_rx_status
  * applicable only for tx frames
  * @rssi: Frame rssi
  * @retry_count: Frame retry count
@@ -2334,7 +2496,7 @@ struct roam_frame_info {
 	uint8_t type;
 	uint8_t subtype;
 	uint8_t is_rsp;
-	enum qdf_dp_tx_rx_status tx_status;
+	uint32_t tx_status;
 	uint16_t seq_num;
 	uint8_t auth_algo;
 	uint16_t status_code;
@@ -2357,6 +2519,9 @@ struct roam_frame_info {
  * @RSO_SAP_CHANNEL_CHANGE: disable roaming due to SAP channel change
  * @RSO_NDP_CON_ON_NDI: disable roaming due to NDP connection on NDI
  * @RSO_SET_PCL: Disable roaming to set pcl to firmware
+ * @RSO_SET_LINK: Avoid enable roaming due to SET_LINK is in progress
+ * @RSO_PASSTHRU_SET_CHANNEL: disable roaming temporarily when set
+ *  set channel operation is ongoing on passthru vdev.
  */
 enum wlan_cm_rso_control_requestor {
 	RSO_INVALID_REQUESTOR,
@@ -2366,6 +2531,8 @@ enum wlan_cm_rso_control_requestor {
 	RSO_SAP_CHANNEL_CHANGE = BIT(3),
 	RSO_NDP_CON_ON_NDI     = BIT(4),
 	RSO_SET_PCL            = BIT(5),
+	RSO_SET_LINK           = BIT(6),
+	RSO_PASSTHRU_SET_CHANNEL = BIT(7),
 };
 #endif
 
@@ -2388,10 +2555,11 @@ struct set_pcl_req {
  * @vdev_id: vdev for which the roaming has to be enabled/disabled
  * @target_bssid: target mac address
  * @ch_freq: channel frequency
- * @frame_len: frame length, includs mac header, fixed params and ies
+ * @frame_len: frame length, includes mac header, fixed params and ies
  * @frame_buf: buffer containing probe response or beacon
  * @is_same_bssid: flag to indicate if roaming is requested for same bssid
  * @forced_roaming: Roam to any bssid in any ch (here bssid & ch is not given)
+ * @skip_full_scan: skip full scan fallback when cache scan finds no candidate
  */
 struct roam_invoke_req {
 	uint8_t vdev_id;
@@ -2401,6 +2569,7 @@ struct roam_invoke_req {
 	uint8_t *frame_buf;
 	uint8_t is_same_bssid;
 	bool forced_roaming;
+	bool skip_full_scan;
 };
 
 /**
@@ -2489,6 +2658,7 @@ enum roam_reason {
  * @reject_reason: reason to add the BSSID to DLM
  * @original_timeout: original timeout sent by the AP
  * @source: Source of adding the BSSID to DLM
+ * @reject_mlo_ap_info: reject mlo ap info
  */
 struct roam_denylist_timeout {
 	struct qdf_mac_addr bssid;
@@ -2498,6 +2668,9 @@ struct roam_denylist_timeout {
 	enum dlm_reject_ap_reason reject_reason;
 	uint32_t original_timeout;
 	enum dlm_reject_ap_source source;
+#ifdef WLAN_FEATURE_11BE_MLO
+	struct reject_mlo_ap_info reject_mlo_ap_info;
+#endif
 };
 
 /**
@@ -2607,7 +2780,7 @@ struct roam_frame_stats {
  * @num_tlv: Number of roam scans triggered
  * @num_roam_msg_info: Number of roam_msg_info present in event
  * @enhance_roam_rt_event:  flag of whether we need send event for
- *  real time enhance roam stats info to user space
+ * real time enhance roam stats info to user space
  * @trigger: Roam trigger related details
  * @scan: Roam scan event details
  * @result: Roam result related info
@@ -2692,6 +2865,10 @@ struct roam_pmkid_req_event {
  * @send_roam_scan_offload_rssi_params: Set the RSSI parameters for roam
  * offload scan
  * @send_roam_frequencies: send roam frequencies to FW
+ * @send_roam_idle_trigger: Send roam idle params to FW
+ * @send_roam_disconnect_params: Send roam disconnect params to FW
+ * @allow_pm_after_roam_sync: Allow runtime PM suspernd after roam synch
+ * is complete
  */
 struct wlan_cm_roam_tx_ops {
 	QDF_STATUS (*send_vdev_set_pcl_cmd)(struct wlan_objmgr_vdev *vdev,
@@ -2750,9 +2927,16 @@ struct wlan_cm_roam_tx_ops {
 	QDF_STATUS (*send_roam_mlo_config)(struct wlan_objmgr_vdev *vdev,
 					   struct wlan_roam_mlo_config *req);
 #endif
+	QDF_STATUS (*send_roam_idle_trigger)(wmi_unified_t wmi_handle,
+					     uint8_t command,
+					     struct wlan_roam_idle_params *req);
 	QDF_STATUS (*send_roam_frequencies)(
 			struct wlan_objmgr_vdev *vdev,
 			struct wlan_roam_scan_channel_list *rso_ch_info);
+	QDF_STATUS (*send_roam_disconnect_params)(wmi_unified_t wmi_handle,
+						  uint8_t command,
+						  struct wlan_roam_disconnect_params *req);
+	void (*allow_pm_after_roam_sync)(struct wlan_objmgr_psoc *psoc);
 };
 
 /**

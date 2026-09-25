@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -26,7 +26,11 @@
 #include <qdf_tracepoint.h>
 #include "qdf_ssr_driver_dump.h"
 
+#ifdef CONFIG_BORON
+struct tcl_assist_cmd gtcl_assist_symbol __used;
+#else
 struct tcl_data_cmd gtcl_data_symbol __attribute__((used));
+#endif
 
 #ifdef QCA_WIFI_QCA8074
 void hal_qca6290_attach(struct hal_soc *hal);
@@ -65,11 +69,23 @@ void hal_qca5018_attach(struct hal_soc *hal);
 #ifdef QCA_WIFI_QCA5332
 void hal_qca5332_attach(struct hal_soc *hal);
 #endif
+#ifdef QCA_WIFI_QCA5424
+void hal_qca5424_attach(struct hal_soc *hal);
+#endif
 #ifdef INCLUDE_HAL_KIWI
 void hal_kiwi_attach(struct hal_soc *hal);
 #endif
 #ifdef INCLUDE_HAL_PEACH
 void hal_peach_attach(struct hal_soc *hal);
+#endif
+#ifdef INCLUDE_HAL_FIG
+void hal_fig_attach(struct hal_soc *hal);
+#endif
+#ifdef QCA_WIFI_WCN7750
+void hal_wcn7750_attach(struct hal_soc *hal);
+#endif
+#ifdef QCA_WIFI_QCC2072
+void hal_qcc2072_attach(struct hal_soc *hal);
 #endif
 
 #ifdef ENABLE_VERBOSE_DEBUG
@@ -446,6 +462,19 @@ static void hal_target_based_configure(struct hal_soc *hal)
 			hal_qca6750_attach(hal);
 		break;
 #endif
+#ifdef QCA_WIFI_WCN7750
+		case TARGET_TYPE_WCN7750:
+			hal->use_register_windowing = true;
+			hal->static_window_map = true;
+			hal_wcn7750_attach(hal);
+		break;
+#endif
+#ifdef QCA_WIFI_QCC2072
+	case TARGET_TYPE_QCC2072:
+		hal->use_register_windowing = true;
+		hal_qcc2072_attach(hal);
+		break;
+#endif
 #ifdef INCLUDE_HAL_KIWI
 	case TARGET_TYPE_KIWI:
 	case TARGET_TYPE_MANGO:
@@ -453,10 +482,16 @@ static void hal_target_based_configure(struct hal_soc *hal)
 		hal_kiwi_attach(hal);
 		break;
 #endif
-#ifdef INCLUDE_HAL_PEACH
+#if defined(INCLUDE_HAL_PEACH)
 	case TARGET_TYPE_PEACH:
 		hal->use_register_windowing = true;
 		hal_peach_attach(hal);
+		break;
+#endif
+#if defined(INCLUDE_HAL_FIG)
+	case TARGET_TYPE_FIG:
+		hal->use_register_windowing = true;
+		hal_fig_attach(hal);
 		break;
 #endif
 #if defined(QCA_WIFI_QCA8074) && defined(WIFI_TARGET_TYPE_3_0)
@@ -560,6 +595,17 @@ static void hal_target_based_configure(struct hal_soc *hal)
 		hal->static_window_map = true;
 		hal_wcn6450_attach(hal);
 	break;
+#endif
+#if defined(QCA_WIFI_QCA5424)
+	case TARGET_TYPE_QCA5424:
+		hal->use_register_windowing = true;
+		/*
+		 * Static window map  is enabled for qcn6432 to use 2mb bar
+		 * size and use multiple windows to write into registers.
+		 */
+		hal->static_window_map = true;
+		hal_qca5424_attach(hal);
+		break;
 #endif
 	default:
 	break;
@@ -953,6 +999,7 @@ static void hal_reg_write_work(void *arg)
 
 		qdf_trace_dp_del_reg_write(ring_id, q_elem->enqueue_val,
 					   q_elem->dequeue_val,
+					   q_elem->work_scheduled_time,
 					   q_elem->enqueue_time,
 					   q_elem->dequeue_time);
 
@@ -1157,7 +1204,7 @@ void hal_record_suspend_write(uint8_t ring_id, uint32_t value, uint32_t count)
 }
 #endif
 
-#ifdef QCA_WIFI_QCA6750
+#if defined(QCA_WIFI_QCA6750) || defined(QCA_WIFI_WCN7750)
 void hal_delayed_reg_write(struct hal_soc *hal_soc,
 			   struct hal_srng *srng,
 			   void __iomem *addr,
@@ -1529,6 +1576,17 @@ void hal_srng_dst_set_hp_paddr_confirm(struct hal_srng *srng, uint64_t paddr)
 
 qdf_export_symbol(hal_srng_dst_set_hp_paddr_confirm);
 
+void hal_srng_dst_get_hp_paddr(struct hal_srng *srng, uint64_t *headp)
+{
+	uint32_t lsb, msb;
+
+	lsb = SRNG_DST_REG_READ(srng, HP_ADDR_LSB);
+	msb = SRNG_DST_REG_READ(srng, HP_ADDR_MSB);
+	*headp = ((uint64_t)msb) << 32 | lsb;
+}
+
+qdf_export_symbol(hal_srng_dst_get_hp_paddr);
+
 void hal_srng_dst_init_hp(struct hal_soc_handle *hal_soc,
 			  struct hal_srng *srng,
 			  uint32_t *vaddr)
@@ -1567,7 +1625,7 @@ void hal_srng_dst_update_hp_addr(struct hal_soc_handle *hal_soc,
 
 	if (srng->u.dst_ring.hp_addr) {
 		hal_get_hw_hptp(hal_soc, hal_ring_hdl, &hw_hp, &hw_tp,
-				WBM2SW_RELEASE);
+				COMP_RING_TYPE);
 		*srng->u.dst_ring.hp_addr = hw_hp;
 		QDF_TRACE(QDF_MODULE_ID_DP, QDF_TRACE_LEVEL_DEBUG,
 			  "hw_hp=%d", hw_hp);
@@ -1777,10 +1835,6 @@ void *hal_srng_setup_idx(void *hal_soc, int ring_type, int ring_num, int mac_id,
 		srng->hwreg_base[i] = dev_base_addr + ring_config->reg_start[i]
 			+ (ring_num * ring_config->reg_size[i]);
 	}
-
-	/* Zero out the entire ring memory */
-	qdf_mem_zero(srng->ring_base_vaddr, (srng->entry_size *
-		srng->num_entries) << 2);
 
 	srng->flags = ring_params->flags;
 

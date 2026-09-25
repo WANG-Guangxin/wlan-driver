@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -28,6 +28,8 @@
 #ifdef CONFIG_AFC_SUPPORT
 #include <wlan_reg_afc.h>
 #endif
+
+#include "qdf_list.h"
 
 #ifdef CONFIG_BAND_6GHZ
 #define REG_MAX_CHANNELS_PER_OPERATING_CLASS        70
@@ -91,6 +93,7 @@
 #define BW_40_MHZ     40
 
 #define MAX_NUM_PWR_LEVEL 16
+#define MAX_NUM_EIRP_PWR_LEVEL 5
 
 #ifdef CONFIG_REG_CLIENT
 #define MAX_NUM_FCC_RULES 2
@@ -533,7 +536,6 @@ enum channel_enum {
 #define BAND_5GHZ_START_CHANNEL MIN_5GHZ_CHANNEL
 #endif /* CONFIG_49GHZ_CHAN */
 
-#ifdef DISABLE_UNII_SHARED_BANDS
 	MIN_UNII_1_BAND_CHANNEL = CHAN_ENUM_5180,
 	MAX_UNII_1_BAND_CHANNEL = CHAN_ENUM_5240,
 	NUM_UNII_1_BAND_CHANNELS = (MAX_UNII_1_BAND_CHANNEL -
@@ -543,7 +545,6 @@ enum channel_enum {
 	MAX_UNII_2A_BAND_CHANNEL = CHAN_ENUM_5320,
 	NUM_UNII_2A_BAND_CHANNELS = (MAX_UNII_2A_BAND_CHANNEL -
 				     MIN_UNII_2A_BAND_CHANNEL + 1),
-#endif
 
 #ifdef CONFIG_BAND_6GHZ
 	MIN_6GHZ_CHANNEL = CHAN_ENUM_5935,
@@ -579,19 +580,25 @@ enum channel_state {
  * @REG_INDOOR_AP: Indoor AP
  * @REG_STANDARD_POWER_AP: Standard Power AP
  * @REG_VERY_LOW_POWER_AP: Very low power AP
+ * @REG_INDOOR_ENABLED_AP: Indoor Enabled AP
  * @REG_CURRENT_MAX_AP_TYPE: current maximum, used to determine array size
  * @REG_MAX_SUPP_AP_TYPE: Current maximum AP power typer supported in the IEEE
  * standard.
  * @REG_MAX_AP_TYPE: Maximum value possible for (3 bits) regulatory info
  * sub-field in the 6G HE Operation IE
+ * @REG_INDOOR_SP_AP: Composite AP (Supports LPI and SP)
  */
 enum reg_6g_ap_type {
 	REG_INDOOR_AP = 0,
 	REG_STANDARD_POWER_AP = 1,
 	REG_VERY_LOW_POWER_AP = 2,
+#ifdef CONFIG_REG_CLIENT
+	REG_INDOOR_ENABLED_AP = 3,
+#endif
 	REG_CURRENT_MAX_AP_TYPE,
-	REG_MAX_SUPP_AP_TYPE = REG_VERY_LOW_POWER_AP,
-	REG_MAX_AP_TYPE = 7,
+	REG_MAX_SUPP_AP_TYPE = REG_CURRENT_MAX_AP_TYPE - 1,
+	REG_INDOOR_SP_AP = 8,
+	REG_MAX_AP_TYPE = 9
 };
 
 /**
@@ -664,6 +671,8 @@ struct freq_range {
  * @center_freq_seg1: channel number segment 1
  * @mhz_freq_seg0: Center frequency for segment 0
  * @mhz_freq_seg1: Center frequency for segment 1
+ * @get_max_non_eht_params: Get chan params corresponding to the puncturing
+ *                          bitmap in @input_punc_bitmap.
  * @reg_punc_bitmap: Output puncturing bitmap
  * @is_create_punc_bitmap: Whether puncturing bitmap is to be created or not
  *                         Parameter 'reg_punc_bitmap' is valid only if
@@ -680,6 +689,7 @@ struct ch_params {
 	qdf_freq_t mhz_freq_seg0;
 	qdf_freq_t mhz_freq_seg1;
 #ifdef WLAN_FEATURE_11BE
+	bool get_max_non_eht_params;
 	uint16_t reg_punc_bitmap;
 	bool is_create_punc_bitmap;
 	uint16_t input_punc_bitmap;
@@ -1056,6 +1066,10 @@ struct ap_cli_pwr_mode_info {
  * @REG_CLI_SUB_LPI: LPI subordinate client mode
  * @REG_CLI_SUB_SP: SP subordinate client mode
  * @REG_CLI_SUB_VLP: VLP subordinate client mode
+ * @REG_AP_C2C: C2C AP power mode
+ * @REG_CLI_DEF_C2C: C2C default client mode
+ * @REG_CLI_SUB_C2C: C2C subordinate client mode
+ * @REG_MAX_POWER_MODE: Max supported power mode
  * @REG_INVALID_PWR_MODE: Invalid power mode
  */
 enum supported_6g_pwr_types {
@@ -1070,10 +1084,22 @@ enum supported_6g_pwr_types {
 	REG_CLI_SUB_LPI      = 7,
 	REG_CLI_SUB_SP       = 8,
 	REG_CLI_SUB_VLP      = 9,
-	REG_INVALID_PWR_MODE = 10,
+#ifdef CONFIG_REG_CLIENT
+	REG_AP_C2C           = 10,
+	REG_CLI_DEF_C2C      = 11,
+	REG_CLI_SUB_C2C      = 12,
+#endif
+	REG_MAX_POWER_MODE,
+	REG_INVALID_PWR_MODE = REG_MAX_POWER_MODE,
+
 };
 
+#ifdef CONFIG_REG_CLIENT
+#define MAX_PWR_TYPES 13
+#else
 #define MAX_PWR_TYPES 10
+#endif
+
 /**
  * struct psd_val: Regulatory power information
  * @psd_flag: Boolean to indicate if PSD is supported or not
@@ -1265,6 +1291,9 @@ struct cur_fcc_rule {
  * @reg_rules_6g_client_ptr: list of ptr to 6G client reg rules
  * @fcc_rules_ptr: ptr to fcc rules
  * @num_fcc_rules: Number of fcc rules sent by firmware
+ * @is_c2c_supp: Flag to check if c2c is supported
+ * @addn_reg_rule_order: Order of additional reg rules
+ * @num_reg_meta_data: Number of regulatory meta data
  */
 struct cur_regulatory_info {
 	struct wlan_objmgr_psoc *psoc;
@@ -1303,6 +1332,11 @@ struct cur_regulatory_info {
 #ifdef CONFIG_REG_CLIENT
 	struct cur_fcc_rule *fcc_rules_ptr;
 	uint32_t num_fcc_rules;
+#ifdef CONFIG_BAND_6GHZ
+	enum supported_6g_pwr_types *addn_reg_rule_order;
+	uint32_t num_reg_meta_data;
+	bool is_c2c_supp;
+#endif
 #endif
 };
 
@@ -1668,6 +1702,7 @@ enum direction {
  * @reg_6g_thresh_priority_freq: All frequencies greater or equal will be given
  * priority during channel selection by upper layer
  * @max_bw_5g: Maximum 5g Bandwidth
+ * @is_c2c_supp: Flag to indicate C2C support
  */
 struct mas_chan_params {
 	enum dfs_reg dfs_region;
@@ -1696,6 +1731,9 @@ struct mas_chan_params {
 	bool rnr_tpe_usable;
 	bool unspecified_ap_usable;
 	qdf_freq_t reg_6g_thresh_priority_freq;
+#ifdef CONFIG_REG_CLIENT
+	bool is_c2c_supp;
+#endif
 #endif
 	uint16_t max_bw_5g;
 };
@@ -1890,7 +1928,7 @@ enum reg_phymode {
  */
 struct chan_power_info {
 	qdf_freq_t chan_cfreq;
-	int8_t tx_power;
+	int16_t tx_power;
 };
 
 /**
@@ -1899,24 +1937,34 @@ struct chan_power_info {
  * @eirp_power: Maximum EIRP power (dBm), valid only if power is PSD
  * @power_type_6g: type of power (SP/LPI/VLP)
  * @num_pwr_levels: number of power levels
+ * @num_psd_pwr_levels: number of PSD power levels
+ * @num_eirp_pwr_levels: number of EIRP power levels
  * @reg_max: Array of maximum TX power (dBm) per PSD value
  * @ap_constraint_power: AP constraint power (dBm)
  * @frequency: Array of operating frequency
  * @tpe: TPE values processed from TPE IE
  * @chan_power_info: power info to send to FW
+ * @chan_psd_power_info: PSD power values to be sent to FW
+ * @chan_eirp_power_info: EIRP power values to be sent to FW
  * @is_power_constraint_abs: is power constraint absolute or not
+ * @is_power_type_client_sp: If the power mode is SP Client type
  */
 struct reg_tpc_power_info {
 	bool is_psd_power;
-	int8_t eirp_power;
+	int16_t eirp_power;
 	uint8_t power_type_6g;
 	uint8_t num_pwr_levels;
+	uint8_t num_psd_pwr_levels;
+	uint8_t num_eirp_pwr_levels;
 	uint8_t reg_max[MAX_NUM_PWR_LEVEL];
 	uint8_t ap_constraint_power;
 	qdf_freq_t frequency[MAX_NUM_PWR_LEVEL];
 	uint8_t tpe[MAX_NUM_PWR_LEVEL];
 	struct chan_power_info chan_power_info[MAX_NUM_PWR_LEVEL];
+	struct chan_power_info chan_psd_power_info[MAX_NUM_PWR_LEVEL];
+	struct chan_power_info chan_eirp_power_info[MAX_NUM_EIRP_PWR_LEVEL];
 	bool is_power_constraint_abs;
+	bool is_power_type_client_sp;
 };
 
 #ifdef FEATURE_WLAN_CH_AVOID_EXT
@@ -2392,4 +2440,113 @@ struct r2p_table_update_status_obj {
 	uint32_t pdev_id;
 	uint32_t status;
 };
+
+/**
+ * enum reg_host_pdev_power_boost_event_status - power boost status
+ * @REG_HOST_POWER_BOOST_START_INFERENCE: Start inference
+ * @REG_HOST_POWER_BOOST_ABORT: Abort
+ * @REG_HOST_POWER_BOOST_COMPLETE: Inference complete
+ *
+ * This enum is 1:1 mapping to enum wmi_pdev_power_boost_event_type
+ */
+enum reg_host_pdev_power_boost_event_status {
+	REG_HOST_POWER_BOOST_START_INFERENCE = 0,
+	REG_HOST_POWER_BOOST_ABORT           = 1,
+	REG_HOST_POWER_BOOST_COMPLETE        = 2,
+};
+
+/**
+ * enum reg_host_tx_pb_inference_stage - Inference stage
+ * @REG_HOST_TX_PB_INFERENCE_FIRST_PASS: 1st pass
+ * @REG_HOST_TX_PB_INFERENCE_SECOND_PASS: 2nd pass
+ *
+ * This enum is 1:1 mapping to enum wmi_pdev_power_boost_inferencing_stage
+ */
+enum reg_host_tx_pb_inference_stage {
+	REG_HOST_TX_PB_INFERENCE_FIRST_PASS  = 0,
+	REG_HOST_TX_PB_INFERENCE_SECOND_PASS = 1,
+};
+
+/**
+ * enum reg_host_pdev_power_boost_cmd_status - power boost command status
+ * @REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_READY: App ready status
+ * @REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_ESTIMATED_DATA: Power boost inference
+ * result
+ * @REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_ABORT: Abort power boost inference
+ */
+enum reg_host_pdev_power_boost_cmd_status {
+	REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_READY = 0,
+	REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_ESTIMATED_DATA,
+	REG_HOST_PDEV_POWER_BOOST_CMD_STATUS_ABORT,
+};
+
+/**
+ * struct reg_pdev_pb_dma_buf - Power boost DMA buffer struct for WMI
+ *
+ * @paddr_aligned_lo: Physical address lower 32-bits
+ * @paddr_aligned_hi: Physical address high 32-bits
+ * @size: DMA buffer size for power boost
+ */
+struct reg_pdev_pb_dma_buf {
+	uint32_t paddr_aligned_lo;
+	uint32_t paddr_aligned_hi;
+	uint32_t size;
+};
+
+/**
+ * struct reg_txpb_cmn_params - Power boost common params
+ * @node: List entry element
+ * @pdev_id: PDEV ID
+ * @status: status
+ * @inference_stage: Power Boost inference Stage
+ * @mcs: MCS of the Power Boost samples collected
+ * @bandwidth: Bandwidth of the Power Boost samples collected
+ * @temperature_degreeC: Temperature in Celsius
+ * @primary_chan_mhz: Primary channel frequency
+ * @center_freq1: Center frequency 1
+ * @center_freq2: Center frequency 2
+ * @phy_mode: PHY mode
+ * @req_id: Request id
+ */
+struct reg_txpb_cmn_params {
+	qdf_list_node_t node;
+	uint32_t pdev_id;
+	uint32_t status;
+	enum reg_host_tx_pb_inference_stage inference_stage;
+	uint32_t mcs;
+	uint32_t bandwidth;
+	int32_t  temperature_degreeC;
+	uint32_t primary_chan_mhz;
+	uint32_t center_freq1;
+	uint32_t center_freq2;
+	uint32_t phy_mode;
+	uint32_t req_id;
+};
+
+/**
+ * struct reg_txpb_evt_params - Power boost event params
+ * @cmn_params: These are the common params applicable to event and command
+ * @tx_pwr: ANN packet tx_power
+ * @tx_chain_idx: Tx chain index on which ANN packet sent
+ * @iq_sample_buf_size: IQ sample size
+ */
+struct reg_txpb_evt_params {
+	struct reg_txpb_cmn_params cmn_params;
+	int32_t  tx_pwr;
+	uint32_t tx_chain_idx;
+	uint32_t iq_sample_buf_size;
+};
+
+/**
+ * struct reg_txpb_cmd_params - Power boost cmd params
+ * @cmn_params: These are the common params applicable to event and command
+ * @tx_evm: Tx Error Vector Magnitude
+ * @mask_margin: Mask margin
+ */
+struct reg_txpb_cmd_params {
+	struct reg_txpb_cmn_params cmn_params;
+	int32_t  tx_evm;
+	int32_t  mask_margin;
+};
+
 #endif

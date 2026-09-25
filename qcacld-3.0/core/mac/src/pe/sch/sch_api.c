@@ -373,7 +373,7 @@ static QDF_STATUS lim_populate_fd_tmpl_frame(struct mac_context *mac,
 
 	cur_phymode = des_chan->ch_phymode;
 
-	lim_populate_mac_header(mac, frm, SIR_MAC_MGMT_FRAME,
+	lim_populate_mac_header(mac, frm, WLAN_FC0_TYPE_MGMT,
 				SIR_MAC_MGMT_ACTION, broadcast_mac_addr.bytes,
 				pe_session->self_mac_addr);
 	mac_hdr = (tpSirMacMgmtHdr)frm;
@@ -458,7 +458,7 @@ static QDF_STATUS lim_populate_fd_tmpl_frame(struct mac_context *mac,
 	/* Add TPE IE */
 	if ((wlan_reg_is_6ghz_chan_freq(cur_chan_freq)) ||
 	    (pe_session->vhtCapability)) {
-		populate_dot11f_tx_power_env(mac, &tpe[0], chwidth,
+		populate_dot11f_tx_power_env(mac, pe_session, &tpe[0], chwidth,
 					     cur_chan_freq, &tpe_num, false);
 		if (tpe_num > WLAN_MAX_NUM_TPE_IE) {
 			pe_err("tpe_num  %d greater than max size", tpe_num);
@@ -559,6 +559,37 @@ memfree:
 	return status;
 }
 
+/**
+ * lim_get_concurrent_ap_vdevid() - loop every vdev to get 2g/5g
+ * and return valid vdev id
+ * @psoc: pointer to psoc
+ * @pe_session: pe session
+ *
+ * Return: uint8_t
+ */
+static uint8_t
+lim_get_concurrent_ap_vdevid(struct mac_context *mac_ctx,
+			     struct pe_session *pe_session)
+{
+	uint8_t i;
+	uint8_t vdev_id_list[MAX_NUMBER_OF_CONC_CONNECTIONS];
+	qdf_freq_t freq_list[MAX_NUMBER_OF_CONC_CONNECTIONS];
+	uint8_t vdev_num;
+
+	vdev_num = policy_mgr_get_sap_mode_info(mac_ctx->psoc, freq_list,
+						vdev_id_list);
+	if (vdev_num >= MAX_NUMBER_OF_CONC_CONNECTIONS)
+		return INVALID_VDEV_ID;
+
+	for (i = 0; i < vdev_num; i++) {
+		if (wlan_reg_is_24ghz_ch_freq(freq_list[i]) ||
+		    wlan_reg_is_5ghz_ch_freq(freq_list[i])) {
+			return vdev_id_list[i];
+		}
+	}
+	return INVALID_VDEV_ID;
+}
+
 QDF_STATUS sch_send_beacon_req(struct mac_context *mac, uint8_t *beaconPayload,
 			       uint16_t size, struct pe_session *pe_session,
 			       enum sir_bcn_update_reason reason)
@@ -566,6 +597,8 @@ QDF_STATUS sch_send_beacon_req(struct mac_context *mac, uint8_t *beaconPayload,
 	struct scheduler_msg msgQ = {0};
 	tpSendbeaconParams beaconParams = NULL;
 	QDF_STATUS retCode;
+	uint8_t vdev_id = INVALID_VDEV_ID;
+	bool is_curr_ap_6g = false;
 
 	if (LIM_IS_AP_ROLE(pe_session) &&
 	   (mac->sch.beacon_changed)) {
@@ -575,11 +608,21 @@ QDF_STATUS sch_send_beacon_req(struct mac_context *mac, uint8_t *beaconPayload,
 		if (QDF_STATUS_SUCCESS != retCode)
 			pe_err("FAILED to send probe response template with retCode %d",
 				retCode);
-		/*Fils Discovery Template */
-		retCode = lim_send_fils_discovery_template(mac, pe_session);
-		if (QDF_STATUS_SUCCESS != retCode)
-			pe_err("FAILED to send fils discovery template retCode %d",
-			       retCode);
+		/* FILS discovery IE should only be included
+		 * if standalone AP operating on 6ghz
+		 * check if another AP is operating on 2/5ghz
+		 * then do not include FILS IE
+		 */
+		vdev_id = lim_get_concurrent_ap_vdevid(mac, pe_session);
+		is_curr_ap_6g = wlan_reg_is_6ghz_chan_freq(pe_session->curr_op_freq);
+		if (vdev_id == INVALID_VDEV_ID && is_curr_ap_6g) {
+			/*Fils Discovery Template */
+			retCode = lim_send_fils_discovery_template(mac,
+								   pe_session);
+			if (retCode != QDF_STATUS_SUCCESS)
+				pe_err("FAILED to send fils discovery template retCode %d",
+				       retCode);
+		}
 	}
 
 	beaconParams = qdf_mem_malloc(sizeof(tSendbeaconParams));
@@ -874,7 +917,7 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 		next_tpe_ie_len_rem =
 			pe_session->schBeaconOffsetEnd - next_tpe_offset;
 		tpe_ie_ptr =
-			wlan_get_ie_ptr_from_eid(DOT11F_EID_TRANSMIT_POWER_ENV,
+			wlan_get_ie_ptr_from_eid(EID_TRANSMIT_POWER_ENVELOPE,
 						 next_tpe_ie_ptr,
 						 next_tpe_ie_len_rem);
 
@@ -916,10 +959,10 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 	qdf_mem_zero(pFrame2Hal, nBytes);
 
 	/* Next, we fill out the buffer descriptor: */
-	lim_populate_mac_header(mac, pFrame2Hal, SIR_MAC_MGMT_FRAME,
-					     SIR_MAC_MGMT_PROBE_RSP,
-					     pe_session->self_mac_addr,
-					     pe_session->self_mac_addr);
+	lim_populate_mac_header(mac, pFrame2Hal, WLAN_FC0_TYPE_MGMT,
+				SIR_MAC_MGMT_PROBE_RSP,
+				pe_session->self_mac_addr,
+				pe_session->self_mac_addr);
 
 	pMacHdr = (tpSirMacMgmtHdr) pFrame2Hal;
 
@@ -968,6 +1011,7 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 	}
 
 	if (tpe_ie_buf_cons &&
+	    (tpe_ie_buf_cons <= tpe_ie_buf_max_size) &&
 	    ((prb_rsp_ie_len + tpe_ie_buf_cons) <= prb_rsp_ie_max_len)) {
 		qdf_mem_copy(prb_rsp_ie_ptr + prb_rsp_ie_len,
 			     tpe_ie_buf, tpe_ie_buf_cons);
@@ -985,8 +1029,15 @@ uint32_t lim_send_probe_rsp_template_to_hal(struct mac_context *mac,
 
 	qdf_mem_free(addIE);
 
+	lim_reorder_vendor_ies(mac, prb_rsp_ie_ptr, prb_rsp_ie_len);
+
 	nBytes = sizeof(tSirMacMgmtHdr) + WLAN_PROBE_RESP_IES_OFFSET +
 		 prb_rsp_ie_len;
+
+	if (nBytes > SIR_MAX_PROBE_RESP_SIZE) {
+		pe_err("nBytes %d greater than max size after IE fill", nBytes);
+		return retCode;
+	}
 
 	pprobeRespParams = qdf_mem_malloc(sizeof(tSendProbeRespParams));
 	if (!pprobeRespParams) {
@@ -1075,8 +1126,9 @@ int sch_gen_timing_advert_frame(struct mac_context *mac_ctx, tSirMacAddr self_ad
 	if (DOT11F_WARNED(ret))
 		pe_warn("Warning packing frame");
 
-	lim_populate_mac_header(mac_ctx, *buf, SIR_MAC_MGMT_FRAME,
-		SIR_MAC_MGMT_TIME_ADVERT, wildcard_bssid.bytes, self_addr);
+	lim_populate_mac_header(mac_ctx, *buf, WLAN_FC0_TYPE_MGMT,
+				SIR_MAC_MGMT_TIME_ADVERT, wildcard_bssid.bytes,
+				self_addr);
 
 	/* The timestamp field is right after the header */
 	*timestamp_offset = sizeof(tSirMacMgmtHdr);

@@ -28,6 +28,15 @@
 #define IRQ_DISABLED_MAX_DURATION_NS 100000000
 #endif
 
+/* mapping NAPI budget 0 to internal budget 0
+ * NAPI budget 1 to internal budget [1,scaler -1]
+ * NAPI budget 2 to internal budget [scaler, 2 * scaler - 1], etc
+ */
+#define NAPI_BUDGET_TO_INTERNAL_BUDGET(n, s) \
+	(((n) << (s)) - 1)
+#define INTERNAL_BUDGET_TO_NAPI_BUDGET(n, s) \
+	(((n) + 1) >> (s))
+
 struct hif_exec_context;
 
 struct hif_execution_ops {
@@ -77,6 +86,10 @@ struct hif_execution_ops {
  * @new_cpu_mask: Stores the affinity hint mask for each WLAN IRQ
  * @force_napi_complete: do a force napi_complete when this flag is set to -1
  * @irq_disabled_start_time: irq disabled start time for single MSI
+ * @irq_start_time: time in nanoseconds at which irq processing is started
+ * @total_irq_time: total time this group spent in irq/softirq processing
+ *			in nanoseconds
+ * @ksoftirqd_time: total time this group spent in ksoftirqd processing in ns
  */
 struct hif_exec_context {
 	struct hif_execution_ops *sched_ops;
@@ -100,7 +113,7 @@ struct hif_exec_context {
 
 	uint8_t cpu;
 	struct qca_napi_stat stats[NR_CPUS];
-	bool inited;
+	qdf_atomic_t inited;
 	bool configured;
 	bool irq_requested;
 	bool irq_enabled;
@@ -109,13 +122,20 @@ struct hif_exec_context {
 	unsigned long long poll_start_time;
 	bool force_break;
 #if defined(FEATURE_IRQ_AFFINITY) || defined(HIF_CPU_PERF_AFFINE_MASK) || \
-	defined(HIF_CPU_CLEAR_AFFINITY)
+	defined(HIF_CPU_CLEAR_AFFINITY) || \
+	defined(WLAN_DP_LOAD_BALANCE_SUPPORT)
 	qdf_cpu_mask new_cpu_mask[HIF_MAX_GRP_IRQ];
 #endif
-#ifdef FEATURE_IRQ_AFFINITY
+#if defined(FEATURE_IRQ_AFFINITY) || \
+	defined(WLAN_DP_LOAD_BALANCE_SUPPORT)
 	qdf_atomic_t force_napi_complete;
 #endif
 	unsigned long long irq_disabled_start_time;
+#ifdef WLAN_DP_LOAD_BALANCE_SUPPORT
+	uint64_t irq_start_time;
+	uint64_t total_irq_time[NR_CPUS];
+	uint64_t ksoftirqd_time[NR_CPUS];
+#endif
 };
 
 /**
@@ -174,6 +194,7 @@ void hif_exec_kill(struct hif_opaque_softc *scn);
 /**
  * hif_pci_irq_set_affinity_hint() - API to set IRQ affinity
  * @hif_ext_group: hif_ext_group to extract the irq info
+ * @cpumask: cpu mask to which grp_intr should be affined
  * @perf: affine to perf cluster or non-perf cluster
  *
  * This function will set the IRQ affinity to gold cores
@@ -182,11 +203,11 @@ void hif_exec_kill(struct hif_opaque_softc *scn);
  * Return: none
  */
 void hif_pci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
-				   bool perf);
+				   uint32_t cpumask, bool perf);
 #else
 static inline
 void hif_pci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
-				   bool perf)
+				   uint32_t cpumask, bool perf)
 {
 }
 #endif

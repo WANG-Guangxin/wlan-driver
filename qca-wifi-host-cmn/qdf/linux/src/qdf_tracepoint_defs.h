@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -54,9 +55,9 @@
 DECLARE_EVENT_CLASS(dp_trace_tcp_pkt_class,
 		    TP_PROTO(struct sk_buff *skb, uint32_t tcp_seq_num,
 			     uint32_t tcp_ack_num, uint16_t srcport,
-			     uint16_t dstport, uint64_t tdelta),
+			     uint16_t dstport, uint64_t tdelta, uint8_t status),
 		    TP_ARGS(skb, tcp_seq_num, tcp_ack_num, srcport,
-			    dstport, tdelta),
+			    dstport, tdelta, status),
 		    TP_STRUCT__entry(
 			__field(void *, skb)
 			__field(uint32_t, tcp_seq_num)
@@ -64,6 +65,7 @@ DECLARE_EVENT_CLASS(dp_trace_tcp_pkt_class,
 			__field(uint16_t, srcport)
 			__field(uint16_t, dstport)
 			__field(uint64_t, tdelta)
+			__field(uint8_t, status)
 		    ),
 		    TP_fast_assign(
 			__entry->skb = skb;
@@ -72,38 +74,43 @@ DECLARE_EVENT_CLASS(dp_trace_tcp_pkt_class,
 			__entry->srcport = srcport;
 			__entry->dstport = dstport;
 			__entry->tdelta = tdelta;
+			__entry->status = status;
 		    ),
-		    TP_printk("skb=%pK seqnum=%u acknum=%u srcport=%u dstport=%u latency(us)=%llu",
+		    TP_printk("skb=%pK seqnum=%u acknum=%u srcport=%u dstport=%u latency(us)=%llu status=%d",
 			      __entry->skb, __entry->tcp_seq_num,
 			      __entry->tcp_ack_num, __entry->srcport,
-			      __entry->dstport, __entry->tdelta)
+			      __entry->dstport, __entry->tdelta,
+			      __entry->status)
 );
 
 DEFINE_EVENT(dp_trace_tcp_pkt_class, dp_rx_tcp_pkt,
 	     TP_PROTO(struct sk_buff *skb, uint32_t tcp_seq_num,
 		      uint32_t tcp_ack_num, uint16_t srcport,
-		      uint16_t dstport, uint64_t tdelta),
-	     TP_ARGS(skb, tcp_seq_num, tcp_ack_num, srcport, dstport, tdelta)
+		      uint16_t dstport, uint64_t tdelta, uint8_t status),
+	     TP_ARGS(skb, tcp_seq_num, tcp_ack_num, srcport, dstport, tdelta,
+		     status)
 );
 
 DEFINE_EVENT(dp_trace_tcp_pkt_class, dp_tx_comp_tcp_pkt,
 	     TP_PROTO(struct sk_buff *skb, uint32_t tcp_seq_num,
 		      uint32_t tcp_ack_num, uint16_t srcport,
-		      uint16_t dstport, uint64_t tdelta),
-	     TP_ARGS(skb, tcp_seq_num, tcp_ack_num, srcport, dstport, tdelta)
+		      uint16_t dstport, uint64_t tdelta, uint8_t status),
+	     TP_ARGS(skb, tcp_seq_num, tcp_ack_num, srcport, dstport, tdelta,
+		     status)
 );
 
 DECLARE_EVENT_CLASS(dp_trace_udp_pkt_class,
 		    TP_PROTO(struct sk_buff *skb, uint16_t ip_id,
 			     uint16_t srcport, uint16_t dstport,
-			     uint64_t tdelta),
-		    TP_ARGS(skb, ip_id, srcport, dstport, tdelta),
+			     uint64_t tdelta, uint8_t status),
+		    TP_ARGS(skb, ip_id, srcport, dstport, tdelta, status),
 		    TP_STRUCT__entry(
 			__field(void *, skb)
 			__field(uint16_t, ip_id)
 			__field(uint16_t, srcport)
 			__field(uint16_t, dstport)
 			__field(uint64_t, tdelta)
+			__field(uint8_t, status)
 		    ),
 		    TP_fast_assign(
 			__entry->skb = skb;
@@ -111,23 +118,24 @@ DECLARE_EVENT_CLASS(dp_trace_udp_pkt_class,
 			__entry->srcport = srcport;
 			__entry->dstport = dstport;
 			__entry->tdelta = tdelta;
+			__entry->status = status;
 		    ),
-		    TP_printk("skb=%pK ip_id=%u srcport=%u dstport=%d latency(us)=%llu",
+		    TP_printk("skb=%pK ip_id=%u srcport=%u dstport=%d latency(us)=%llu status=%d",
 			      __entry->skb, __entry->ip_id,
 			      __entry->srcport, __entry->dstport,
-			      __entry->tdelta)
+			      __entry->tdelta, __entry->status)
 );
 
 DEFINE_EVENT(dp_trace_udp_pkt_class, dp_rx_udp_pkt,
 	     TP_PROTO(struct sk_buff *skb, uint16_t ip_id, uint16_t srcport,
-		      uint16_t dstport, uint64_t tdelta),
-	     TP_ARGS(skb, ip_id, srcport, dstport, tdelta)
+		      uint16_t dstport, uint64_t tdelta, uint8_t status),
+	     TP_ARGS(skb, ip_id, srcport, dstport, tdelta, status)
 );
 
 DEFINE_EVENT(dp_trace_udp_pkt_class, dp_tx_comp_udp_pkt,
 	     TP_PROTO(struct sk_buff *skb, uint16_t ip_id, uint16_t srcport,
-		      uint16_t dstport, uint64_t tdelta),
-	     TP_ARGS(skb, ip_id, srcport, dstport, tdelta)
+		      uint16_t dstport, uint64_t tdelta, uint8_t status),
+	     TP_ARGS(skb, ip_id, srcport, dstport, tdelta, status)
 );
 
 DECLARE_EVENT_CLASS(dp_trace_generic_ip_pkt_class,
@@ -207,12 +215,13 @@ DEFINE_EVENT(dp_trace_pkt_class, dp_tx_comp_pkt,
 
 TRACE_EVENT(dp_del_reg_write,
 	    TP_PROTO(uint8_t srng_id, uint32_t enq_val, uint32_t deq_val,
-		     uint64_t enq_time, uint64_t deq_time),
-	    TP_ARGS(srng_id, enq_val, deq_val, enq_time, deq_time),
+		     uint64_t sched_time, uint64_t enq_time, uint64_t deq_time),
+	    TP_ARGS(srng_id, enq_val, deq_val, sched_time, enq_time, deq_time),
 	    TP_STRUCT__entry(
 		__field(uint8_t, srng_id)
 		__field(uint32_t, enq_val)
 		__field(uint32_t, deq_val)
+		__field(uint64_t, sched_time)
 		__field(uint64_t, enq_time)
 		__field(uint64_t, deq_time)
 	    ),
@@ -220,12 +229,13 @@ TRACE_EVENT(dp_del_reg_write,
 		__entry->srng_id = srng_id;
 		__entry->enq_val = enq_val;
 		__entry->deq_val = deq_val;
+		__entry->sched_time = sched_time;
 		__entry->enq_time = enq_time;
 		__entry->deq_time = deq_time;
 	    ),
-	    TP_printk("srng_id=%u enq_val=%u deq_val=%u enq_time=0x%llx deq_time=0x%llx",
+	    TP_printk("srng_id=%u enq_val=%u deq_val=%u sched_time=0x%llx enq_time=0x%llx deq_time=0x%llx",
 		      __entry->srng_id, __entry->enq_val, __entry->deq_val,
-		      __entry->enq_time, __entry->deq_time)
+		      __entry->sched_time, __entry->enq_time, __entry->deq_time)
 );
 
 TRACE_EVENT(dp_ce_tasklet_sched_latency,
@@ -241,6 +251,58 @@ TRACE_EVENT(dp_ce_tasklet_sched_latency,
 	    ),
 	    TP_printk("ce_id=%u latency(ns)=%llu", __entry->ce_id,
 		      __entry->sched_latency)
+);
+
+TRACE_EVENT(dp_tx_enqueue,
+	    TP_PROTO(struct sk_buff *skb, uint32_t hp, uint8_t ring_id,
+		     int coalesce),
+	    TP_ARGS(skb, hp, ring_id, coalesce),
+	    TP_STRUCT__entry(
+		__field(void *, skb)
+		__field(uint32_t, hp)
+		__field(uint8_t, ring_id)
+		__field(int, coalesce)
+	    ),
+	    TP_fast_assign(
+		__entry->skb = skb;
+		__entry->hp = hp;
+		__entry->ring_id = ring_id;
+		__entry->coalesce = coalesce;
+	    ),
+	    TP_printk("skb=%pK hp=%d ring_id=%d coalesce=%d", __entry->skb,
+		      __entry->hp, __entry->ring_id, __entry->coalesce)
+);
+
+TRACE_EVENT(hif_hist_event,
+	    TP_PROTO(bool ce, uint8_t hal_ring_id, uint32_t hp,
+		     uint32_t tp, int cpu_id, uint64_t timestamp,
+		     uint8_t type),
+	    TP_ARGS(ce, hal_ring_id, hp, tp, cpu_id, timestamp, type),
+	    TP_STRUCT__entry(
+		__field(bool, ce)
+		__field(uint8_t, hal_ring_id)
+		__field(uint32_t, hp)
+		__field(uint32_t, tp)
+		__field(int, cpu_id)
+		__field(uint64_t, timestamp)
+		__field(uint8_t, type)
+	    ),
+	    TP_fast_assign(
+		__entry->ce = ce;
+		__entry->hal_ring_id = hal_ring_id;
+		__entry->hp = hp;
+		__entry->tp = tp;
+		__entry->cpu_id = cpu_id;
+		__entry->timestamp = timestamp;
+		__entry->type = type;
+	    ),
+	    TP_printk("ce=%d ring=%d hp=0x%x tp=0x%x cpu=%d 0x%llx type=0x%x",
+		      __entry->ce,
+		      __entry->hal_ring_id,
+		      __entry->hp, __entry->tp,
+		      __entry->cpu_id,
+		      __entry->timestamp,
+		      __entry->type)
 );
 #endif /* _QDF_TRACEPOINT_DEFS_H */
 

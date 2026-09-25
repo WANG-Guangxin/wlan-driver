@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -28,11 +28,14 @@
 #ifdef WLAN_PKT_CAPTURE_TX_2_0
 #include <dp_tx_mon_2.0.h>
 #endif
+#if defined(IPA_OFFLOAD) && defined(IPA_OFFLOAD_LOW_MEM)
+#define DP_MON_RING_FILL_LEVEL_DEFAULT 512
+#else
 #define DP_MON_RING_FILL_LEVEL_DEFAULT 2048
+#endif
 #define DP_MON_DATA_BUFFER_SIZE     2048
 #define DP_MON_DESC_MAGIC 0xdeadabcd
 #define DP_MON_MAX_STATUS_BUF 1200
-#define DP_MON_QUEUE_DEPTH_MAX 16
 #define DP_MON_MSDU_LOGGING 0
 #define DP_MON_MPDU_LOGGING 1
 #define DP_MON_DESC_ADDR_MASK 0x000000FFFFFFFFFF
@@ -273,7 +276,11 @@ struct dp_mon_pdev_be {
 #ifdef WLAN_PKT_CAPTURE_TX_2_0
 	uint8_t tx_mon_mode;
 	uint8_t tx_mon_filter_length;
+#ifdef FEATURE_ML_LOCAL_PKT_CAPTURE
+	struct dp_pdev_tx_monitor_be tx_monitor_be[MAX_NUM_LMAC_HW];
+#else
 	struct dp_pdev_tx_monitor_be tx_monitor_be;
+#endif
 	struct dp_tx_monitor_drop_stats tx_stats;
 #endif
 #if defined(WLAN_PKT_CAPTURE_RX_2_0) && defined(QCA_MONITOR_2_0_PKT_SUPPORT)
@@ -335,6 +342,62 @@ struct dp_mon_soc_be {
 
 	bool is_dp_mon_soc_initialized;
 };
+#endif
+
+#ifdef WLAN_PKT_CAPTURE_TX_2_0
+#ifdef FEATURE_ML_LOCAL_PKT_CAPTURE
+/**
+ * dp_tx_mon_get_pdev_mac_from_work_arg() - Get pdev and mac_id from work
+ *                                          argument
+ * @work_arg: pointer to work argument
+ * @p_dp_pdev: address of dp pdev object
+ * @p_mac_id: address of mac id
+ *
+ * Return: None
+ */
+static inline void dp_tx_mon_get_pdev_mac_from_work_arg(
+						void *work_arg,
+						struct dp_pdev **p_dp_pdev,
+						uint8_t *p_mac_id)
+{
+	struct dp_tx_mon_work_arg *tx_mon_arg =
+				(struct dp_tx_mon_work_arg *)work_arg;
+
+	*p_dp_pdev = tx_mon_arg->dp_pdev;
+	*p_mac_id = tx_mon_arg->mac_id;
+}
+
+/**
+ * dp_mon_pdev_get_tx_mon() - Get TX Mon object with given mac id
+ * @mon_pdev: monitor dp pdev object
+ * @mac_id: Mac ID
+ *
+ * Return: DP TX Mon object
+ */
+static inline
+struct dp_pdev_tx_monitor_be *dp_mon_pdev_get_tx_mon(
+					struct dp_mon_pdev_be *mon_pdev,
+					uint8_t mac_id)
+{
+	return &mon_pdev->tx_monitor_be[mac_id];
+}
+#else
+static inline void dp_tx_mon_get_pdev_mac_from_work_arg(
+						void *work_arg,
+						struct dp_pdev **p_dp_pdev,
+						uint8_t *p_mac_id)
+{
+	*p_dp_pdev = (struct dp_pdev *)work_arg;
+}
+
+static inline
+struct dp_pdev_tx_monitor_be *dp_mon_pdev_get_tx_mon(
+					struct dp_mon_pdev_be *mon_pdev,
+					uint8_t mac_id)
+{
+	return &mon_pdev->tx_monitor_be;
+}
+#endif
 #endif
 
 /**
@@ -408,6 +471,7 @@ void dp_mon_pool_frag_unmap_and_free(struct dp_soc *dp_soc,
  *	       interrupt.
  * @tail: tail of descs list
  * @replenish_cnt_ref: pointer to update replenish_cnt
+ * @ring_type: Ring type
  *
  * Return: return success or failure
  */
@@ -417,7 +481,8 @@ QDF_STATUS dp_mon_buffers_replenish(struct dp_soc *dp_soc,
 				uint32_t num_req_buffers,
 				union dp_mon_desc_list_elem_t **desc_list,
 				union dp_mon_desc_list_elem_t **tail,
-				uint32_t *replenish_cnt_ref);
+				uint32_t *replenish_cnt_ref,
+				int ring_type);
 
 /**
  * dp_mon_filter_show_tx_filter_be() - Show the set filters

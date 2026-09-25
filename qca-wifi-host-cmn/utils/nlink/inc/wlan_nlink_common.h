@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -83,6 +83,7 @@
 #define WLAN_SVC_WLAN_RADIO_INDEX 0x10D
 #define WLAN_SVC_FW_SHUTDOWN_IND  0x10E
 #define WLAN_SVC_CORE_MINFREQ     0x10F
+#define WLAN_SVC_SET_TCP_MEM_PARAM     0x110
 #define WLAN_SVC_MAX_SSID_LEN    32
 #define WLAN_SVC_MAX_BSSID_LEN   6
 #define WLAN_SVC_MAX_STR_LEN     16
@@ -99,6 +100,7 @@ typedef enum eAniNlModuleTypes {
 	WLAN_NL_MSG_CNSS_DIAG = ANI_NL_MSG_BASE + 0x0B, /* Value needs to be 27 */
 	ANI_NL_MSG_LOG,
 	WLAN_NL_MSG_SPECTRAL_SCAN,
+	WLAN_NL_MSG_OPT_DP_LOG,
 	ANI_NL_MSG_MAX
 } tAniNlModTypes, tWlanNlModTypes;
 
@@ -282,6 +284,14 @@ struct wlan_rx_tp_data {
 struct wlan_tx_tp_data {
 	enum wlan_tp_level level;
 	bool tcp_limit_output;
+};
+
+/**
+ * struct wlan_tcp_mem_param - msg to enable/disable tcp mem param
+ * @enable:           1 - enable net core, 0 - disable net core
+ */
+struct wlan_tcp_mem_param {
+	uint8_t enable;
 };
 
 #endif /* WLAN_NLINK_COMMON_H__ */

@@ -186,9 +186,52 @@ config CNSS2_ENUM_WITH_LOW_SPEED
 	  Set link target speed to Gen1 before enum, and then restore default
 	  RC speed to re-establish link speed. For Genoa chip, needn't restore.
 
+config CNSS2_FMD_FEATURE_ENABLE
+	bool "Enable CNSS2_FMD_FEATURE_ENABLE"
+	depends on CNSS2
+	help
+	  This enables the fmd functionality on cnss2 driver
+
 config MHI_BUF_LEN
 	int "Mhi buffer size"
-	default "32768"
+	default "16384"
 	depends on CNSS2
 	help
 	  If configured, CNSS platform driver set mhi buffer size with external value.
+
+config CNSS_ETM_TRACE
+	bool "CNSS2 Platform Driver ETM Trace Support"
+	depends on CNSS2
+	help
+	  This option is to enable CNSS2 platform driver etm trace support.
+
+config CNSS2_DIRECT_CX
+	bool "CNSS2 Platform Driver Direct CX Support"
+	depends on CNSS2
+	help
+	  This option is to enable CNSS2 platform driver direct cx support.
+
+config CNSS2_DIRECT_CX_SDAM
+	bool "CNSS2 Platform Driver Direct CX SDAM Support"
+	depends on CNSS2
+	help
+	  This option is to enable CNSS2 platform driver usage of PMIC SDAM.
+
+config CNSS_SHUTDOWN_CALLBACK
+	bool "Enable/Disable shutdown callback in CNSS side"
+	depends on CNSS2
+	depends on PCI
+	select PCIE_SHUTDOWN_CALLBACK
+	help
+	  If enabled, CNSS platform driver will register shutdown callback to
+	  platform. Once platform reboot or shutdown, this callback will be
+	  called and then cnss_remove be called. If target or system disabled
+	  IOMMU during shutdown and PCIe required this feature, then enabled
+	  it.
+
+config CNSS2_BDF_RETRY
+	bool "Enable BDF segment retry on QMI download failure"
+	depends on CNSS2
+	help
+	  Retry failed BDF QMI download segments before giving up.
+	  Enable for platforms that require this recovery.

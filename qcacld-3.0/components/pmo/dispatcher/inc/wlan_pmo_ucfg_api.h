@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -65,6 +65,36 @@ QDF_STATUS ucfg_pmo_psoc_close(struct wlan_objmgr_psoc *psoc);
 uint32_t ucfg_pmo_get_apf_instruction_size(struct wlan_objmgr_psoc *psoc);
 
 /**
+ * ucfg_pmo_store_apf_mode() - store the APF mode
+ * @psoc: pointer to psoc object
+ * @apf_mode: apf mode
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_pmo_store_apf_mode(struct wlan_objmgr_psoc *psoc,
+				   uint32_t apf_mode);
+
+/**
+ * ucfg_pmo_set_apf_mode() - set the APF mode
+ * @psoc: pointer to psoc object
+ * @apf_mode: apf mode
+ * @vdev_id: vdev id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS ucfg_pmo_set_apf_mode(struct wlan_objmgr_psoc *psoc,
+				 uint32_t apf_mode,
+				 uint32_t vdev_id);
+
+/**
+ * ucfg_pmo_get_apf_mode() - get the APF mode
+ * @psoc: pointer to psoc object
+ *
+ * Return: QDF_STATUS
+ */
+uint32_t ucfg_pmo_get_apf_mode(struct wlan_objmgr_psoc *psoc);
+
+/**
  * ucfg_pmo_get_num_wow_filters() - get the supported number of WoW filters
  * @psoc: the psoc to query
  *
@@ -125,7 +155,7 @@ QDF_STATUS ucfg_pmo_update_psoc_config(struct wlan_objmgr_psoc *psoc,
 /**
  * ucfg_pmo_psoc_set_caps() - overwrite configured device capability flags
  * @psoc: the psoc for which the capabilities apply
- * @caps: the cabability information to configure
+ * @caps: the capability information to configure
  *
  * Return: QDF_STATUS
  */
@@ -175,15 +205,6 @@ ucfg_pmo_set_arp_offload_enabled(struct wlan_objmgr_psoc *psoc,
 				 bool val);
 
 /**
- * ucfg_pmo_is_ssdp_enabled() - Get ssdp enable or not
- * @psoc: pointer to psoc object
- *
- * Return: enable/disable ssdp
- */
-bool
-ucfg_pmo_is_ssdp_enabled(struct wlan_objmgr_psoc *psoc);
-
-/**
  * ucfg_pmo_is_ns_offloaded() - Get ns offload support or not
  * @psoc: pointer to psoc object
  *
@@ -200,6 +221,46 @@ ucfg_pmo_is_ns_offloaded(struct wlan_objmgr_psoc *psoc);
  */
 uint8_t
 ucfg_pmo_get_sta_dynamic_dtim(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_get_sta_teles_dtim() - Get telescopic dtim
+ * @psoc: pointer to psoc object
+ *
+ * Return: telescopic dtim
+ */
+uint8_t
+ucfg_pmo_get_sta_teles_dtim(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_set_sta_teles_dtim() - Set telescopic dtim
+ * @psoc: pointer to psoc object
+ * @val:  telescopic dtim
+ *
+ * Return: None
+ */
+void
+ucfg_pmo_set_sta_teles_dtim(struct wlan_objmgr_psoc *psoc,
+			    uint8_t val);
+
+/**
+ * ucfg_pmo_get_sta_min_teles_dtim() - Get minimum telescopic dtim level
+ * @psoc: pointer to psoc object
+ *
+ * Return: minimum telescopic dtim level
+ */
+uint8_t
+ucfg_pmo_get_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_set_sta_min_teles_dtim() - Set minimum telescopic dtim level
+ * @psoc: pointer to psoc object
+ * @val:  minimum telescopic dtim level
+ *
+ * Return: None
+ */
+void
+ucfg_pmo_set_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc,
+				uint8_t val);
 
 /**
  * ucfg_pmo_get_sta_mod_dtim() - Get modulated dtim
@@ -542,6 +603,15 @@ ucfg_pmo_enhanced_mc_filter_disable(struct wlan_objmgr_vdev *vdev)
 {
 	return pmo_core_enhanced_mc_filter_disable(vdev);
 }
+
+/**
+ * ucfg_pmo_tgt_psoc_get_runtime_pm_in_progress() - get runtime status
+ * @psoc: objmgr psoc
+ *
+ * Return: true if runtime pm is in progress else false
+ */
+bool
+ucfg_pmo_tgt_psoc_get_runtime_pm_in_progress(struct wlan_objmgr_psoc *psoc);
 
 #ifdef FEATURE_WLAN_DYNAMIC_ARP_NS_OFFLOAD
 /**
@@ -1319,6 +1389,22 @@ bool ucfg_pmo_is_apf_enabled(struct wlan_objmgr_psoc *psoc);
  */
 bool ucfg_pmo_is_configure_apf_per_screen_state(
 					struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_get_apfv6_offload_bitmap() - to get APFv6 offload bitmap
+ * @psoc: objmgr psoc handle
+ *
+ * Return: Offload bitmap in APFv6 mode
+ */
+uint32_t ucfg_pmo_get_apfv6_offload_bitmap(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_is_apf_mode_enabled() - to get apf mode configuration
+ * @psoc: objmgr psoc handle
+ *
+ * Return: true if enabled in ini
+ */
+bool ucfg_pmo_is_apf_mode_enabled(struct wlan_objmgr_psoc *psoc);
 #else
 static inline bool ucfg_pmo_is_apf_enabled(struct wlan_objmgr_psoc *psoc)
 {
@@ -1327,6 +1413,17 @@ static inline bool ucfg_pmo_is_apf_enabled(struct wlan_objmgr_psoc *psoc)
 
 static inline bool ucfg_pmo_is_configure_apf_per_screen_state(
 					struct wlan_objmgr_psoc *psoc)
+{
+	return false;
+}
+
+static inline uint32_t ucfg_pmo_get_apfv6_offload_bitmap(
+					struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
+
+static inline bool ucfg_pmo_is_apf_mode_enabled(struct wlan_objmgr_psoc *psoc)
 {
 	return false;
 }
@@ -1492,6 +1589,27 @@ static inline uint32_t
 ucfg_pmo_get_apf_instruction_size(struct wlan_objmgr_psoc *psoc)
 {
 	return 0;
+}
+
+static inline uint32_t
+ucfg_pmo_get_apf_mode(struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
+
+static inline QDF_STATUS
+ucfg_pmo_set_apf_mode(struct wlan_objmgr_psoc *psoc,
+		      uint32_t apf_mode,
+		      uint32_t vdev_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+ucfg_pmo_store_apf_mode(struct wlan_objmgr_psoc *psoc,
+			uint32_t apf_mode)
+{
+	return QDF_STATUS_SUCCESS;
 }
 
 static inline uint8_t
@@ -2062,11 +2180,6 @@ static inline bool ucfg_pmo_is_apf_enabled(struct wlan_objmgr_psoc *psoc)
 	return false;
 }
 
-static inline bool ucfg_pmo_is_ssdp_enabled(struct wlan_objmgr_psoc *psoc)
-{
-	return false;
-}
-
 static inline bool ucfg_pmo_is_ns_offloaded(struct wlan_objmgr_psoc *psoc)
 {
 	return false;
@@ -2074,6 +2187,30 @@ static inline bool ucfg_pmo_is_ns_offloaded(struct wlan_objmgr_psoc *psoc)
 
 static inline uint8_t
 ucfg_pmo_get_sta_dynamic_dtim(struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
+
+static inline uint8_t
+ucfg_pmo_get_sta_teles_dtim(struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
+
+static inline uint8_t
+ucfg_pmo_set_sta_teles_dtim(struct wlan_objmgr_psoc *psoc, uint8_t val)
+{
+	return 0;
+}
+
+static inline uint8_t
+ucfg_pmo_get_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc)
+{
+	return 0;
+}
+
+static inline uint8_t
+ucfg_pmo_set_sta_min_teles_dtim(struct wlan_objmgr_psoc *psoc, uint8_t val)
 {
 	return 0;
 }
@@ -2475,4 +2612,35 @@ QDF_STATUS ucfg_pmo_set_vdev_bridge_addr(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS ucfg_pmo_get_vdev_bridge_addr(struct wlan_objmgr_vdev *vdev,
 					 struct qdf_mac_addr *bridgeaddr);
+
+/**
+ * ucfg_pmo_is_fw_debug_enable() - This function tells if FW logging debug
+ * is enable or not.
+ * @psoc: pointer to psoc object
+ *
+ * Return: true if FW debug is enable otherwise false
+ */
+bool ucfg_pmo_is_fw_debug_enable(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * ucfg_pmo_get_ns_offload_enable_dynamic() - get NS offload dynamic enable
+ * @vdev: vdev objmgr handle
+ *
+ * Return: true is NS offload is dynamically disabled else false
+ */
+bool
+ucfg_pmo_get_ns_offload_enable_dynamic(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * ucfg_pmo_set_ns_offload_enable_dynamic() - Set NS offload dynamic enable
+ * @vdev: vdev objmgr handle
+ * @trigger: pmo trigger
+ * @ns_offload_enable_dyn: NS offload enable dynamic
+ *
+ * Return: None
+ */
+void
+ucfg_pmo_set_ns_offload_enable_dynamic(struct wlan_objmgr_vdev *vdev,
+				       enum pmo_offload_trigger trigger,
+				       bool ns_offload_enable_dyn);
 #endif /* end  of _WLAN_PMO_UCFG_API_H_ */

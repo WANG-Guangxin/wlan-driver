@@ -30,6 +30,7 @@
 #include "wlan_dp_main.h"
 #include "wlan_dp_public_struct.h"
 #include "wlan_dp_ucfg_api.h"
+#include "wlan_dp_resource_mgr.h"
 #include "qdf_nbuf.h"
 #include "qdf_threads.h"
 #include "qdf_net_if.h"
@@ -138,11 +139,13 @@ static void dp_rx_tm_thread_dump_stats(struct dp_rx_thread *rx_thread)
 {
 	uint8_t reo_ring_num;
 	uint32_t off = 0;
-	char nbuf_queued_string[100];
+	char nbuf_pkt_string[100];
 	uint32_t total_queued = 0;
 	uint32_t temp = 0;
+	int cpu_index = 0;
+	uint32_t total_all_cpu = 0;
 
-	qdf_mem_zero(nbuf_queued_string, sizeof(nbuf_queued_string));
+	qdf_mem_zero(nbuf_pkt_string, sizeof(nbuf_pkt_string));
 
 	for (reo_ring_num = 0; reo_ring_num < DP_RX_TM_MAX_REO_RINGS;
 	     reo_ring_num++) {
@@ -150,10 +153,10 @@ static void dp_rx_tm_thread_dump_stats(struct dp_rx_thread *rx_thread)
 		if (!temp)
 			continue;
 		total_queued += temp;
-		if (off >= sizeof(nbuf_queued_string))
+		if (off >= sizeof(nbuf_pkt_string))
 			continue;
-		off += qdf_scnprintf(&nbuf_queued_string[off],
-				     sizeof(nbuf_queued_string) - off,
+		off += qdf_scnprintf(&nbuf_pkt_string[off],
+				     sizeof(nbuf_pkt_string) - off,
 				     "reo[%u]:%u ", reo_ring_num, temp);
 	}
 
@@ -164,7 +167,7 @@ static void dp_rx_tm_thread_dump_stats(struct dp_rx_thread *rx_thread)
 		rx_thread->id,
 		qdf_nbuf_queue_head_qlen(&rx_thread->nbuf_queue),
 		total_queued,
-		nbuf_queued_string,
+		nbuf_pkt_string,
 		rx_thread->stats.nbuf_dequeued,
 		rx_thread->stats.nbuf_sent_to_stack,
 		rx_thread->stats.gro_flushes,
@@ -176,6 +179,24 @@ static void dp_rx_tm_thread_dump_stats(struct dp_rx_thread *rx_thread)
 		rx_thread->stats.dropped_invalid_os_rx_handles,
 		rx_thread->stats.dropped_others,
 		rx_thread->stats.dropped_enq_fail);
+
+	qdf_mem_zero(nbuf_pkt_string, sizeof(nbuf_pkt_string));
+	off = 0;
+	for (cpu_index = 0; cpu_index < QDF_MAX_AVAILABLE_CPU; cpu_index++) {
+		temp = rx_thread->stats.nbuf_per_cpu[cpu_index];
+		if (!temp)
+			continue;
+		total_all_cpu += temp;
+		if (off >= sizeof(nbuf_pkt_string))
+			continue;
+		off += qdf_scnprintf(&nbuf_pkt_string[off],
+				     sizeof(nbuf_pkt_string) - off,
+				     "cpu[%u]:%u ", cpu_index, temp);
+	}
+
+	if (total_all_cpu)
+		dp_info("total:%u %s",
+			total_all_cpu, nbuf_pkt_string);
 }
 
 QDF_STATUS dp_rx_tm_dump_stats(struct dp_rx_tm_handle *rx_tm_hdl)
@@ -212,6 +233,7 @@ QDF_STATUS dp_check_and_update_pending(struct dp_rx_tm_handle_cmn
 	uint32_t nbuf_dequeued_total = 0;
 	uint32_t rx_flushed_total = 0;
 	uint32_t pending = 0;
+	uint64_t dequeued_flushed;
 	int i;
 
 	txrx_handle_cmn =
@@ -246,9 +268,9 @@ QDF_STATUS dp_check_and_update_pending(struct dp_rx_tm_handle_cmn
 		}
 	}
 
-	if (nbuf_queued_total > (nbuf_dequeued_total + rx_flushed_total))
-		pending = nbuf_queued_total - (nbuf_dequeued_total +
-					       rx_flushed_total);
+	dequeued_flushed = (uint64_t)nbuf_dequeued_total + rx_flushed_total;
+	if (nbuf_queued_total > dequeued_flushed)
+		pending = (uint32_t)(nbuf_queued_total - dequeued_flushed);
 
 	if (unlikely(pending > rx_pending_hl_threshold))
 		qdf_atomic_set(&rx_tm_hdl->allow_dropping, 1);
@@ -480,6 +502,7 @@ static int dp_rx_thread_process_nbufq(struct dp_rx_thread *rx_thread)
 	ol_txrx_soc_handle soc;
 	uint32_t num_list_elements = 0;
 	uint32_t iterates = 0;
+	int cpu_index;
 
 	struct dp_txrx_handle_cmn *txrx_handle_cmn;
 
@@ -504,6 +527,8 @@ static int dp_rx_thread_process_nbufq(struct dp_rx_thread *rx_thread)
 		num_list_elements += qdf_nbuf_get_gso_segs(nbuf_list);
 		rx_thread->stats.nbuf_dequeued += num_list_elements;
 		iterates += num_list_elements;
+		cpu_index = qdf_get_raw_smp_processor_id();
+		rx_thread->stats.nbuf_per_cpu[cpu_index] += num_list_elements;
 
 		vdev_id = QDF_NBUF_CB_RX_VDEV_ID(nbuf_list);
 		cdp_get_os_rx_handles_from_vdev(soc, vdev_id, &stack_fn,
@@ -591,6 +616,8 @@ dp_rx_should_flush(struct dp_rx_thread *rx_thread)
 static int dp_rx_thread_sub_loop(struct dp_rx_thread *rx_thread, bool *shutdown)
 {
 	enum dp_rx_gro_flush_code gro_flush_code;
+	qdf_netdev_t netdev;
+	int i;
 
 	while (true) {
 		if (qdf_atomic_test_and_clear_bit(RX_SHUTDOWN_EVENT,
@@ -599,6 +626,20 @@ static int dp_rx_thread_sub_loop(struct dp_rx_thread *rx_thread, bool *shutdown)
 							  &rx_thread->event_flag)) {
 				qdf_event_set(&rx_thread->suspend_event);
 			}
+
+			/* Release all the netdevice references which are held
+			 * from dp_rx_tm_flush_nbuf_list() as thread is going
+			 * to shutdown.
+			 */
+			for (i = 0; i < WLAN_PDEV_MAX_VDEVS; i++) {
+				netdev = rx_thread->net_dev[i];
+				if (netdev) {
+					qdf_net_if_release_dev((struct qdf_net_if *)netdev);
+					rx_thread->net_dev[i] = NULL;
+					rx_thread->stats.num_ndev_release++;
+				}
+			}
+
 			dp_debug("shutting down (%s) id %d pid %d",
 				 qdf_get_current_comm(), rx_thread->id,
 				 qdf_get_current_pid());
@@ -617,10 +658,25 @@ static int dp_rx_thread_sub_loop(struct dp_rx_thread *rx_thread, bool *shutdown)
 			qdf_atomic_set(&rx_thread->gro_flush_ind, 0);
 		}
 
+		/* Release the netdevice references which are held from the
+		 * dp_rx_tm_flush_nbuf_list().
+		 */
+		for (i = 0 ; i < WLAN_PDEV_MAX_VDEVS; i++) {
+			if (qdf_atomic_test_and_clear_bit(i, &rx_thread->vdev_del_event_flag)) {
+				netdev = rx_thread->net_dev[i];
+				if (netdev) {
+					qdf_net_if_release_dev((struct qdf_net_if *)netdev);
+					rx_thread->net_dev[i] = NULL;
+					rx_thread->stats.num_ndev_release++;
+				}
+
+				qdf_event_set(&rx_thread->vdev_del_event[i]);
+			}
+		}
+
 		if (qdf_atomic_test_and_clear_bit(RX_VDEV_DEL_EVENT,
 						  &rx_thread->event_flag)) {
 			rx_thread->stats.gro_flushes_by_vdev_del++;
-			qdf_event_set(&rx_thread->vdev_del_event);
 			if (qdf_nbuf_queue_head_qlen(&rx_thread->nbuf_queue))
 				continue;
 		}
@@ -711,6 +767,18 @@ static int dp_rx_refill_thread_sub_loop(struct dp_rx_refill_thread *rx_thread,
 			dp_debug("shutting down (%s) pid %d",
 				 qdf_get_current_comm(), qdf_get_current_pid());
 			*shutdown = true;
+			break;
+		}
+
+		if (qdf_atomic_test_and_clear_bit(RX_RESOURCE_UPSCALE_EVENT,
+						  &rx_thread->event_flag)) {
+			wlan_dp_resource_mgr_upscale_resources(rx_thread);
+			break;
+		}
+
+		if (qdf_atomic_test_and_clear_bit(RX_RESOURCE_DOWNSCALE_EVENT,
+						  &rx_thread->event_flag)) {
+			wlan_dp_resource_mgr_downscale_resources();
 			break;
 		}
 
@@ -805,11 +873,24 @@ dp_rx_thread_get_dummy_netdev_ptr(struct dp_rx_thread *rx_thread)
 {
 	return rx_thread->netdev;
 }
+
+static inline void
+dp_rx_thread_set_dummy_netdev_ptr(struct dp_rx_thread *rx_thread,
+				  struct net_device *nd)
+{
+	rx_thread->netdev = nd;
+}
 #else
 static inline struct net_device *
 dp_rx_thread_get_dummy_netdev_ptr(struct dp_rx_thread *rx_thread)
 {
 	return &rx_thread->netdev;
+}
+
+static inline void
+dp_rx_thread_set_dummy_netdev_ptr(struct dp_rx_thread *rx_thread,
+				  struct net_device *nd)
+{
 }
 #endif
 
@@ -826,6 +907,7 @@ static void dp_rx_tm_thread_napi_init(struct dp_rx_thread *rx_thread)
 	dummy_nd = dp_rx_thread_get_dummy_netdev_ptr(rx_thread);
 	/* Todo - optimize to use only one dummy netdev for all thread napis */
 	qdf_net_if_create_dummy_if((struct qdf_net_if **)&dummy_nd);
+	dp_rx_thread_set_dummy_netdev_ptr(rx_thread, dummy_nd);
 	qdf_netif_napi_add(dummy_nd, &rx_thread->napi,
 			   dp_rx_tm_thread_napi_poll, 64);
 	qdf_napi_enable(&rx_thread->napi);
@@ -842,9 +924,10 @@ static void dp_rx_tm_thread_napi_deinit(struct dp_rx_thread *rx_thread)
 	struct net_device *dummy_nd;
 
 	dummy_nd = dp_rx_thread_get_dummy_netdev_ptr(rx_thread);
-	qdf_net_if_destroy_dummy_if((struct qdf_net_if *)dummy_nd);
-
+	qdf_napi_disable(&rx_thread->napi);
 	qdf_netif_napi_del(&rx_thread->napi);
+	qdf_net_if_destroy_dummy_if((struct qdf_net_if *)dummy_nd);
+	dp_rx_thread_set_dummy_netdev_ptr(rx_thread, NULL);
 }
 
 /*
@@ -860,6 +943,7 @@ static QDF_STATUS dp_rx_tm_thread_init(struct dp_rx_thread *rx_thread,
 {
 	char thread_name[15];
 	QDF_STATUS qdf_status;
+	int i;
 
 	qdf_mem_zero(thread_name, sizeof(thread_name));
 
@@ -874,7 +958,10 @@ static QDF_STATUS dp_rx_tm_thread_init(struct dp_rx_thread *rx_thread,
 	qdf_event_create(&rx_thread->suspend_event);
 	qdf_event_create(&rx_thread->resume_event);
 	qdf_event_create(&rx_thread->shutdown_event);
-	qdf_event_create(&rx_thread->vdev_del_event);
+
+	for (i = 0; i < WLAN_PDEV_MAX_VDEVS; i++)
+		qdf_event_create(&rx_thread->vdev_del_event[i]);
+
 	qdf_atomic_init(&rx_thread->gro_flush_ind);
 	qdf_init_waitqueue_head(&rx_thread->wait_q);
 	qdf_scnprintf(thread_name, sizeof(thread_name), "dp_rx_thread_%u", id);
@@ -910,11 +997,15 @@ static QDF_STATUS dp_rx_tm_thread_init(struct dp_rx_thread *rx_thread,
  */
 static QDF_STATUS dp_rx_tm_thread_deinit(struct dp_rx_thread *rx_thread)
 {
+	int i;
+
 	qdf_event_destroy(&rx_thread->start_event);
 	qdf_event_destroy(&rx_thread->suspend_event);
 	qdf_event_destroy(&rx_thread->resume_event);
 	qdf_event_destroy(&rx_thread->shutdown_event);
-	qdf_event_destroy(&rx_thread->vdev_del_event);
+
+	for (i = 0; i < WLAN_PDEV_MAX_VDEVS; i++)
+		qdf_event_destroy(&rx_thread->vdev_del_event[i]);
 
 	if (cdp_cfg_get(dp_rx_tm_get_soc_handle(rx_thread->rtm_handle_cmn),
 			cfg_dp_gro_enable))
@@ -1148,6 +1239,9 @@ dp_rx_tm_flush_nbuf_list(struct dp_rx_tm_handle *rx_tm_hdl, uint8_t vdev_id)
 	qdf_nbuf_t nbuf_list_head = NULL, nbuf_list_next;
 	struct dp_rx_thread *rx_thread;
 	int i;
+	struct wlan_dp_psoc_context *dp_ctx = dp_get_context();
+	qdf_netdev_t netdev;
+	QDF_STATUS status;
 
 	for (i = 0; i < rx_tm_hdl->num_dp_rx_threads; i++) {
 		rx_thread = rx_tm_hdl->rx_thread[i];
@@ -1184,7 +1278,21 @@ dp_rx_tm_flush_nbuf_list(struct dp_rx_tm_handle *rx_tm_hdl, uint8_t vdev_id)
 			qdf_log_timestamp_to_usecs(unlock_time - lock_time),
 			qdf_log_timestamp_to_usecs(flush_time - unlock_time));
 
-		qdf_event_reset(&rx_thread->vdev_del_event);
+		if (qdf_unlikely(vdev_id >= WLAN_PDEV_MAX_VDEVS))
+			goto wake_thread;
+
+		status = dp_ctx->dp_ops.dp_get_ndev_by_vdev_id(vdev_id,
+							       &netdev);
+		if (status == QDF_STATUS_SUCCESS &&
+		    !rx_thread->net_dev[vdev_id]) {
+			qdf_net_if_hold_dev((struct qdf_net_if *)netdev);
+			rx_thread->net_dev[vdev_id] = netdev;
+			rx_thread->stats.num_ndev_hold++;
+		}
+
+		qdf_event_reset(&rx_thread->vdev_del_event[vdev_id]);
+		qdf_set_bit(vdev_id, &rx_thread->vdev_del_event_flag);
+wake_thread:
 		qdf_set_bit(RX_VDEV_DEL_EVENT, &rx_thread->event_flag);
 		qdf_wake_up_interruptible(&rx_thread->wait_q);
 		}
@@ -1194,11 +1302,12 @@ dp_rx_tm_flush_nbuf_list(struct dp_rx_tm_handle *rx_tm_hdl, uint8_t vdev_id)
  * dp_rx_tm_wait_vdev_del_event() - wait on rx thread vdev delete event
  * @rx_tm_hdl: dp_rx_tm_handle containing the overall thread
  *  infrastructure
+ * @vdev_id: vdev id
  *
  * Return: None
  */
 static inline void
-dp_rx_tm_wait_vdev_del_event(struct dp_rx_tm_handle *rx_tm_hdl)
+dp_rx_tm_wait_vdev_del_event(struct dp_rx_tm_handle *rx_tm_hdl, uint8_t vdev_id)
 {
 	QDF_STATUS qdf_status;
 	int i;
@@ -1211,28 +1320,25 @@ dp_rx_tm_wait_vdev_del_event(struct dp_rx_tm_handle *rx_tm_hdl)
 		if (!rx_thread)
 			continue;
 
+		if (qdf_unlikely(vdev_id >= WLAN_PDEV_MAX_VDEVS)) {
+			dp_err("Invalid vdev id received %u", vdev_id);
+			return;
+		}
+
 		entry_time = qdf_get_log_timestamp();
 		qdf_status =
-			qdf_wait_single_event(&rx_thread->vdev_del_event,
+			qdf_wait_single_event(&rx_thread->vdev_del_event[vdev_id],
 					      wait_timeout);
 
 		if (QDF_IS_STATUS_SUCCESS(qdf_status))
 			dp_debug("thread:%d napi gro flush successfully",
 				 rx_thread->id);
-		else if (qdf_status == QDF_STATUS_E_TIMEOUT) {
+		else if (qdf_status == QDF_STATUS_E_TIMEOUT)
 			dp_err("thread:%d timed out waiting for napi gro flush",
 			       rx_thread->id);
-			/*
-			 * If timeout, then force flush in case any rx packets
-			 * belong to this vdev is still pending on stack queue,
-			 * while net_vdev will be freed soon.
-			 */
-			dp_rx_thread_gro_flush(rx_thread,
-					       DP_RX_GRO_NORMAL_FLUSH);
-		} else {
+		else
 			dp_err("thread:%d event wait failed with status: %d",
 			       rx_thread->id, qdf_status);
-		}
 
 		exit_time = qdf_get_log_timestamp();
 		wait_time = qdf_do_div(qdf_log_timestamp_to_usecs(exit_time -
@@ -1274,7 +1380,7 @@ QDF_STATUS dp_rx_tm_flush_by_vdev_id(struct dp_rx_tm_handle *rx_tm_hdl,
 
 	entry_time = qdf_get_log_timestamp();
 	dp_rx_tm_flush_nbuf_list(rx_tm_hdl, vdev_id);
-	dp_rx_tm_wait_vdev_del_event(rx_tm_hdl);
+	dp_rx_tm_wait_vdev_del_event(rx_tm_hdl, vdev_id);
 	exit_time = qdf_get_log_timestamp();
 	dp_info("Vdev: %u total flush time: %llu us",
 		vdev_id,
@@ -1305,7 +1411,7 @@ QDF_STATUS dp_rx_tm_resume(struct dp_rx_tm_handle *rx_tm_hdl)
 			continue;
 		dp_debug("calling thread %d to resume", i);
 
-		/* postively reset event_flag for DP_RX_THREADS_SUSPENDING
+		/* positively reset event_flag for DP_RX_THREADS_SUSPENDING
 		 * state
 		 */
 		qdf_clear_bit(RX_SUSPEND_EVENT,
@@ -1335,7 +1441,7 @@ QDF_STATUS dp_rx_refill_thread_resume(struct dp_rx_refill_thread *refill_thread)
 		return QDF_STATUS_E_INVAL;
 	}
 
-	/* postively reset event_flag for DP_RX_REFILL_THREAD_SUSPENDING
+	/* positively reset event_flag for DP_RX_REFILL_THREAD_SUSPENDING
 	 * state
 	 */
 	qdf_clear_bit(RX_REFILL_SUSPEND_EVENT,
@@ -1533,7 +1639,6 @@ QDF_STATUS dp_txrx_init(ol_txrx_soc_handle soc, uint8_t pdev_id,
 	QDF_STATUS qdf_status = QDF_STATUS_SUCCESS;
 	uint8_t num_dp_rx_threads;
 	struct dp_pdev *pdev;
-	struct dp_soc *dp_soc;
 
 	if (qdf_unlikely(!soc)) {
 		dp_err("soc is NULL");
@@ -1561,21 +1666,18 @@ QDF_STATUS dp_txrx_init(ol_txrx_soc_handle soc, uint8_t pdev_id,
 	dp_ext_hdl->rx_tm_hdl.txrx_handle_cmn =
 				dp_txrx_get_cmn_hdl_frm_ext_hdl(dp_ext_hdl);
 
-	dp_soc = cdp_soc_t_to_dp_soc(soc);
-	if (wlan_cfg_is_rx_refill_buffer_pool_enabled(dp_soc->wlan_cfg_ctx)) {
-		dp_ext_hdl->refill_thread.soc = soc;
-		dp_ext_hdl->refill_thread.enabled = true;
-		qdf_status =
-			dp_rx_refill_thread_init(&dp_ext_hdl->refill_thread);
-		if (qdf_status != QDF_STATUS_SUCCESS) {
-			dp_err("Failed to initialize RX refill thread status:%d",
-			       qdf_status);
-			qdf_mem_free(dp_ext_hdl);
-			return qdf_status;
-		}
-		cdp_register_rx_refill_thread_sched_handler(soc,
-							    dp_rx_refill_thread_schedule);
+	dp_ext_hdl->refill_thread.soc = soc;
+	qdf_status =
+		dp_rx_refill_thread_init(&dp_ext_hdl->refill_thread);
+	if (qdf_status != QDF_STATUS_SUCCESS) {
+		dp_err("Failed to initialize RX refill thread status:%d",
+		       qdf_status);
+		qdf_mem_free(dp_ext_hdl);
+		return qdf_status;
 	}
+	dp_ext_hdl->refill_thread.enabled = true;
+	cdp_register_rx_refill_thread_sched_handler(soc,
+						    dp_rx_refill_thread_schedule);
 
 	num_dp_rx_threads = dp_get_rx_threads_num(soc);
 	dp_info("%d RX threads in use", num_dp_rx_threads);
@@ -1594,7 +1696,6 @@ QDF_STATUS dp_txrx_init(ol_txrx_soc_handle soc, uint8_t pdev_id,
 QDF_STATUS dp_txrx_deinit(ol_txrx_soc_handle soc)
 {
 	struct dp_txrx_handle *dp_ext_hdl;
-	struct dp_soc *dp_soc;
 
 	if (!soc)
 		return QDF_STATUS_E_INVAL;
@@ -1603,8 +1704,8 @@ QDF_STATUS dp_txrx_deinit(ol_txrx_soc_handle soc)
 	if (!dp_ext_hdl)
 		return QDF_STATUS_E_FAULT;
 
-	dp_soc = cdp_soc_t_to_dp_soc(soc);
-	if (wlan_cfg_is_rx_refill_buffer_pool_enabled(dp_soc->wlan_cfg_ctx)) {
+	if (dp_ext_hdl->refill_thread.enabled) {
+		wlan_dp_resource_mgr_notify_refill_thread_deinit();
 		dp_rx_refill_thread_deinit(&dp_ext_hdl->refill_thread);
 		dp_ext_hdl->refill_thread.soc = NULL;
 		dp_ext_hdl->refill_thread.enabled = false;

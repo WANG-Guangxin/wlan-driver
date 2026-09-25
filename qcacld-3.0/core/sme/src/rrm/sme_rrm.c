@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -685,7 +685,7 @@ static QDF_STATUS sme_rrm_scan_request_callback(struct mac_context *mac,
 
 	/*
 	 * Even if RRM scan response is received after roaming to different AP
-	 * the messege shall be posted to PE for rrm cleanup.
+	 * the message shall be posted to PE for rrm cleanup.
 	 */
 
 	freq_list = pSmeRrmContext->channelList.freq_list;
@@ -761,7 +761,7 @@ sme_rrm_send_chan_load_report_xmit_ind(struct mac_context *mac,
 	req_chan_width = rrm_ctx->chan_load_req_info.req_chan_width;
 	if (req_chan_width == CH_WIDTH_INVALID) {
 		sme_debug("Invalid scanned_ch_width");
-		return;
+		goto free_chan_load_resp;
 	}
 
 	if (req_chan_width == CH_WIDTH_20MHZ) {
@@ -772,7 +772,7 @@ sme_rrm_send_chan_load_report_xmit_ind(struct mac_context *mac,
 	} else if (req_chan_width == CH_WIDTH_320MHZ) {
 		if (!rrm_ctx->chan_load_req_info.bw_ind.is_bw_ind_element) {
 			sme_debug("is_bw_ind_element is false");
-			return;
+			goto free_chan_load_resp;
 		}
 
 		qdf_mem_copy(&chan_load_resp->bw_ind,
@@ -784,7 +784,7 @@ sme_rrm_send_chan_load_report_xmit_ind(struct mac_context *mac,
 		if (!range) {
 			sme_debug("vdev %d : range is null for freq %d",
 				  vdev_id, op_freq);
-			return;
+			goto free_chan_load_resp;
 		}
 
 		start_freq = range->start_freq;
@@ -807,7 +807,7 @@ sme_rrm_send_chan_load_report_xmit_ind(struct mac_context *mac,
 		if (!range) {
 			sme_debug("range is NULL for freq %d, ch_width %d",
 				  op_freq, req_chan_width);
-			return;
+			goto free_chan_load_resp;
 		}
 		start_freq = range->start_freq;
 		end_freq = range->end_freq;
@@ -830,6 +830,10 @@ sme_rrm_send_chan_load_report_xmit_ind(struct mac_context *mac,
 
 	sme_debug("SME Sending CHAN_LOAD_REPORT_RESP_XMIT_IND to PE");
 	umac_send_mb_message_to_mac(chan_load_resp);
+	return;
+
+free_chan_load_resp:
+	qdf_mem_free(chan_load_resp);
 }
 
 static void sme_rrm_scan_event_callback(struct wlan_objmgr_vdev *vdev,
@@ -891,6 +895,8 @@ static void sme_rrm_scan_event_callback(struct wlan_objmgr_vdev *vdev,
 
 #define RRM_CHAN_WEIGHT_CHAR_LEN 5
 #define RRM_MAX_CHAN_TO_PRINT 39
+#define RRM_SCAN_IDLE_TIME 25
+#define RRM_SCAN_REST_TIME 2 * RRM_SCAN_IDLE_TIME
 
 QDF_STATUS sme_rrm_issue_scan_req(struct mac_context *mac_ctx, uint8_t idx)
 {
@@ -1015,6 +1021,13 @@ QDF_STATUS sme_rrm_issue_scan_req(struct mac_context *mac_ctx, uint8_t idx)
 		}
 
 		req->scan_req.adaptive_dwell_time_mode = SCAN_DWELL_MODE_STATIC;
+
+		req->scan_req.max_rest_time = RRM_SCAN_REST_TIME;
+		req->scan_req.min_rest_time = RRM_SCAN_REST_TIME;
+		req->scan_req.idle_time = RRM_SCAN_IDLE_TIME;
+		req->scan_req.burst_duration = BURST_SCAN_MAX_NUM_OFFCHANNELS *
+					       RRM_SCAN_REST_TIME;
+
 		/*
 		 * For RRM scans timing is very important especially when the
 		 * request is for limited channels. There is no need for
@@ -1405,9 +1418,7 @@ static QDF_STATUS sme_rrm_process_chan_load_req_ind(struct mac_context *mac,
 	sme_rrm_ctx->randnIntvl = QDF_MAX(chan_load->randomization_intv,
 			mac->rrm.rrmConfig.max_randn_interval);
 	sme_rrm_ctx->currentIndex = 0;
-	qdf_mem_copy((uint8_t *)&sme_rrm_ctx->duration,
-		     (uint8_t *)&chan_load->meas_duration,
-		     SIR_ESE_MAX_MEAS_IE_REQS);
+	sme_rrm_ctx->duration[0] = chan_load->meas_duration;
 	sme_rrm_ctx->measurement_type = RRM_CHANNEL_LOAD;
 	req_info = &sme_rrm_ctx->chan_load_req_info;
 	req_info->channel = chan_load->channel;

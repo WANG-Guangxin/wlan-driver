@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +34,11 @@
 #include "wlan_cfg80211.h"
 #include "wlan_objmgr_psoc_obj.h"
 #include "wlan_osif_priv.h"
+#include "wlan_nl_to_crypto_params.h"
+#include "wlan_crypto_global_api.h"
+#ifdef ENABLE_CFG80211_BACKPORTS_MLO
+#include "osif_cm_util.h"
+#endif
 #ifdef CNSS_GENL
 #ifdef CONFIG_CNSS_OUT_OF_TREE
 #include "cnss_nl.h"
@@ -50,36 +55,6 @@
 #define CLD80211_ATTR_CMD 4
 #define CLD80211_ATTR_CMD_TAG_DATA 5
 #define CLD80211_ATTR_MAX 5
-
-static const uint32_t
-cap_resp_sub_attr_len[CLD80211_SUB_ATTR_CAPS_MAX + 1] = {
-	[CLD80211_SUB_ATTR_CAPS_OEM_TARGET_SIGNATURE] =
-				OEM_TARGET_SIGNATURE_LEN,
-	[CLD80211_SUB_ATTR_CAPS_OEM_TARGET_TYPE] = sizeof(uint32_t),
-	[CLD80211_SUB_ATTR_CAPS_OEM_FW_VERSION] = sizeof(uint32_t),
-	[CLD80211_SUB_ATTR_CAPS_DRIVER_VERSION_MAJOR] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_CAPS_DRIVER_VERSION_MINOR] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_CAPS_DRIVER_VERSION_PATCH] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_CAPS_DRIVER_VERSION_BUILD] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_CAPS_ALLOWED_DWELL_TIME_MIN] = sizeof(uint16_t),
-	[CLD80211_SUB_ATTR_CAPS_ALLOWED_DWELL_TIME_MAX] = sizeof(uint16_t),
-	[CLD80211_SUB_ATTR_CAPS_CURRENT_DWELL_TIME_MIN] = sizeof(uint16_t),
-	[CLD80211_SUB_ATTR_CAPS_CURRENT_DWELL_TIME_MAX] = sizeof(uint16_t),
-	[CLD80211_SUB_ATTR_CAPS_SUPPORTED_BANDS] = sizeof(uint16_t),
-	[CLD80211_SUB_ATTR_CAPS_USER_DEFINED_CAPS] =
-				sizeof(struct wifi_pos_user_defined_caps),
-};
-
-static const uint32_t
-peer_status_sub_attr_len[CLD80211_SUB_ATTR_PEER_MAX + 1] = {
-	[CLD80211_SUB_ATTR_PEER_MAC_ADDR] = ETH_ALEN,
-	[CLD80211_SUB_ATTR_PEER_STATUS] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_PEER_VDEV_ID] = sizeof(uint8_t),
-	[CLD80211_SUB_ATTR_PEER_CAPABILITY] = sizeof(uint32_t),
-	[CLD80211_SUB_ATTR_PEER_RESERVED] = sizeof(uint32_t),
-	[CLD80211_SUB_ATTR_PEER_CHAN_INFO] =
-				sizeof(struct wifi_pos_ch_info_rsp),
-};
 
 static const uint32_t
 ch_resp_sub_attr_len[CLD80211_SUB_ATTR_CH_MAX + 1] = {
@@ -961,14 +936,15 @@ static int __os_if_wifi_pos_callback(struct sk_buff *skb)
 	osif_debug("enter");
 
 	err = wifi_pos_parse_req(skb, &req, &psoc);
-	if (err) {
-		osif_err("wifi_pos_parse_req failed");
+	if (!psoc) {
+		osif_err("null psoc");
 		return -EINVAL;
 	}
 
 	wlan_objmgr_psoc_get_ref(psoc, WLAN_WIFI_POS_OSIF_ID);
 
 	if (err) {
+		osif_err("wifi_pos_parse_req failed");
 		os_if_wifi_pos_send_rsp(psoc, wifi_pos_get_app_pid(psoc),
 					WIFI_POS_CMD_ERROR, sizeof(err), &err);
 		status = QDF_STATUS_E_INVAL;
@@ -1101,6 +1077,7 @@ int os_if_wifi_pos_populate_caps(struct wlan_objmgr_psoc *psoc,
 }
 
 #if defined(WIFI_POS_CONVERGED) && defined(WLAN_FEATURE_RTT_11AZ_SUPPORT)
+#ifdef ENABLE_CFG80211_BACKPORTS_MLO
 QDF_STATUS
 os_if_wifi_pos_initiate_pasn_auth(struct wlan_objmgr_vdev *vdev,
 				  struct wlan_pasn_request *pasn_peer,
@@ -1115,7 +1092,242 @@ os_if_wifi_pos_initiate_pasn_auth(struct wlan_objmgr_vdev *vdev,
 	int i;
 	int index = QCA_NL80211_VENDOR_SUBCMD_PASN_AUTH_STATUS_INDEX;
 	uint16_t record_size;
-	uint32_t len;
+	uint32_t len, akm;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	struct wireless_dev *wdev;
+	struct wiphy *wiphy;
+	uint8_t link_id = 0xff;
+	uint8_t zero_pmkid[PMKID_LEN] = {0};
+
+	osif_priv  = wlan_vdev_get_ospriv(vdev);
+	if (!osif_priv) {
+		osif_err("OSIF priv is NULL");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (vdev->mlo_dev_ctx) {
+		netdev = osif_cm_get_mld_netdev(vdev);
+		if (!netdev) {
+			osif_err("Netdev is NULL");
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		wdev = netdev->ieee80211_ptr;
+		if (!wdev) {
+			osif_err("wdev is null");
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		wiphy = wdev->wiphy;
+		if (!wiphy) {
+			osif_err("wiphy is null");
+			return QDF_STATUS_E_FAILURE;
+		}
+	} else {
+		netdev = osif_priv->wdev->netdev;
+		if (!netdev) {
+			osif_err("Netdev is NULL");
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		wdev = netdev->ieee80211_ptr;
+		if (!wdev) {
+			osif_err("wdev is null");
+			return QDF_STATUS_E_FAILURE;
+		}
+
+		wiphy = wdev->wiphy;
+		if (!wiphy) {
+			osif_err("wiphy is null");
+			return QDF_STATUS_E_FAILURE;
+		}
+	}
+
+	len = NLMSG_HDRLEN;
+	/* QCA_WLAN_VENDOR_ATTR_PASN_ACTION */
+	len += nla_total_size(sizeof(u32));
+
+	/*
+	 * size of nest containing
+	 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_MAC_ADDR
+	 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_SRC_ADDR
+	 */
+	record_size = nla_total_size(2 * nla_total_size(ETH_ALEN));
+
+	if (num_pasn_peers > WLAN_MAX_11AZ_PEERS) {
+		osif_err("Invalid num_pasn_peers: %d, max: %d)", num_pasn_peers,
+			 WLAN_MAX_11AZ_PEERS);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	/* QCA_WLAN_VENDOR_ATTR_PASN_PEERS nest */
+	len += nla_total_size(num_pasn_peers * record_size);
+
+	/*QCA_WLAN_VENDOR_ATTR_PASN_LINK_ID*/
+	len += nla_total_size(sizeof(u8));
+
+	for (i = 0; i < num_pasn_peers; i++) {
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_AKM
+		 * and QCA_WLAN_VENDOR_ATTR_PASN_PEER_CIPHER
+		 */
+		len += nla_total_size(2 * sizeof(u32));
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_PASSWORD
+		 */
+		if (pasn_peer[i].password_len)
+			len += nla_total_size(pasn_peer[i].password_len);
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_PMKID
+		 */
+		if (pasn_peer[i].pmkid_len)
+			len += nla_total_size(pasn_peer[i].pmkid_len);
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_COOKIE
+		 */
+		if (pasn_peer[i].cookie_len)
+			len += nla_total_size(pasn_peer[i].cookie_len);
+	}
+	skb = wlan_cfg80211_vendor_event_alloc(wiphy,
+					       wdev, len,
+					       index, GFP_ATOMIC);
+
+	if (!skb)
+		return QDF_STATUS_E_NOMEM;
+
+	action = is_initiate_pasn ?
+		 QCA_WLAN_VENDOR_PASN_ACTION_AUTH :
+		 QCA_WLAN_VENDOR_PASN_ACTION_DELETE_SECURE_RANGING_CONTEXT;
+	if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_PASN_ACTION, action)) {
+		osif_err("NLA put failed");
+		status = QDF_STATUS_E_FAILURE;
+		goto nla_put_failure;
+	}
+
+	for (i = 0; i < IEEE80211_MLD_MAX_NUM_LINKS; i++) {
+		if (qdf_is_macaddr_equal(wdev->links[i].addr, vdev->vdev_mlme.macaddr)) {
+			link_id = i;
+			break;
+		}
+	}
+
+	if (nla_put_u8(skb, QCA_WLAN_VENDOR_ATTR_PASN_LINK_ID, link_id)) {
+		osif_err("NLA put failed");
+		status = QDF_STATUS_E_FAILURE;
+		goto nla_put_failure;
+	}
+	attr = nla_nest_start(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEERS);
+	if (!attr) {
+		osif_err("NLA nest failed");
+		status = QDF_STATUS_E_FAILURE;
+		goto nla_put_failure;
+	}
+
+	for (i = 0; i < num_pasn_peers; i++) {
+		osif_debug("PASN peer_mac[%d]: " QDF_MAC_ADDR_FMT " src_mac: "
+			   QDF_MAC_ADDR_FMT, i, QDF_MAC_ADDR_REF(
+			   pasn_peer[i].peer_mac.bytes), QDF_MAC_ADDR_REF(
+			   pasn_peer[i].self_mac.bytes));
+		nest_attr = nla_nest_start(skb, i);
+		if (!nest_attr) {
+			osif_err("NLA nest failed for iter:%d", i);
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_MAC_ADDR,
+			    ETH_ALEN, pasn_peer[i].peer_mac.bytes)) {
+			osif_err("NLA put failed");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (!qdf_is_macaddr_zero(&pasn_peer[i].self_mac) &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_SRC_ADDR,
+			    ETH_ALEN, pasn_peer[i].self_mac.bytes)) {
+			osif_err("NLA put failed");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		akm = osif_crypto_to_nl_suites(pasn_peer[i].akm);
+		if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_AKM,
+				akm)) {
+			osif_err("NLA put failed for PASN_PEER_AKM");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_CIPHER,
+				pasn_peer[i].cipher)) {
+			osif_err("NLA put failed for PASN_PEER_CIPHER");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (pasn_peer[i].password_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_PASSWORD,
+			    pasn_peer[i].password_len,
+			    pasn_peer[i].password)) {
+			osif_err("NLA put failed for PASN_PEER_PASSWORD");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (!qdf_mem_cmp(pasn_peer[i].pmkid, zero_pmkid, PMKID_LEN))
+			pasn_peer[i].pmkid_len = 0;
+
+		if (pasn_peer[i].pmkid_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_PMKID,
+			    pasn_peer[i].pmkid_len, pasn_peer[i].pmkid)) {
+			osif_err("NLA put failed for PASN_PEER_PMKID");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (pasn_peer[i].cookie_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_COOKIE,
+			    pasn_peer[i].cookie_len,
+			    pasn_peer[i].cookie)) {
+			osif_err("NLA put failed for PASN_PEER_COOKIE");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+		nla_nest_end(skb, nest_attr);
+	}
+	nla_nest_end(skb, attr);
+
+	osif_debug("action:%d num_pasn_peers:%d", action, num_pasn_peers);
+
+	wlan_cfg80211_vendor_event(skb, GFP_ATOMIC);
+
+	return status;
+
+nla_put_failure:
+	wlan_cfg80211_vendor_free_skb(skb);
+
+	return status;
+}
+#else
+QDF_STATUS
+os_if_wifi_pos_initiate_pasn_auth(struct wlan_objmgr_vdev *vdev,
+				  struct wlan_pasn_request *pasn_peer,
+				  uint8_t num_pasn_peers,
+				  bool is_initiate_pasn)
+{
+	struct net_device *netdev;
+	struct vdev_osif_priv *osif_priv;
+	struct sk_buff *skb;
+	struct nlattr *attr, *nest_attr;
+	enum qca_wlan_vendor_pasn_action action;
+	int i;
+	int index = QCA_NL80211_VENDOR_SUBCMD_PASN_AUTH_STATUS_INDEX;
+	uint16_t record_size;
+	uint32_t len, akm;
+	uint8_t zero_pmkid[PMKID_LEN] = {0};
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
 	osif_priv  = wlan_vdev_get_ospriv(vdev);
@@ -1137,8 +1349,40 @@ os_if_wifi_pos_initiate_pasn_auth(struct wlan_objmgr_vdev *vdev,
 	 */
 	record_size = nla_total_size(2 * nla_total_size(ETH_ALEN));
 
+	if (num_pasn_peers > WLAN_MAX_11AZ_PEERS) {
+		osif_err("Invalid num_pasn_peers: %d, max: %d)", num_pasn_peers,
+			 WLAN_MAX_11AZ_PEERS);
+		return QDF_STATUS_E_INVAL;
+	}
+
 	/* QCA_WLAN_VENDOR_ATTR_PASN_PEERS nest */
 	len += nla_total_size(num_pasn_peers * record_size);
+
+	for (i = 0; i < num_pasn_peers; i++) {
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_AKM
+		 * and QCA_WLAN_VENDOR_ATTR_PASN_PEER_CIPHER
+		 */
+		len += nla_total_size(2 * sizeof(u32));
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_PASSWORD
+		 */
+		if (pasn_peer[i].password_len)
+			len += nla_total_size(pasn_peer[i].password_len);
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_PMKID
+		 */
+		if (pasn_peer[i].pmkid_len)
+			len += nla_total_size(pasn_peer[i].pmkid_len);
+
+		/*
+		 * QCA_WLAN_VENDOR_ATTR_PASN_PEER_COOKIE
+		 */
+		if (pasn_peer[i].cookie_len)
+			len += nla_total_size(pasn_peer[i].cookie_len);
+	}
 
 	skb = wlan_cfg80211_vendor_event_alloc(osif_priv->wdev->wiphy,
 					       osif_priv->wdev, len,
@@ -1187,6 +1431,50 @@ os_if_wifi_pos_initiate_pasn_auth(struct wlan_objmgr_vdev *vdev,
 			goto nla_put_failure;
 		}
 
+		akm = osif_crypto_to_nl_suites(pasn_peer[i].akm);
+		if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_AKM,
+				akm)) {
+			osif_err("NLA put failed for PASN_PEER_AKM");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_CIPHER,
+				pasn_peer[i].cipher)) {
+			osif_err("NLA put failed for PASN_PEER_CIPHER");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (pasn_peer[i].password_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_PASSWORD,
+			    pasn_peer[i].password_len,
+			    pasn_peer[i].password)) {
+			osif_err("NLA put failed for PASN_PEER_PASSWORD");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (!qdf_mem_cmp(pasn_peer[i].pmkid, zero_pmkid, PMKID_LEN))
+			pasn_peer[i].pmkid_len = 0;
+
+		if (pasn_peer[i].pmkid_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_PMKID,
+			    pasn_peer[i].pmkid_len, pasn_peer[i].pmkid)) {
+			osif_err("NLA put failed for PASN_PEER_PMKID");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
+		if (pasn_peer[i].cookie_len &&
+		    nla_put(skb, QCA_WLAN_VENDOR_ATTR_PASN_PEER_COOKIE,
+			    pasn_peer[i].cookie_len,
+			    pasn_peer[i].cookie)) {
+			osif_err("NLA put failed for PASN_PEER_COOKIE");
+			status = QDF_STATUS_E_FAILURE;
+			goto nla_put_failure;
+		}
+
 		nla_nest_end(skb, nest_attr);
 	}
 	nla_nest_end(skb, attr);
@@ -1202,4 +1490,5 @@ nla_put_failure:
 
 	return status;
 }
+#endif
 #endif /* WIFI_POS_CONVERGED && WLAN_FEATURE_RTT_11AZ_SUPPORT */

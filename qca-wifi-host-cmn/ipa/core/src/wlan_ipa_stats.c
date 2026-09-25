@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -419,6 +419,22 @@ wlan_ipa_dump_iface_context_alt_pipe(struct wlan_ipa_iface_context *iface)
 }
 #endif
 
+#ifdef WLAN_FEATURE_MULTI_LINK_SAP
+static void
+wlan_ipa_dump_iface_context_ml_sap(struct wlan_ipa_iface_context *iface)
+{
+	ipa_info("\tis_ml_sap: %d\n", iface->is_ml_sap);
+
+	if (iface->is_ml_sap)
+		ipa_info("\tml_sap_ifname: %s\n", iface->ml_sap_ifname);
+}
+#else /* !WLAN_FEATURE_MULTI_LINK_SAP */
+static inline void
+wlan_ipa_dump_iface_context_ml_sap(struct wlan_ipa_iface_context *iface)
+{
+}
+#endif /* WLAN_FEATURE_MULTI_LINK_SAP */
+
 /**
  * wlan_ipa_dump_iface_context() - Dump IPA interface context structure
  * @ipa_ctx: IPA private context structure
@@ -456,6 +472,7 @@ static void wlan_ipa_dump_iface_context(struct wlan_ipa_priv *ipa_ctx)
 			&iface_context->interface_lock,
 			iface_context->ifa_address);
 		wlan_ipa_dump_iface_context_alt_pipe(iface_context);
+		wlan_ipa_dump_iface_context_ml_sap(iface_context);
 	}
 }
 
@@ -487,7 +504,7 @@ void wlan_ipa_uc_stat_request(struct wlan_ipa_priv *ipa_ctx, uint8_t reason)
 	if (wlan_ipa_is_fw_wdi_activated(ipa_ctx) &&
 	    (false == ipa_ctx->resource_loading)) {
 		ipa_ctx->stat_req_reason = reason;
-		cdp_ipa_get_stat(ipa_ctx->dp_soc, ipa_ctx->dp_pdev_id);
+		cdp_ipa_get_stat(ipa_ctx->dp_soc, IPA_DEF_PDEV_ID);
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
 	} else {
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
@@ -853,7 +870,7 @@ static void wlan_ipa_uc_sharing_stats_request(struct wlan_ipa_priv *ipa_ctx,
 	qdf_mutex_acquire(&ipa_ctx->ipa_lock);
 	if (false == ipa_ctx->resource_loading) {
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
-		cdp_ipa_uc_get_share_stats(ipa_ctx->dp_soc, ipa_ctx->dp_pdev_id,
+		cdp_ipa_uc_get_share_stats(ipa_ctx->dp_soc, IPA_DEF_PDEV_ID,
 					   reset_stats);
 	} else {
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
@@ -878,7 +895,7 @@ static void wlan_ipa_uc_set_quota(struct wlan_ipa_priv *ipa_ctx,
 	qdf_mutex_acquire(&ipa_ctx->ipa_lock);
 	if (false == ipa_ctx->resource_loading) {
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
-		cdp_ipa_uc_set_quota(ipa_ctx->dp_soc, ipa_ctx->dp_pdev_id,
+		cdp_ipa_uc_set_quota(ipa_ctx->dp_soc, IPA_DEF_PDEV_ID,
 				     quota_bytes);
 	} else {
 		qdf_mutex_release(&ipa_ctx->ipa_lock);
@@ -1033,6 +1050,14 @@ QDF_STATUS wlan_ipa_uc_op_metering(struct wlan_ipa_priv *ipa_ctx,
 }
 #endif /* WDI3_STATS_UPDATE */
 
+/**
+ * wlan_ipa_wdi_meter_notifier_cb() - SSR wrapper for
+ * __wlan_ipa_wdi_meter_notifier_cb
+ * @evt: the IPA event which triggered the callback
+ * @data: data associated with the event
+ *
+ * Return: None
+ */
 void wlan_ipa_wdi_meter_notifier_cb(qdf_ipa_wdi_meter_evt_type_t evt,
 				    void *data)
 {

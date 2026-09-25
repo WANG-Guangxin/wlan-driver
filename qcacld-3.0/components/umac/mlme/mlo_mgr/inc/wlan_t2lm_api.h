@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -52,6 +52,8 @@ struct t2lm_event_data {
  * @WLAN_T2LM_EV_ACTION_FRAME_RX_RESP:Handle T2LM response frame received from AP
  * @WLAN_T2LM_EV_ACTION_FRAME_RX_TEARDOWN:Handle received teardown frame event
  * @WLAN_T2LM_EV_ACTION_FRAME_TX_TEARDOWN:Handle sending teardown frame event
+ * @WLAN_T2LM_EV_DEL_LINK_UPDATE_MAPPING: Handle Link reconfiguration delete mapping update
+ * @WLAN_T2LM_EV_ADD_LINK_UPDATE_MAPPING: Handle Link reconfiguration add mapping update
  * @WLAN_T2LM_EV_ACTION_FRAME_MAX: Maximum T2LM action frame event value
  */
 enum wlan_t2lm_evt {
@@ -61,7 +63,9 @@ enum wlan_t2lm_evt {
 	WLAN_T2LM_EV_ACTION_FRAME_RX_RESP = 3,
 	WLAN_T2LM_EV_ACTION_FRAME_RX_TEARDOWN = 4,
 	WLAN_T2LM_EV_ACTION_FRAME_TX_TEARDOWN = 5,
-	WLAN_T2LM_EV_ACTION_FRAME_MAX = 6,
+	WLAN_T2LM_EV_DEL_LINK_UPDATE_MAPPING = 6,
+	WLAN_T2LM_EV_ADD_LINK_UPDATE_MAPPING = 7,
+	WLAN_T2LM_EV_ACTION_FRAME_MAX = 8,
 };
 
 #ifdef WLAN_FEATURE_11BE_MLO
@@ -85,6 +89,17 @@ QDF_STATUS t2lm_deliver_event(struct wlan_objmgr_vdev *vdev,
 			      uint32_t frame_len,
 			      uint8_t *dialog_token);
 
+/**
+ * ttlm_valid_n_copy_for_rx_req() - valid and copy TTLM info for RX req
+ * @vdev: Vdev object
+ * @peer: peer object
+ * @t2lm_req: Ongoing T2LM req info
+ *
+ * return QDF_STATUS
+ */
+QDF_STATUS ttlm_valid_n_copy_for_rx_req(struct wlan_objmgr_vdev *vdev,
+					struct wlan_objmgr_peer *peer,
+					struct wlan_t2lm_onging_negotiation_info *t2lm_req);
 /**
  * t2lm_handle_rx_req - Handler for parsing T2LM action frame
  * @vdev: vdev pointer
@@ -175,8 +190,27 @@ QDF_STATUS t2lm_handle_tx_teardown(struct wlan_objmgr_vdev *vdev,
 				   void *event_data);
 
 /**
+ * t2lm_find_tid_mapped_link_id - Find t2lm tid mapped link id
+ * @t2lm_info: pointer to t2lm_info
+ * @tid_mapped_link_id: tid mapped link id
+ *
+ * Return: qdf_status
+ */
+QDF_STATUS
+t2lm_find_tid_mapped_link_id(struct wlan_t2lm_info *t2lm_info,
+			     uint16_t *tid_mapped_link_id);
+
+/**
+ * t2lm_get_tids_mapped_link_id - Get tids mapped link id
+ * @link_map_tid: link map tip
+ *
+ * Return: tid mapped link id
+ */
+uint16_t
+t2lm_get_tids_mapped_link_id(uint16_t link_map_tid);
+
+/**
  * wlan_t2lm_validate_candidate - Validate candidate based on T2LM IE
- * @cm_ctx: connection manager context pointer
  * @scan_entry: scan entry pointer
  *
  * This api will be called to validate candidate based on T2LM IE received
@@ -186,8 +220,7 @@ QDF_STATUS t2lm_handle_tx_teardown(struct wlan_objmgr_vdev *vdev,
  */
 
 QDF_STATUS
-wlan_t2lm_validate_candidate(struct cnx_mgr *cm_ctx,
-			     struct scan_cache_entry *scan_entry);
+wlan_t2lm_validate_candidate(struct scan_cache_entry *scan_entry);
 /**
  * wlan_t2lm_deliver_event() - TID-to-link-mapping event handler
  * @vdev: vdev object
@@ -269,7 +302,117 @@ QDF_STATUS wlan_update_t2lm_mapping(
 QDF_STATUS
 wlan_t2lm_init_default_mapping(struct wlan_t2lm_context *t2lm_ctx);
 
+/**
+ * t2lm_gen_dialog_token() - Generate TTLM dialog token
+ * @t2lm_policy: T2LM structure
+ *
+ * Return: Dialog token
+ */
+uint8_t
+t2lm_gen_dialog_token(struct wlan_mlo_peer_t2lm_policy *t2lm_policy);
+
+/**
+ * wlan_t2lm_check_concurrency_curr_force() - Check concurrency curr force links
+ * @vdev: Vdev pointer
+ * @t2lm_neg: t2lm neg pointer
+ *
+ * Return:qdf status
+ */
+QDF_STATUS
+wlan_t2lm_check_concurrency_curr_force(struct wlan_objmgr_vdev *vdev,
+				       struct wlan_t2lm_onging_negotiation_info *t2lm_neg);
+
+/**
+ * wlan_t2lm_is_peer_neg_in_progress() - Check if peer negotiation
+ * is in progress
+ * @ml_peer: ML peer pointer
+ *
+ * Return:bool (true/false)
+ */
+bool
+wlan_t2lm_is_peer_neg_in_progress(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * wlan_t2lm_update_peer_mapping_for_del_link() - Update peer mapping
+ * @ml_peer: ML Peer ctx pointer
+ *
+ * If Link reconfiguration request is received to delete link
+ * to which all TIDs are mapped update mapping to default internally.
+ *
+ * Return:qdf status (true/false)
+ */
+QDF_STATUS
+wlan_t2lm_update_peer_mapping_for_del_link(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * wlan_t2lm_handle_link_recfg_del_update() - API to handle TTLM due
+ * to Link reconfiguration for del link
+ * @peer: peer pointer
+ *
+ * Return: success if event is handled else failure
+ */
+QDF_STATUS
+wlan_t2lm_handle_link_recfg_del_update(struct wlan_objmgr_peer *peer);
+
+/**
+ * wlan_t2lm_handle_link_recfg_add_update() - API to handle TTLM due
+ * to Link reconfiguration add link
+ * @peer: peer pointer
+ *
+ * Return: success if event is handled else failure
+ */
+QDF_STATUS
+wlan_t2lm_handle_link_recfg_add_update(struct wlan_objmgr_peer *peer);
+
+/**
+ * wlan_t2lm_update_peer_mapping_for_add_link() - Update peer mapping
+ * @ml_peer: ML Peer ctx pointer
+ *
+ * If Link reconfiguration request is received to add link
+ * to update mapping to map TIDs to newly added link internally.
+ *
+ * Return:qdf status (true/false)
+ */
+QDF_STATUS
+wlan_t2lm_update_peer_mapping_for_add_link(struct wlan_mlo_peer_context *ml_peer);
 #else
+static inline QDF_STATUS
+wlan_t2lm_update_peer_mapping_for_add_link(struct wlan_mlo_peer_context *ml_peer)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+wlan_t2lm_handle_link_recfg_del_update(struct wlan_objmgr_peer *peer)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+wlan_t2lm_handle_link_recfg_add_update(struct wlan_objmgr_peer *peer)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+wlan_t2lm_update_peer_mapping_for_del_link(struct wlan_mlo_peer_context *ml_peer)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline bool
+wlan_t2lm_is_peer_neg_in_progress(struct wlan_mlo_peer_context *ml_peer)
+{
+	return false;
+}
+
+static inline QDF_STATUS
+wlan_t2lm_check_concurrency_curr_force(struct wlan_objmgr_vdev *vdev,
+				       struct wlan_t2lm_onging_negotiation_info *t2lm_neg)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
 static inline QDF_STATUS
 wlan_t2lm_init_default_mapping(struct wlan_t2lm_context *t2lm_ctx)
 {
@@ -287,6 +430,14 @@ static inline QDF_STATUS wlan_update_t2lm_mapping(
 static inline QDF_STATUS
 wlan_populate_link_disable_t2lm_frame(struct wlan_objmgr_vdev *vdev,
 				      struct mlo_link_disable_request_evt_params *params)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline QDF_STATUS
+ttlm_valid_n_copy_for_rx_req(struct wlan_objmgr_vdev *vdev,
+			     struct wlan_objmgr_peer *peer,
+			     struct wlan_t2lm_onging_negotiation_info *t2lm_req)
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }
@@ -338,8 +489,20 @@ t2lm_handle_tx_teardown(struct wlan_objmgr_vdev *vdev,
 }
 
 static inline QDF_STATUS
-wlan_t2lm_validate_candidate(struct cnx_mgr *cm_ctx,
-			     struct scan_cache_entry *scan_entry)
+t2lm_find_tid_mapped_link_id(struct wlan_t2lm_info *t2lm_info,
+			     uint16_t *tid_mapped_link_id)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline uint16_t
+t2lm_get_tids_mapped_link_id(uint16_t link_map_tid)
+{
+	return 0;
+}
+
+static inline QDF_STATUS
+wlan_t2lm_validate_candidate(struct scan_cache_entry *scan_entry)
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }
@@ -363,6 +526,31 @@ QDF_STATUS wlan_t2lm_deliver_event(struct wlan_objmgr_vdev *vdev,
 				   void *event_data,
 				   uint32_t frame_len,
 				   uint8_t *dialog_token)
+{
+	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline
+uint8_t t2lm_gen_dialog_token(struct wlan_mlo_peer_t2lm_policy *t2lm_policy)
+{
+	return 0;
+}
+#endif
+
+#ifdef WLAN_FEATURE_11BE_MLO_TTLM
+/**
+ * wlan_mlo_set_ttlm_mapping() - API to send the set TTLM req
+ * @vdev: vdev
+ * @t2lm: TTLM info parameters
+ *
+ * Return: success if event is handled else failure
+ */
+QDF_STATUS wlan_mlo_set_ttlm_mapping(struct wlan_objmgr_vdev *vdev,
+				     struct wlan_t2lm_info *t2lm);
+#else
+static inline
+QDF_STATUS wlan_mlo_set_ttlm_mapping(struct wlan_objmgr_vdev *vdev,
+				     struct wlan_t2lm_info *t2lm)
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }

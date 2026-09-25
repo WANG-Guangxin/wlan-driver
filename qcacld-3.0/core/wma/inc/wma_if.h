@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -49,6 +49,7 @@
 #define BSS_OPERATIONAL_MODE_STA    1
 #define BSS_OPERATIONAL_MODE_IBSS   2
 #define BSS_OPERATIONAL_MODE_NDI    3
+#define BSS_OPERATIONAL_MODE_PASSTHRU 4
 
 /* STA entry type in add sta message */
 #define STA_ENTRY_SELF              0
@@ -64,6 +65,13 @@
 #define IS_TDLS_PEER(type) false
 #endif /* FEATURE_WLAN_TDLS */
 #define STA_ENTRY_NDI_PEER          5
+#define STA_ENTRY_PASSTHRU_PEER     6
+
+#ifdef DRIVER_PASSTHRU_MODE
+#define IS_PASSTHRU_PEER(type) ((type) == STA_ENTRY_PASSTHRU_PEER)
+#else
+#define IS_PASSTHRU_PEER(type) false
+#endif
 
 #define STA_INVALID_IDX 0xFF
 
@@ -208,6 +216,7 @@ struct peer_ml_info {
  * @vht_caps: VHT vapabalities
  * @nwType: NW Type
  * @maxTxPower: max tx power
+ * @bcn_tx_nss: Tx NSS from beacon
  * @nss: Return the number of spatial streams supported
  * @stbc_capable: stbc capable
  * @no_ptk_4_way: Do not need 4-way handshake
@@ -218,8 +227,11 @@ struct peer_ml_info {
  * @is_assoc_peer: is assoc peer or not
  * @emlsr_support: is EMLSR mode supported or not
  * @msd_caps_present: is MSD capability present in MLO IE or not
+ * @ext_mld_caps_present: if Extended MLD capability present in MLO IE
  * @link_id: per link id
  * @emlsr_trans_timeout: EMLSR transition timeout value
+ * @eml_info: EMLSR capability info for sta peer under mlo sap mode
+ * @mld_info: mld and operation capability info for sta peer under mlo sap mode
  *
  * This structure contains parameter required for
  * add sta request of upper layer.
@@ -258,6 +270,8 @@ typedef struct {
 	/* The return status of SIR_HAL_ADD_STA_REQ is reported here */
 	QDF_STATUS status;
 	uint8_t updateSta;
+	/* 1 = passthru NEW: WMI_PEER_CREATE only; skip WMI_PEER_ASSOC_CMDID */
+	uint8_t create_only;
 	uint8_t rmfEnabled;
 	uint32_t encryptType;
 	uint8_t sessionId;
@@ -287,7 +301,8 @@ typedef struct {
 	tSirNwType nwType;
 	int8_t maxTxPower;
 	uint8_t nonRoamReassoc;
-	uint32_t nss;
+	uint8_t bcn_tx_nss;
+	uint8_t nss;
 #ifdef WLAN_FEATURE_11AX
 	bool he_capable;
 	tDot11fIEhe_cap he_config;
@@ -312,11 +327,18 @@ typedef struct {
 	bool is_assoc_peer;
 	bool emlsr_support;
 	bool msd_caps_present;
+	bool ext_mld_caps_present;
 	uint8_t link_id;
 	uint16_t emlsr_trans_timeout;
+	struct wlan_mlo_eml_cap eml_info;
+	struct wlan_mlo_mld_cap mld_info;
 	struct ml_partner_link_info ml_partner_info[MLD_MAX_LINKS - 1];
 	struct peer_ml_info ml_info;
+	struct wlan_mlo_ext_mld_cap ext_mld_cap;
 #endif
+	struct security_info sec_info;
+	uint8_t peer_cck_rx_support_5ghz : 1,
+	peer_cck_tx_support_5ghz : 1;
 } tAddStaParams, *tpAddStaParams;
 
 /**
@@ -587,13 +609,13 @@ typedef struct {
 
 /**
  * struct tUpdateVHTOpMode - VHT operating mode
- * @opMode: VHT operating mode
+ * @chwidth: Channel width of opmode change
  * @staId: station id
  * @smesessionId: SME session id
  * @peer_mac: peer mac address
  */
 typedef struct {
-	uint16_t opMode;
+	enum phy_ch_width chwidth;
 	uint16_t smesessionId;
 	tSirMacAddr peer_mac;
 } tUpdateVHTOpMode, *tpUpdateVHTOpMode;

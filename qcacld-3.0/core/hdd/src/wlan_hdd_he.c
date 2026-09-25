@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2019 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -76,9 +76,10 @@ void hdd_update_tgt_he_cap(struct hdd_context *hdd_ctx,
 		hdd_err("unable to get tx_bfee_ant_supp");
 
 	he_cap_ini.bfee_sts_lt_80 = value;
+	he_cap_ini.bfee_sts_gt_80 = value;
 	sme_update_tgt_he_cap(hdd_ctx->mac_handle, cfg, &he_cap_ini);
 
-	ucfg_mlme_update_tgt_he_cap(hdd_ctx->psoc, cfg);
+	ucfg_mlme_update_tgt_he_cap(hdd_ctx->psoc, cfg, hdd_ctx->num_rf_chains);
 }
 
 void wlan_hdd_check_11ax_support(struct hdd_beacon_data *beacon,
@@ -657,7 +658,7 @@ static int hdd_clear_sr_stats(struct hdd_context *hdd_ctx, uint8_t mac_id)
  * @adapter: hdd adapter
  * @sr_ctrl: sr ctrl ie
  *
- * Return: true if provided mode supports SR else flase
+ * Return: true if provided mode supports SR else false
  */
 static bool hdd_check_mode_support_for_sr(struct hdd_adapter *adapter,
 					  uint8_t sr_ctrl)
@@ -689,6 +690,7 @@ static int __wlan_hdd_cfg80211_sr_operations(struct wiphy *wiphy,
 	QDF_STATUS status;
 	uint32_t id;
 	bool is_sr_enable = false;
+	bool non_srg_sr_disallowed = false, srg_info_present = false;
 	int32_t srg_pd_threshold = 0;
 	int32_t non_srg_pd_threshold = 0;
 	uint8_t sr_he_siga_val15_allowed = true;
@@ -804,6 +806,9 @@ static int __wlan_hdd_cfg80211_sr_operations(struct wiphy *wiphy,
 	switch (sr_oper) {
 	case QCA_WLAN_SR_OPERATION_SR_ENABLE:
 	case QCA_WLAN_SR_OPERATION_SR_DISABLE:
+		non_srg_sr_disallowed = sr_ctrl & NON_SRG_PD_SR_DISALLOWED;
+		srg_info_present = sr_ctrl & SRG_INFO_PRESENT;
+
 		if (sr_oper == QCA_WLAN_SR_OPERATION_SR_ENABLE) {
 			is_sr_enable = true;
 		} else {
@@ -815,26 +820,45 @@ static int __wlan_hdd_cfg80211_sr_operations(struct wiphy *wiphy,
 			}
 		}
 		/**
-		 * As per currenct implementation from userspace same
+		 * As per current implementation from userspace same
 		 * PD threshold value is configured for both SRG and
 		 * NON-SRG and fw will decide further based on BSS color
 		 * So only SRG param is parsed and set as pd threshold
 		 */
 		if (is_sr_enable &&
 		    tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_SRG_PD_THRESHOLD]) {
-			srg_pd_threshold =
-			nla_get_s32(
-			tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_SRG_PD_THRESHOLD]);
-			wlan_vdev_mlme_set_pd_threshold_present(vdev, true);
+			if (srg_info_present) {
+				srg_pd_threshold =
+				nla_get_s32(
+				tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_SRG_PD_THRESHOLD]);
+				wlan_vdev_mlme_set_pd_threshold_present(vdev,
+									true);
+			} else {
+				hdd_err("SRG OBSS PD threshold set is disallowed\n");
+				ret = -EINVAL;
+				goto exit;
+			}
 		}
 
 		if (is_sr_enable &&
 		    tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_NON_SRG_PD_THRESHOLD]) {
-			non_srg_pd_threshold =
-			nla_get_s32(
-			tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_NON_SRG_PD_THRESHOLD]
-			);
-			wlan_vdev_mlme_set_pd_threshold_present(vdev, true);
+			if (!non_srg_sr_disallowed) {
+				non_srg_pd_threshold =
+				nla_get_s32(
+				tb2[QCA_WLAN_VENDOR_ATTR_SR_PARAMS_NON_SRG_PD_THRESHOLD]);
+				wlan_vdev_mlme_set_pd_threshold_present(vdev,
+									true);
+			} else {
+				hdd_err("non-SRG OBSS PD threshold set is disallowed\n");
+				ret = -EINVAL;
+				goto exit;
+			}
+		}
+
+		if (non_srg_sr_disallowed && !srg_info_present) {
+			hdd_err("Failed to enable SR\n");
+			ret = -EINVAL;
+			goto exit;
 		}
 
 		hdd_debug("setting sr enable %d with pd threshold srg: %d non srg: %d",

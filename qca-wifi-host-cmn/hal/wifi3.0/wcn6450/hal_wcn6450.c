@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -161,8 +161,8 @@ struct hal_hw_srng_config hw_srng_table_wcn6450[] = {
 	},
 	{/* RXDMA_MONITOR_BUF */ 0},
 	{ /* RXDMA_MONITOR_STATUS */
-		.start_ring_id = HAL_SRNG_WMAC1_SW2RXDMA1_STATBUF,
-		.max_rings = 1,
+		.start_ring_id = HAL_SRNG_WMAC1_SW2RXDMA0_STATBUF,
+		.max_rings = NUM_RXDMA_STATUS_RINGS_PER_PDEV,
 		.entry_size = sizeof(struct wbm_buffer_ring) >> 2,
 		.lmac_ring = TRUE,
 		.ring_dir = HAL_SRNG_SRC_RING,
@@ -227,6 +227,7 @@ struct hal_hw_srng_config hw_srng_table_wcn6450[] = {
 		.max_size = HAL_RXDMA_MAX_RING_SIZE,
 	},
 
+	{ /* TQM2SW_RELEASE */ 0},
 };
 
 static void hal_get_hw_hptp_6450(struct hal_soc *hal_soc,

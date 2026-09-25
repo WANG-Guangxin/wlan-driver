@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -41,6 +41,7 @@
 #include "lim_send_messages.h"
 #include "wlan_connectivity_logging.h"
 #include "cds_ieee80211_common.h"
+#include <lim_mlo.h>
 #include "wlan_dlm_public_struct.h"
 #include "wlan_dlm_api.h"
 
@@ -122,6 +123,10 @@ lim_process_deauth_frame(struct mac_context *mac, uint8_t *pRxPacketInfo,
 		pe_debug("received Deauth frame for a MC address");
 		return;
 	}
+
+	if (LIM_IS_AP_ROLE(pe_session) && lim_mismatch_bssid_da(pHdr))
+		return;
+
 	if (!lim_validate_received_frame_a1_addr(mac,
 			pHdr->da, pe_session)) {
 		pe_err("rx frame doesn't have valid a1 address, drop it");
@@ -337,6 +342,7 @@ lim_process_deauth_frame(struct mac_context *mac, uint8_t *pRxPacketInfo,
 
 	lim_perform_deauth(mac, pe_session, reasonCode, pHdr->sa,
 			   frame_rssi);
+	lim_update_disconnect_vdev_id(mac, pe_session->vdev_id);
 
 	if (mac->mlme_cfg->gen.fatal_event_trigger &&
 	    (reasonCode != REASON_UNSPEC_FAILURE &&
@@ -507,13 +513,14 @@ void lim_perform_deauth(struct mac_context *mac_ctx, struct pe_session *pe_sessi
 							rc);
 			return;
 			} else {
-
-			/*
-			 * Delete all the TDLS peers only if Deauth
-			 * is received from the AP
-			 */
+				/*
+				 * Delete all the TDLS peers only if Deauth
+				 * is received from the AP
+				 */
 				if (IS_CURRENT_BSSID(mac_ctx, addr, pe_session))
-					lim_delete_tdls_peers(mac_ctx, pe_session);
+					lim_delete_tdls_peers(mac_ctx,
+							      pe_session,
+							      TDLS_PEER_DEL_REASON_NONE);
 #endif
 			/**
 			 * This could be Deauthentication frame from
@@ -547,7 +554,7 @@ void lim_perform_deauth(struct mac_context *mac_ctx, struct pe_session *pe_sessi
 				 pe_session->limMlmState, rc,
 				 QDF_MAC_ADDR_REF(addr));
 
-			/* this will be treated as SAE authenticaton failure
+			/* this will be treated as SAE authentication failure
 			 * and connect failure to userspace.
 			 */
 			lim_process_sae_auth_msg(mac_ctx, pe_session, addr);
@@ -647,6 +654,7 @@ void lim_perform_deauth(struct mac_context *mac_ctx, struct pe_session *pe_sessi
 	if (LIM_IS_STA_ROLE(pe_session))
 		wma_tx_abort(pe_session->smeSessionId);
 
+	lim_mlo_sta_notify_peer_disconn(pe_session);
 	lim_update_lost_link_info(mac_ctx, pe_session, frame_rssi);
 
 	/* / Deauthentication from peer MAC entity */

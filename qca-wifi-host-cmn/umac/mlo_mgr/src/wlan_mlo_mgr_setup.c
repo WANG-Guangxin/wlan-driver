@@ -1,4 +1,4 @@
-/* Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+/* Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,6 +18,7 @@
  */
 #include "wlan_mlo_mgr_cmn.h"
 #include "wlan_mlo_mgr_main.h"
+#include <target_type.h>
 #ifdef WLAN_MLO_MULTI_CHIP
 #include "wlan_lmac_if_def.h"
 #include <cdp_txrx_mlo.h>
@@ -123,7 +124,7 @@ bool mlo_is_ml_soc(struct wlan_objmgr_psoc *psoc, uint8_t grp_id)
 
 qdf_export_symbol(mlo_is_ml_soc);
 
-static void mlo_set_soc_list(uint8_t grp_id, struct wlan_objmgr_psoc *psoc)
+void mlo_set_soc_list(uint8_t grp_id, struct wlan_objmgr_psoc *psoc)
 {
 	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
 	uint8_t idx;
@@ -148,6 +149,8 @@ static void mlo_set_soc_list(uint8_t grp_id, struct wlan_objmgr_psoc *psoc)
 		}
 	}
 }
+
+qdf_export_symbol(mlo_set_soc_list);
 
 void mlo_get_soc_list(struct wlan_objmgr_psoc **soc_list,
 		      uint8_t grp_id,
@@ -383,7 +386,12 @@ bool mlo_vdevs_check_single_soc(struct wlan_objmgr_vdev **wlan_vdev_list,
 	uint8_t soc_id = WLAN_SOC_ID_NOT_INITIALIZED;
 
 	for (i = 0; i < vdev_count; i++) {
-		uint8_t vdev_soc_id = wlan_vdev_get_psoc_id(wlan_vdev_list[i]);
+		uint8_t vdev_soc_id;
+
+		if (!wlan_vdev_list[i])
+			continue;
+
+		vdev_soc_id = wlan_vdev_get_psoc_id(wlan_vdev_list[i]);
 
 		if (i == 0)
 			soc_id = vdev_soc_id;
@@ -477,6 +485,7 @@ void mlo_setup_init(uint8_t total_grp)
 	for (id = 0; id < total_grp; id++) {
 		mlo_ctx->setup_info[id].tsf_sync_enabled = true;
 		mlo_ctx->setup_info[id].wsi_stats_info_support = 0xff;
+		mlo_ctx->setup_info[id].wsi_remap_support = 0xff;
 
 		if (qdf_event_create(&mlo_ctx->setup_info[id].event) !=
 							QDF_STATUS_SUCCESS)
@@ -505,6 +514,95 @@ void mlo_setup_deinit(void)
 }
 
 qdf_export_symbol(mlo_setup_deinit);
+
+static uint32_t mlo_get_psoc_target_type(struct wlan_objmgr_psoc *psoc)
+{
+	struct wlan_lmac_if_tx_ops *tx_ops;
+	uint32_t target_type = 0;
+
+	if (!psoc)
+		return target_type;
+
+	tx_ops = wlan_psoc_get_lmac_if_txops(psoc);
+
+	if (tx_ops && tx_ops->mops.target_if_get_psoc_target_type) {
+		tx_ops->mops.target_if_get_psoc_target_type(
+				psoc,
+				&target_type);
+	}
+
+	return target_type;
+}
+
+QDF_STATUS mlo_set_3_link_forced_primary_umac(
+		struct wlan_mlo_peer_context *ml_peer,
+		struct wlan_objmgr_vdev *link_vdevs[],
+		uint8_t *psoc_id)
+{
+	struct wlan_objmgr_psoc *psoc;
+	uint32_t target_type;
+	bool found_qca5332 = false;
+	bool found_qcn6432 = false;
+	bool found_qcn9224 = false;
+	bool found_qca5424 = false;
+	uint8_t forced_psoc_id = 0;
+	int i = 0;
+
+	if (ml_peer->max_links != 3)
+		return QDF_STATUS_E_FAILURE;
+
+	for (i = 0; i < 3; i++) {
+		psoc = wlan_vdev_get_psoc(link_vdevs[i]);
+		if (!psoc) {
+			mlo_err("psoc is Null");
+			return QDF_STATUS_E_FAILURE;
+		}
+		target_type = mlo_get_psoc_target_type(psoc);
+
+		switch (target_type) {
+		case TARGET_TYPE_QCA5332:
+			found_qca5332 = true;
+			break;
+
+		case TARGET_TYPE_QCN9224:
+			found_qcn9224 = true;
+			break;
+
+		case TARGET_TYPE_QCN6432:
+			found_qcn6432 = true;
+			forced_psoc_id = wlan_psoc_get_id(psoc);
+			break;
+
+		case TARGET_TYPE_QCA5424:
+			found_qca5424 = true;
+			forced_psoc_id = wlan_psoc_get_id(psoc);
+			break;
+
+		default:
+			return QDF_STATUS_E_FAILURE;
+		}
+	}
+
+	/* In Miami-Pebble-Waikiki platforms (MWP and MPW)
+	 * Pebble will be chosen a primary-umac
+	 */
+	if (found_qca5332 && found_qcn6432 && found_qcn9224) {
+		*psoc_id = forced_psoc_id;
+		return QDF_STATUS_SUCCESS;
+	}
+
+	/* In Marina-Waikiki platform, Marina will be chosen as
+	 * the primary-umac
+	 */
+	if (found_qca5424) {
+		*psoc_id = forced_psoc_id;
+		return QDF_STATUS_SUCCESS;
+	}
+
+	return QDF_STATUS_E_FAILURE;
+}
+
+qdf_export_symbol(mlo_set_3_link_forced_primary_umac);
 
 void mlo_setup_update_chip_info(struct wlan_objmgr_psoc *psoc,
 				uint8_t chip_id, uint8_t *adj_chip_id)
@@ -641,7 +739,6 @@ void mlo_setup_update_soc_ready(struct wlan_objmgr_psoc *psoc, uint8_t grp_id)
 	setup_info->curr_soc_list[chip_idx] = psoc;
 	mlo_set_soc_list(grp_id, psoc);
 	setup_info->num_soc++;
-
 	mlo_debug("SoC updated to mld grp %d , chip idx %d num soc %d",
 		  grp_id, chip_idx, setup_info->num_soc);
 
@@ -677,6 +774,7 @@ void mlo_setup_link_ready(struct wlan_objmgr_pdev *pdev, uint8_t grp_id)
 	struct mlo_setup_info *setup_info;
 	uint8_t link_idx;
 	uint16_t link_id;
+	QDF_STATUS status = QDF_STATUS_E_INVAL;
 
 	if (!mlo_ctx)
 		return;
@@ -716,6 +814,16 @@ void mlo_setup_link_ready(struct wlan_objmgr_pdev *pdev, uint8_t grp_id)
 	setup_info->state[link_idx] = MLO_LINK_SETUP_INIT;
 	setup_info->num_links++;
 
+	if (wlan_mlo_is_wsi_remap_in_progress(grp_id)) {
+		status = mgmt_rx_reo_init_context(grp_id);
+		if (status != QDF_STATUS_SUCCESS) {
+			mgmt_txrx_err("Failed to initialize mgmt Rx reo module");
+			return;
+		}
+		status = wlan_mgmt_rx_reo_pdev_attach(pdev);
+		qdf_assert_always(QDF_IS_STATUS_SUCCESS(status));
+	}
+
 	link_id = wlan_mlo_get_pdev_hw_link_id(pdev);
 	if (link_id == INVALID_HW_LINK_ID) {
 		mlo_err("Invalid HW link id for the pdev");
@@ -733,15 +841,18 @@ void mlo_setup_link_ready(struct wlan_objmgr_pdev *pdev, uint8_t grp_id)
 	    setup_info->num_soc == setup_info->tot_socs) {
 		struct wlan_objmgr_psoc *psoc;
 		struct wlan_lmac_if_tx_ops *tx_ops;
-		QDF_STATUS status;
 
 		psoc = wlan_pdev_get_psoc(pdev);
 		tx_ops = wlan_psoc_get_lmac_if_txops(psoc);
 
-		status = wlan_mgmt_rx_reo_validate_mlo_link_info(psoc);
-		if (QDF_IS_STATUS_ERROR(status)) {
-			mlo_err("Failed to validate MLO HW link info");
-			qdf_assert_always(0);
+		/* For dynamic WSI remap validated REO post MLO SETUP */
+		if (!wlan_mlo_is_wsi_remap_in_progress(grp_id) &&
+		    !mlo_ctx->dynamic_wsi_bypassed) {
+			status = wlan_mgmt_rx_reo_validate_mlo_link_info(psoc);
+			if (QDF_IS_STATUS_ERROR(status)) {
+				mlo_err("Failed to validate MLO HW link info");
+				qdf_assert_always(0);
+			}
 		}
 
 		qdf_info("Trigger MLO Setup request");
@@ -798,12 +909,19 @@ void mlo_link_setup_complete(struct wlan_objmgr_pdev *pdev, uint8_t grp_id)
 
 		psoc = wlan_pdev_get_psoc(pdev);
 		tx_ops = wlan_psoc_get_lmac_if_txops(psoc);
+
 		mlo_debug("Trigger MLO ready");
 		if (tx_ops && tx_ops->mops.target_if_mlo_ready) {
 			tx_ops->mops.target_if_mlo_ready(
 					setup_info->pdev_list,
 					setup_info->num_links);
 		}
+
+		if (wlan_mlo_is_wsi_remap_in_progress(grp_id)) {
+			setup_info->wsi_remap_in_progress = false;
+			mlo_debug("Dynamic WSI remap MLO SETUP done!");
+		}
+
 	}
 }
 
@@ -908,7 +1026,8 @@ void mlo_setup_update_soc_down(struct wlan_objmgr_psoc *psoc, uint8_t grp_id)
 		return;
 	}
 
-	if (setup_info->curr_soc_list[chip_idx]) {
+	if (setup_info->curr_soc_list[chip_idx] &&
+	    !setup_info->wsi_remap_in_progress) {
 		soc = setup_info->curr_soc_list[chip_idx];
 		cdp_soc_mlo_soc_teardown(wlan_psoc_get_dp_handle(soc),
 					 setup_info->dp_handle, false);
@@ -918,6 +1037,14 @@ void mlo_setup_update_soc_down(struct wlan_objmgr_psoc *psoc, uint8_t grp_id)
 
 		if (!setup_info->num_soc)
 			mlo_dp_ctxt_detach(soc, grp_id, setup_info->dp_handle);
+	} else {
+		soc = setup_info->curr_soc_list[chip_idx];
+		if (soc->wsi_remap_remove) {
+			cdp_soc_mlo_soc_teardown(wlan_psoc_get_dp_handle(soc),
+						 setup_info->dp_handle, false);
+		}
+		setup_info->curr_soc_list[chip_idx] = NULL;
+		setup_info->num_soc--;
 	}
 
 	mlo_debug("Soc down, mlo group %d num soc %d num links %d",
@@ -1002,6 +1129,7 @@ static void mlo_send_teardown_req(struct wlan_objmgr_psoc *psoc,
 	struct wlan_lmac_if_tx_ops *tx_ops;
 	struct wlan_objmgr_pdev *temp_pdev;
 	struct mlo_setup_info *setup_info;
+	struct wlan_objmgr_psoc *temp_psoc;
 	uint8_t link_idx;
 	uint8_t tot_links;
 	bool umac_reset = 0;
@@ -1026,15 +1154,33 @@ static void mlo_send_teardown_req(struct wlan_objmgr_psoc *psoc,
 	tot_links = setup_info->tot_links;
 
 	if (reason == WMI_HOST_MLO_TEARDOWN_REASON_MODE1_SSR ||
-	    reason == WMI_HOST_MLO_TEARDOWN_REASON_STANDBY) {
+	    reason == WMI_HOST_MLO_TEARDOWN_REASON_STANDBY ||
+	    reason == WMI_HOST_MLO_TEARDOWN_REASON_DYNAMIC_WSI_REMAP) {
 		for (link_idx = 0; link_idx < tot_links; link_idx++) {
 			umac_reset = 0;
 			temp_pdev = setup_info->pdev_list[link_idx];
+
 			if (!temp_pdev)
 				continue;
 
+			if (reason == WMI_HOST_MLO_TEARDOWN_REASON_DYNAMIC_WSI_REMAP) {
+				if (wlan_mlo_is_wsi_remap_in_progress(grp_id)) {
+					if (QDF_IS_STATUS_ERROR(mgmt_rx_reo_deinit_context(grp_id))) {
+						mgmt_txrx_err("Failed to de-initialize mgmt Rx reo module");
+						return;
+					}
+				}
+
+				wlan_mgmt_rx_reo_pdev_detach(temp_pdev);
+			}
+
 			if (!setup_info->trigger_umac_reset) {
-				if (psoc == wlan_pdev_get_psoc(temp_pdev)) {
+				/*
+				 * Set umac_reset for link_idx psoc that matches the current soc
+				 * or first chip that is going for teardown in WSI bypass.
+				 */
+				if (psoc == wlan_pdev_get_psoc(temp_pdev) ||
+				    wlan_mlo_is_wsi_remap_in_progress(grp_id)) {
 					umac_reset = 1;
 					setup_info->trigger_umac_reset = 1;
 				}
@@ -1047,6 +1193,12 @@ static void mlo_send_teardown_req(struct wlan_objmgr_psoc *psoc,
 				wlan_psoc_get_id(wlan_pdev_get_psoc(temp_pdev)),
 				link_idx, umac_reset,
 				temp_pdev->standby_active);
+				temp_psoc = wlan_pdev_get_psoc(temp_pdev);
+				mlo_info(
+				"Dynamic WSI Remap: Remap add %d : Remap Remove %d: Remap in progress %d ",
+				temp_psoc->wsi_remap_add,
+				temp_psoc->wsi_remap_remove,
+				setup_info->wsi_remap_in_progress);
 				tx_ops->mops.target_if_mlo_teardown_req(
 						setup_info->pdev_list[link_idx],
 						reason, umac_reset,
@@ -1180,7 +1332,7 @@ uint8_t mlo_get_wsi_stats_info_support(struct wlan_objmgr_psoc *psoc)
 
 	ml_grp_id = wlan_mlo_get_psoc_group_id(psoc);
 	if ((ml_grp_id ==  WLAN_MLO_GROUP_INVALID) ||
-	    (ml_grp_id < 0)) {
+	    (ml_grp_id < 0) || (ml_grp_id > mlo_ctx->total_grp)) {
 		mlo_err("Invalid ML Grp ID %d", ml_grp_id);
 		return 0;
 	}
@@ -1200,7 +1352,7 @@ void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
 	struct mlo_setup_info *mlo_setup;
 
 	ml_grp_id = wlan_mlo_get_psoc_group_id(psoc);
-	if (ml_grp_id < 0) {
+	if (ml_grp_id >= WLAN_MAX_MLO_GROUPS) {
 		mlo_err("Invalid ML Grp ID %d", ml_grp_id);
 		return;
 	}
@@ -1210,6 +1362,28 @@ void mlo_update_tsf_sync_support(struct wlan_objmgr_psoc *psoc,
 }
 
 qdf_export_symbol(mlo_update_tsf_sync_support);
+
+void mlo_update_wsi_remap_support(struct wlan_objmgr_psoc *psoc,
+				  bool wsi_remap_support)
+{
+	uint8_t ml_grp_id;
+	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
+	struct mlo_setup_info *mlo_setup;
+
+	ml_grp_id = wlan_mlo_get_psoc_group_id(psoc);
+	if (ml_grp_id >= WLAN_MAX_MLO_GROUPS) {
+		mlo_err("Invalid ML Grp ID %d", ml_grp_id);
+		return;
+	}
+
+	mlo_setup = &mlo_ctx->setup_info[ml_grp_id];
+	if (mlo_setup->wsi_remap_support == 0xFF)
+		mlo_setup->wsi_remap_support = wsi_remap_support;
+	else
+		mlo_setup->wsi_remap_support &= wsi_remap_support;
+}
+
+qdf_export_symbol(mlo_update_wsi_remap_support);
 
 bool mlo_pdev_derive_bridge_link_pdevs(struct wlan_objmgr_pdev *pdev,
 				       struct wlan_objmgr_pdev **pdev_list)

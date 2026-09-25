@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -50,6 +50,19 @@
 		(((_val) << _wrd ## _ ## _field ## _LSB) &	\
 		_wrd ## _ ## _field ## _MASK))
 
+#ifdef DP_RX_BUFFER_OPTIMIZATION
+/*
+ * BUFFER_SIZE = 120 RX TLV bytes + 2 bytes L3_hdr_padding +
+ *               1536 data bytes + 6 spare bytes
+ */
+#ifndef RX_DATA_BUFFER_SIZE
+#define RX_DATA_BUFFER_SIZE	1664
+#endif
+
+#ifndef RX_MONITOR_BUFFER_SIZE
+#define RX_MONITOR_BUFFER_SIZE  1664
+#endif
+#else /* DP_RX_BUFFER_OPTIMIZATION */
 /* BUFFER_SIZE = 1536 data bytes + 384 RX TLV bytes + some spare bytes */
 #ifndef RX_DATA_BUFFER_SIZE
 #define RX_DATA_BUFFER_SIZE     2048
@@ -58,6 +71,7 @@
 #ifndef RX_MONITOR_BUFFER_SIZE
 #define RX_MONITOR_BUFFER_SIZE  2048
 #endif
+#endif /* DP_RX_BUFFER_OPTIMIZATION */
 
 #define RXDMA_OPTIMIZATION
 
@@ -207,6 +221,20 @@ struct hal_proto_params {
 enum hal_reo_error_status {
 	HAL_REO_ERROR_DETECTED = 0,
 	HAL_REO_ROUTING_INSTRUCTION = 1,
+};
+
+/**
+ * enum hal_rxdma_error_status - Enum which encapsulates "rxdma_push_reason"
+ *
+ * @HAL_RXDMA_ERROR_DETECTED : RXDMA pushed with an error detected
+ * @HAL_RXDMA_ROUTING_INSTRUCTION: RXDMA pushed without error, just per
+ *                                 routing instruction.
+ * @HAL_RXDMA_RX_FLUSH: RXDMA pushed with flush request
+ */
+enum hal_rxdma_error_status {
+	HAL_RXDMA_ERROR_DETECTED = 0,
+	HAL_RXDMA_ROUTING_INSTRUCTION = 1,
+	HAL_RXDMA_RX_FLUSH = 2,
 };
 
 /**
@@ -407,6 +435,17 @@ enum hal_rx_mpdu_desc_flags {
 
 /* TODO: Convert the following structure fields accesseses to offsets */
 
+#ifdef CONFIG_BORON
+#define HAL_RX_REO_BUFFER_ADDR_39_32_GET(reo_desc)	\
+	(HAL_RX_BUFFER_ADDR_39_32_GET(&			\
+	(((struct reo_destination_ring *)		\
+		reo_desc)->buf_or_link_desc_virt_addr_or_addr_info)))
+
+#define HAL_RX_REO_BUFFER_ADDR_31_0_GET(reo_desc)	\
+	(HAL_RX_BUFFER_ADDR_31_0_GET(&			\
+	(((struct reo_destination_ring *)		\
+		reo_desc)->buf_or_link_desc_virt_addr_or_addr_info)))
+#else
 #define HAL_RX_REO_BUFFER_ADDR_39_32_GET(reo_desc)	\
 	(HAL_RX_BUFFER_ADDR_39_32_GET(&			\
 	(((struct reo_destination_ring *)		\
@@ -416,6 +455,7 @@ enum hal_rx_mpdu_desc_flags {
 	(HAL_RX_BUFFER_ADDR_31_0_GET(&			\
 	(((struct reo_destination_ring *)		\
 		reo_desc)->buf_or_link_desc_addr_info)))
+#endif
 
 #define HAL_RX_REO_BUF_COOKIE_INVALID_RESET(reo_desc)	\
 		(HAL_RX_BUF_COOKIE_INVALID_RESET(&		\
@@ -522,7 +562,11 @@ hal_rx_mpdu_desc_info_get(hal_soc_handle_t hal_soc_hdl, void *desc_addr,
 						       mpdu_desc_info);
 }
 
+#ifdef CONFIG_BORON
+#define HAL_RX_NUM_MSDU_DESC 15
+#else
 #define HAL_RX_NUM_MSDU_DESC 6
+#endif
 #define HAL_RX_MAX_SAVED_RING_DESC 16
 
 /* TODO: rework the structure */
@@ -834,6 +878,27 @@ hal_rx_print_pn(hal_soc_handle_t hal_soc_hdl, uint8_t *buf)
 	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
 
 	hal_soc->ops->hal_rx_print_pn(buf);
+}
+
+/**
+ * hal_rx_msdu_end_l3_hdr_padding_set() - API to set the
+ * l3_header padding from rx_msdu_end TLV
+ * @hal_soc_hdl: hal_soc handle
+ * @buf: pointer to the start of RX PKT TLV headers
+ * @l3_hdr_pad: l3_hdr_pad value to be set
+ *
+ * Return: void
+ */
+static inline void
+hal_rx_msdu_end_l3_hdr_padding_set(hal_soc_handle_t hal_soc_hdl,
+				   uint8_t *buf,
+				   uint32_t l3_hdr_pad)
+{
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
+
+	if (hal_soc->ops->hal_rx_msdu_end_l3_hdr_padding_set)
+		hal_soc->ops->hal_rx_msdu_end_l3_hdr_padding_set(buf,
+								 l3_hdr_pad);
 }
 
 /**
@@ -3264,4 +3329,29 @@ hal_rx_get_phy_ppdu_id_size(hal_soc_handle_t hal_soc_hdl)
 	return hal_soc->ops->hal_rx_get_phy_ppdu_id_size();
 }
 
+#ifdef DRIVER_PASSTHRU_MODE
+static inline
+uint32_t hal_rx_tlv_get_user_rssi(hal_soc_handle_t hal_soc_hdl,
+				  uint8_t *rx_pkt_tlv)
+{
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
+
+	if (hal_soc->ops->hal_rx_tlv_get_rssi)
+		return hal_soc->ops->hal_rx_tlv_get_rssi(rx_pkt_tlv);
+
+	return 0;
+}
+
+static inline
+uint32_t hal_rx_tlv_get_ppdu_start_ts(hal_soc_handle_t hal_soc_hdl,
+				      uint8_t *rx_tlv_hdr)
+{
+	struct hal_soc *hal_soc = (struct hal_soc *)hal_soc_hdl;
+
+	if (hal_soc->ops->hal_rx_tlv_get_ppdu_start_ts)
+		return hal_soc->ops->hal_rx_tlv_get_ppdu_start_ts(rx_tlv_hdr);
+
+	return 0;
+}
+#endif
 #endif /* _HAL_RX_H */

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -30,6 +30,7 @@
 #include "wlan_reg_ucfg_api.h"
 #include <host_diag_core_event.h>
 #include "wlan_policy_mgr_api.h"
+#include "wlan_mlme_api.h"
 
 static uint8_t calculate_hash_key(const uint8_t *macaddr)
 {
@@ -108,11 +109,6 @@ tdls_find_all_peer(struct tdls_soc_priv_obj *soc_obj, const uint8_t *macaddr)
 {
 	struct tdls_search_peer_param tdls_search_param;
 	struct wlan_objmgr_psoc *psoc;
-
-	if (!soc_obj) {
-		tdls_err("tdls soc object is NULL");
-		return NULL;
-	}
 
 	psoc = soc_obj->soc;
 	if (!psoc) {
@@ -198,15 +194,19 @@ qdf_freq_t tdls_get_offchan_freq(struct wlan_objmgr_vdev *vdev,
 uint32_t tdls_get_offchan_bw(struct tdls_soc_priv_obj *soc_obj,
 			     qdf_freq_t off_chan_freq)
 {
-	uint32_t pre_off_chan_bw;
+	uint32_t pre_off_chan_bw = soc_obj->tdls_configs.tdls_pre_off_chan_bw;
+	bool is_160_allowed = true;
+	enum phy_ch_width fw_max_bw = wlan_mlme_get_max_bw();
 
-	if (wlan_reg_is_5ghz_ch_freq(off_chan_freq) &&
+	if (wlan_reg_is_5ghz_ch_freq(off_chan_freq) ||
+	    fw_max_bw < CH_WIDTH_160MHZ)
+		is_160_allowed = false;
+
+	if (!is_160_allowed &&
 	    CHECK_BIT(soc_obj->tdls_configs.tdls_pre_off_chan_bw,
 		      BW_160_OFFSET_BIT))
 		pre_off_chan_bw = soc_obj->tdls_configs.tdls_pre_off_chan_bw &
 						~(1 << BW_160_OFFSET_BIT);
-	else
-		pre_off_chan_bw = soc_obj->tdls_configs.tdls_pre_off_chan_bw;
 
 	return pre_off_chan_bw;
 }
@@ -255,17 +255,8 @@ tdls_remove_first_idle_peer(qdf_list_t *head) {
 	return QDF_STATUS_E_INVAL;
 }
 
-/**
- * tdls_add_peer() - add TDLS peer in TDLS vdev object
- * @vdev_obj: TDLS vdev object
- * @macaddr: MAC address of peer
- *
- * Allocate memory for the new peer, and add it to hash table.
- *
- * Return: new added TDLS peer, NULL if failed.
- */
-static struct tdls_peer *tdls_add_peer(struct tdls_vdev_priv_obj *vdev_obj,
-				       const uint8_t *macaddr)
+struct tdls_peer *tdls_add_peer(struct tdls_vdev_priv_obj *vdev_obj,
+				const uint8_t *macaddr)
 {
 	struct tdls_peer *peer;
 	struct tdls_soc_priv_obj *soc_obj;
@@ -713,7 +704,7 @@ void tdls_extract_peer_state_param(struct tdls_peer_update_state *peer_param,
 
 		ch_state = wlan_reg_get_channel_state_for_pwrmode(
 							pdev, ch_freq,
-							REG_CURRENT_PWR_MODE);
+							REG_CLI_DEF_VLP);
 
 		if (CHANNEL_STATE_INVALID != ch_state &&
 		    !wlan_reg_is_dfs_for_freq(pdev, ch_freq) &&
@@ -724,10 +715,18 @@ void tdls_extract_peer_state_param(struct tdls_peer_update_state *peer_param,
 				wlan_reg_get_channel_reg_power_for_freq(pdev,
 								       ch_freq);
 			} else {
-				tx_power =
-				tdls_get_6g_pwr_for_power_type(vdev_obj->vdev,
-							       ch_freq,
-							       REG_CLI_DEF_VLP);
+				if (wlan_reg_is_indoor_ap_detected(pdev))
+					tx_power =
+					tdls_get_6g_pwr_for_power_type(
+							vdev_obj->vdev,
+							ch_freq,
+							REG_CLI_DEF_C2C);
+				else
+					tx_power =
+					tdls_get_6g_pwr_for_power_type(
+							vdev_obj->vdev,
+							ch_freq,
+							REG_CLI_DEF_VLP);
 			}
 			peer_param->peer_cap.peer_chan[num].pwr = tx_power;
 			peer_param->peer_cap.peer_chan[num].dfs_set = false;
@@ -741,6 +740,21 @@ void tdls_extract_peer_state_param(struct tdls_peer_update_state *peer_param,
 	for (i = 0; i < peer->supported_oper_classes_len; i++)
 		peer_param->peer_cap.peer_oper_class[i] =
 			peer->supported_oper_classes[i];
+}
+
+static inline char *
+tdls_link_status_str(enum tdls_link_state link_status)
+{
+	switch (link_status) {
+	CASE_RETURN_STRING(TDLS_LINK_IDLE);
+	CASE_RETURN_STRING(TDLS_LINK_DISCOVERING);
+	CASE_RETURN_STRING(TDLS_LINK_DISCOVERED);
+	CASE_RETURN_STRING(TDLS_LINK_CONNECTING);
+	CASE_RETURN_STRING(TDLS_LINK_CONNECTED);
+	CASE_RETURN_STRING(TDLS_LINK_TEARING);
+	default:
+		return "UNKNOWN";
+	}
 }
 
 #ifdef TDLS_WOW_ENABLED
@@ -761,7 +775,7 @@ static void tdls_prevent_suspend(struct tdls_soc_priv_obj *tdls_soc)
 			      WIFI_POWER_EVENT_WAKELOCK_TDLS);
 	qdf_runtime_pm_prevent_suspend(&tdls_soc->runtime_lock);
 	tdls_soc->is_prevent_suspend = true;
-	tdls_debug("Acquire WIFI_POWER_EVENT_WAKELOCK_TDLS");
+	tdls_notice_rl("Acquire WIFI_POWER_EVENT_WAKELOCK_TDLS");
 }
 
 /**
@@ -772,7 +786,7 @@ static void tdls_prevent_suspend(struct tdls_soc_priv_obj *tdls_soc)
  *
  * Return None
  */
-static void tdls_allow_suspend(struct tdls_soc_priv_obj *tdls_soc)
+void tdls_allow_suspend(struct tdls_soc_priv_obj *tdls_soc)
 {
 	if (!tdls_soc->is_prevent_suspend)
 		return;
@@ -781,7 +795,7 @@ static void tdls_allow_suspend(struct tdls_soc_priv_obj *tdls_soc)
 			      WIFI_POWER_EVENT_WAKELOCK_TDLS);
 	qdf_runtime_pm_allow_suspend(&tdls_soc->runtime_lock);
 	tdls_soc->is_prevent_suspend = false;
-	tdls_debug("Release WIFI_POWER_EVENT_WAKELOCK_TDLS");
+	tdls_notice_rl("Release WIFI_POWER_EVENT_WAKELOCK_TDLS");
 }
 
 /**
@@ -806,6 +820,11 @@ static void tdls_update_pmo_status(struct tdls_vdev_priv_obj *tdls_vdev,
 
 	if (tdls_soc->is_drv_supported)
 		return;
+
+	tdls_debug("vdev:%d old_status:%s new_status:%s",
+		   wlan_vdev_get_id(tdls_vdev->vdev),
+		   tdls_link_status_str(old_status),
+		   tdls_link_status_str(new_status));
 
 	if ((old_status < TDLS_LINK_CONNECTING) &&
 	    (new_status == TDLS_LINK_CONNECTING))
@@ -866,21 +885,6 @@ void tdls_set_link_status(struct tdls_vdev_priv_obj *vdev_obj,
 		tdls_get_wifi_hal_state(peer, &state, &res);
 		peer->state_change_notification(mac, op_class, channel,
 						state, res, soc_obj->soc);
-	}
-}
-
-static inline char *
-tdls_link_status_str(enum tdls_link_state link_status)
-{
-	switch (link_status) {
-	CASE_RETURN_STRING(TDLS_LINK_IDLE);
-	CASE_RETURN_STRING(TDLS_LINK_DISCOVERING);
-	CASE_RETURN_STRING(TDLS_LINK_DISCOVERED);
-	CASE_RETURN_STRING(TDLS_LINK_CONNECTING);
-	CASE_RETURN_STRING(TDLS_LINK_CONNECTED);
-	CASE_RETURN_STRING(TDLS_LINK_TEARING);
-	default:
-		return "UNKNOWN";
 	}
 }
 

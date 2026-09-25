@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2017-2018 The Linux Foundation. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +35,9 @@ struct p2p_lo_event;
 struct mgmt_rx_event_params;
 enum mgmt_frame_type;
 struct p2p_set_mac_filter_evt;
+#if defined(FEATURE_WLAN_SUPPORT_USD) || defined(FEATURE_WLAN_SUPPORT_P2P_R2)
+struct p2p_usd_attr_params;
+#endif /* FEATURE_WLAN_SUPPORT_USD || FEATURE_WLAN_SUPPORT_P2P_R2 */
 
 #ifdef FEATURE_P2P_LISTEN_OFFLOAD
 
@@ -83,6 +87,26 @@ static inline QDF_STATUS tgt_p2p_unregister_lo_ev_handler(
 	return QDF_STATUS_SUCCESS;
 }
 #endif
+
+/**
+ * tgt_p2p_register_ap_assist_bmiss_ev_handler() - Register AP assist DFS group
+ * bmiss event handler
+ * @psoc: PSOC object manager
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_p2p_register_ap_assist_bmiss_ev_handler(struct wlan_objmgr_psoc *psoc);
+
+/**
+ * tgt_p2p_unregister_ap_assist_bmiss_ev_handler() - Unregister AP assist DFS
+ * group bmiss event handler
+ * @psoc: PSOC object manager
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_p2p_unregister_ap_assist_bmiss_ev_handler(struct wlan_objmgr_psoc *psoc);
 
 /**
  * tgt_p2p_register_macaddr_rx_filter_evt_handler() - register add mac rx
@@ -205,5 +229,72 @@ QDF_STATUS
 tgt_p2p_add_mac_addr_status_event_cb(
 	struct wlan_objmgr_psoc *psoc,
 	struct p2p_set_mac_filter_evt *event_info);
+
+#if defined(FEATURE_WLAN_SUPPORT_USD) || defined(FEATURE_WLAN_SUPPORT_P2P_R2)
+/**
+ * tgt_p2p_send_usd_params() - Sent USD parameters to target
+ * @psoc: pointer to PSOC object
+ * @param: pointer to USD attributes parameters structure
+ *
+ * Return: QDF status
+ */
+QDF_STATUS tgt_p2p_send_usd_params(struct wlan_objmgr_psoc *psoc,
+				   struct p2p_usd_attr_params *param);
+
+/**
+ * tgt_p2p_is_fw_support_usd() - wrapper API for function
+ * target_if_p2p_is_fw_support_usd()
+ * @psoc: pointer to PSOC object
+ *
+ * Return: true if USD is supported by FW else false
+ */
+bool tgt_p2p_is_fw_support_usd(struct wlan_objmgr_psoc *psoc);
+#endif /* FEATURE_WLAN_SUPPORT_USD  || FEATURE_WLAN_SUPPORT_P2P_R2*/
+
+#ifdef FEATURE_WLAN_SUPPORT_P2P_R2
+/**
+ * tgt_p2p_is_fw_support_wfd_r2() - wrapper API for function
+ * target_if_p2p_is_fw_support_wfd_r2()
+ * @psoc: pointer to PSOC object
+ *
+ * Return: true if WFD R2 is supported by FW else false
+ */
+bool tgt_p2p_is_fw_support_wfd_r2(struct wlan_objmgr_psoc *psoc);
+#endif /* FEATURE_WLAN_SUPPORT_P2P_R2 */
+
+#ifdef FEATURE_WLAN_SUPPORT_PCC
+/**
+ * tgt_p2p_is_fw_support_pcc() - wrapper API for function
+ * target_if_p2p_is_fw_support_pcc()
+ * @psoc: pointer to PSOC object
+ *
+ * Return: true if PCC is supported by FW else false
+ */
+bool tgt_p2p_is_fw_support_pcc(struct wlan_objmgr_psoc *psoc);
+#endif /* FEATURE_WLAN_SUPPORT_PCC */
+
+/**
+ * tgt_p2p_ap_assist_dfs_group_bmiss_ev_handler() - Function to handle the
+ * bmiss indication from FW.
+ * @psoc: PSOC object manager
+ * @vdev_id: VDEV ID of p2p entity on which bmiss event is received
+ *
+ * Schedules task to scheduler thread for the bmiss indication received for
+ * the AP assisted DFS group.
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+tgt_p2p_ap_assist_dfs_group_bmiss_ev_handler(struct wlan_objmgr_psoc *psoc,
+					     uint8_t vdev_id);
+
+/**
+ * tgt_p2p_is_fw_cancel_one_shot_noa_supported() - Check if FW supports
+ * cancel one shot NoA
+ * @psoc: pointer to psoc object
+ *
+ * Return: true if FW supports cancel one shot NoA, false otherwise
+ */
+bool tgt_p2p_is_fw_cancel_one_shot_noa_supported(struct wlan_objmgr_psoc *psoc);
 
 #endif /* _WLAN_P2P_TGT_API_H_ */

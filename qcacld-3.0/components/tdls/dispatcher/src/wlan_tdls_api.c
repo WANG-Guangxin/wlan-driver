@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -226,7 +226,10 @@ void wlan_tdls_notify_channel_switch_complete(struct wlan_objmgr_psoc *psoc,
 								true);
 		else
 			tdls_process_enable_for_vdev(tdls_vdev);
-		tdls_set_tdls_offchannelmode(tdls_vdev, ENABLE_CHANSWITCH);
+
+		if (tdls_check_if_offchannel_allowed(tdls_vdev))
+			tdls_set_tdls_offchannelmode(tdls_vdev,
+						     ENABLE_CHANSWITCH);
 	}
 
 exit:
@@ -573,11 +576,34 @@ void wlan_tdls_increment_discovery_attempts(struct wlan_objmgr_psoc *psoc,
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_TDLS_NB_ID);
 }
 
-static
 struct tdls_peer *wlan_tdls_find_peer(struct tdls_vdev_priv_obj *vdev_obj,
 				      const uint8_t *macaddr)
 {
 	return tdls_find_peer(vdev_obj, macaddr);
+}
+
+#define WLAN_MLO_SINGLE_LINK 1
+QDF_STATUS
+wlan_tdls_teardown_links_for_non_dbs(struct wlan_objmgr_psoc *psoc,
+				     uint8_t vdev_id)
+{
+	struct wlan_objmgr_vdev *vdev;
+	enum wlan_tdls_peer_delete_reason reason =
+			TDLS_PEER_DEL_REASON_LINK_STATE_SWITCH;
+
+	if (policy_mgr_is_hw_dbs_capable(psoc))
+		return QDF_STATUS_SUCCESS;
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
+						    WLAN_TDLS_NB_ID);
+	if (!vdev)
+		return QDF_STATUS_E_FAILURE;
+
+	wlan_tdls_delete_all_peers(vdev, reason);
+
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_TDLS_NB_ID);
+
+	return QDF_STATUS_SUCCESS;
 }
 
 bool wlan_tdls_is_addba_request_allowed(struct wlan_objmgr_vdev *vdev,
@@ -605,7 +631,8 @@ bool wlan_tdls_is_addba_request_allowed(struct wlan_objmgr_vdev *vdev,
 	return false;
 }
 
-void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev)
+void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev,
+				enum wlan_tdls_peer_delete_reason reason)
 {
 	struct wlan_objmgr_psoc *psoc;
 	struct tdls_soc_priv_obj *soc_obj;
@@ -622,11 +649,92 @@ void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev)
 	}
 
 	if (soc_obj->tdls_cb.delete_all_tdls_peers)
-		soc_obj->tdls_cb.delete_all_tdls_peers(vdev);
+		soc_obj->tdls_cb.delete_all_tdls_peers(vdev, reason);
 }
 
 QDF_STATUS wlan_tdls_update_peer_kickout_count(struct wlan_objmgr_vdev *vdev,
 					       uint8_t *macaddr)
 {
 	return tdls_update_peer_kickout_count(vdev, macaddr);
+}
+
+static bool
+tdls_peer_key_install_allowed(struct tdls_vdev_priv_obj *vdev_obj,
+			      struct qdf_mac_addr *mac_addr)
+{
+	struct tdls_peer *curr_peer;
+
+	if (!vdev_obj)
+		return false;
+
+	curr_peer = wlan_tdls_find_peer(vdev_obj, mac_addr->bytes);
+	if (!curr_peer)
+		return false;
+
+	return curr_peer->valid_entry &&
+	       (curr_peer->link_status == TDLS_LINK_CONNECTING ||
+		curr_peer->link_status == TDLS_LINK_CONNECTED);
+}
+
+#ifdef WLAN_FEATURE_11BE_MLO
+static bool
+tdls_is_key_install_allowed_ml_vdev(struct wlan_objmgr_vdev *vdev,
+				    struct qdf_mac_addr *mac_addr)
+{
+	struct wlan_objmgr_vdev *vdev_list[WLAN_UMAC_MLO_MAX_VDEVS] = {NULL};
+	uint16_t num_links = 0, i;
+	bool allowed = false;
+
+	mlo_get_ml_vdev_list(vdev, &num_links, vdev_list);
+
+	for (i = 0; i < num_links; i++) {
+		if (vdev_list[i] != vdev &&
+		    tdls_peer_key_install_allowed(
+				wlan_vdev_get_tdls_vdev_obj(vdev_list[i]),
+				mac_addr))
+			allowed = true;
+		mlo_release_vdev_ref(vdev_list[i]);
+	}
+
+	return allowed;
+}
+#else
+static inline bool
+tdls_is_key_install_allowed_ml_vdev(struct wlan_objmgr_vdev *vdev,
+				    struct qdf_mac_addr *mac_addr)
+{
+	return false;
+}
+#endif
+
+bool wlan_tdls_is_key_install_allowed(struct wlan_objmgr_vdev *vdev,
+				      struct qdf_mac_addr *mac_addr)
+{
+	if (tdls_peer_key_install_allowed(wlan_vdev_get_tdls_vdev_obj(vdev),
+					  mac_addr))
+		return true;
+
+	return tdls_is_key_install_allowed_ml_vdev(vdev, mac_addr);
+}
+
+void wlan_tdls_recompute_offchannel_mode(struct wlan_objmgr_psoc *psoc,
+					 struct wlan_objmgr_vdev *vdev)
+{
+	struct tdls_soc_priv_obj *soc_obj;
+
+	soc_obj = wlan_objmgr_psoc_get_comp_private_obj(psoc,
+							WLAN_UMAC_COMP_TDLS);
+	if (!soc_obj) {
+		tdls_err("Failed to get tdls psoc component");
+		return;
+	}
+
+	/*
+	 * Offchannel is allowed only when TDLS is connected with one peer.
+	 * If more than one peer is connected then Offchannel is disabled by
+	 * WMI_TDLS_SET_OFFCHAN_MODE_CMDID with DISABLE_CHANSWITCH.
+	 * Hence, re-enable offchannel when only one connected peer is left.
+	 */
+	if (soc_obj->connected_peer_count == 1)
+		tdls_set_tdls_offchannelmode(vdev, ENABLE_CHANSWITCH);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -64,6 +64,16 @@ QDF_STATUS
 wlan_twt_cfg_get_requestor(struct wlan_objmgr_psoc *psoc, bool *val);
 
 /**
+ * wlan_twt_cfg_set_requestor() - set cfg requestor
+ * @psoc: Pointer to global psoc
+ * @val: value to be set
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_twt_cfg_set_requestor(struct wlan_objmgr_psoc *psoc, bool val);
+
+/**
  * wlan_twt_cfg_get_responder() - get cfg responder
  * @psoc: Pointer to global psoc
  * @val: pointer to output variable
@@ -71,7 +81,16 @@ wlan_twt_cfg_get_requestor(struct wlan_objmgr_psoc *psoc, bool *val);
  * Return: QDF_STATUS
  */
 QDF_STATUS
-wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, bool *val);
+wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, uint8_t *val);
+
+/**
+ * wlan_twt_cfg_reset_responder() - Reset cfg responder
+ * @psoc: psoc
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_twt_cfg_reset_responder(struct wlan_objmgr_psoc *psoc);
 
 /**
  * wlan_twt_cfg_set_responder() - set cfg responder
@@ -81,7 +100,19 @@ wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, bool *val);
  * Return: QDF_STATUS
  */
 QDF_STATUS
-wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, bool val);
+wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, uint8_t val);
+
+/**
+ * wlan_twt_get_responder_support_for_ht_vht_mode() - Get twt responder
+ * support for ht/vht mode
+ * @psoc: Pointer to global psoc
+ * @val: value to be set
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_twt_get_responder_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val);
 
 /**
  * wlan_twt_cfg_is_twt_enabled() - API to check if TWT is enabled
@@ -134,24 +165,17 @@ QDF_STATUS
 wlan_twt_cfg_set_requestor_flag(struct wlan_objmgr_psoc *psoc, bool val);
 
 /**
- * wlan_twt_cfg_get_responder_flag() - get responder flag
+ * wlan_twt_cfg_get_responder_flag() - This API intersects TWT responder flag
+ * from VDEV and MAC
  * @psoc: Pointer to global psoc
+ * @vdev_id: VDEV ID
  * @val: pointer to output variable
  *
  * Return: QDF_STATUS
  */
 QDF_STATUS
-wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, bool *val);
-
-/**
- * wlan_twt_cfg_set_responder_flag() - set responder flag
- * @psoc: Pointer to global psoc
- * @val: value to be set
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS
-wlan_twt_cfg_set_responder_flag(struct wlan_objmgr_psoc *psoc, bool val);
+wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+				bool *val);
 
 /**
  * wlan_twt_cfg_get_flex_sched() - get flex scheduling
@@ -204,6 +228,17 @@ QDF_STATUS
 wlan_twt_cfg_get_rtwt_requestor(struct wlan_objmgr_psoc *psoc, bool *val);
 
 /**
+ * wlan_twt_cfg_get_twt_disabled_on_scan() - get twt_disabled_on_scan value
+ * @psoc: Pointer to global psoc
+ * @val: pointer to output variable
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_twt_cfg_get_twt_disabled_on_scan(struct wlan_objmgr_psoc *psoc,
+				      bool *val);
+
+/**
  * wlan_twt_cfg_get_rtwt_responder() - get rtwt responder
  * @psoc: Pointer to global psoc
  * @val: pointer to output variable
@@ -214,15 +249,16 @@ QDF_STATUS
 wlan_twt_cfg_get_rtwt_responder(struct wlan_objmgr_psoc *psoc, bool *val);
 
 /**
- * wlan_twt_cfg_get_support_in_11n_mode() - Get TWT support in 11n mode
+ * wlan_twt_get_requestor_support_for_ht_vht_mode() - Get TWT requestor support
+ * for ht/vht mode
  * @psoc: Pointer to global psoc
  * @val: pointer to output variable
  *
  * Return: QDF_STATUS
  */
 QDF_STATUS
-wlan_twt_cfg_get_support_in_11n_mode(struct wlan_objmgr_psoc *psoc,
-				     bool *val);
+wlan_twt_get_requestor_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val);
 /**
  * wlan_twt_get_restricted_support() - Get rTWT support
  * @psoc: Pointer to global psoc
@@ -265,13 +301,19 @@ wlan_twt_cfg_get_requestor(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 static inline QDF_STATUS
-wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, bool *val)
+wlan_twt_cfg_get_responder(struct wlan_objmgr_psoc *psoc, uint8_t *val)
 {
 	return QDF_STATUS_SUCCESS;
 }
 
 static inline QDF_STATUS
-wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, bool val)
+wlan_twt_cfg_reset_responder(struct wlan_objmgr_psoc *psoc)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+wlan_twt_cfg_set_responder(struct wlan_objmgr_psoc *psoc, uint8_t val)
 {
 	return QDF_STATUS_SUCCESS;
 }
@@ -309,15 +351,11 @@ wlan_twt_cfg_set_requestor_flag(struct wlan_objmgr_psoc *psoc, bool val)
 }
 
 static inline QDF_STATUS
-wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, bool *val)
+wlan_twt_cfg_get_responder_flag(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+				bool *val)
 {
-	return QDF_STATUS_SUCCESS;
-}
-
-static inline QDF_STATUS
-wlan_twt_cfg_set_responder_flag(struct wlan_objmgr_psoc *psoc, bool val)
-{
-	return QDF_STATUS_SUCCESS;
+	*val = false;
+	return QDF_STATUS_E_NOSUPPORT;
 }
 
 static inline QDF_STATUS
@@ -345,8 +383,15 @@ wlan_twt_cfg_get_bcast_responder(struct wlan_objmgr_psoc *psoc, bool *val)
 }
 
 static inline QDF_STATUS
-wlan_twt_cfg_get_support_in_11n_mode(struct wlan_objmgr_psoc *psoc,
-				     bool *val)
+wlan_twt_get_requestor_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS
+wlan_twt_get_responder_support_for_ht_vht_mode(struct wlan_objmgr_psoc *psoc,
+					       bool *val)
 {
 	return QDF_STATUS_SUCCESS;
 }

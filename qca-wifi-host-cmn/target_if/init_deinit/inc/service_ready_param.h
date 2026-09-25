@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -281,6 +281,7 @@ struct wlan_psoc_host_hw_mode_caps {
  * @emlcap: EML Capabilities info
  * @mldcap: MLD Capabilities info
  * @msdcap: Medium Synchronization Delay capabilities info
+ * @ext_mldcap: Extended MLD Capabilities info
  */
 struct wlan_psoc_host_mac_phy_caps_ext2 {
 	uint32_t hw_mode_id;
@@ -304,6 +305,7 @@ struct wlan_psoc_host_mac_phy_caps_ext2 {
 	struct wlan_mlo_eml_cap emlcap;
 	struct wlan_mlo_mld_cap mldcap;
 	struct wlan_mlo_msd_cap msdcap;
+	struct wlan_mlo_ext_mld_cap ext_mldcap;
 #endif
 };
 
@@ -516,6 +518,21 @@ struct wlan_psoc_host_service_ext_param {
 };
 
 /**
+ * struct twt_wake_dur_and_wake_intvl - TWT wake duration ad wake interval
+ * supported by firmware
+ * @min_wake_dur: minimum twt wake duration supported by fw in micro sec
+ * @max_wake_dur: maximum twt wake duration supported by fw in micro sec
+ * @min_wake_intvl: minimum twt wake interval supported by fw in micro sec
+ * @max_wake_intvl: maximum twt wake interval supported by fw in micro sec
+ */
+struct twt_wake_dur_and_wake_intvl {
+	uint16_t min_wake_dur;
+	uint16_t max_wake_dur;
+	uint16_t min_wake_intvl;
+	uint16_t max_wake_intvl;
+};
+
+/**
  * struct wlan_psoc_host_service_ext2_param - EXT service base params in event
  * @reg_db_version_major: REG DB version major number
  * @reg_db_version_minor: REG DB version minor number
@@ -546,7 +563,9 @@ struct wlan_psoc_host_service_ext_param {
  * @num_msdu_idx_qtype_map: Number of HTT_MSDUQ_INDEX to HTT_MSDU_QTYPE
  *                          mapping
  * @is_multipass_sap: Multipass sap flag
- * @num_max_mlo_link_per_ml_bss_supp: max link number per MLD FW supports.
+ * @num_max_mlo_link_per_ml_bss_supp: mlo sta max link number per MLD that
+ *                                    FW supports.
+ * @num_max_mlo_link_per_ml_sap_supp: mlo sap max link support number from FW
  * @num_aux_dev_caps: number of aux dev capabilities
  *
  * Following fields are used to save the values that are received in service
@@ -556,6 +575,18 @@ struct wlan_psoc_host_service_ext_param {
  * @high_2ghz_chan_ext: 2 GHz channel ext High
  * @low_5ghz_chan_ext: 5 GHz channel ext low
  * @high_5ghz_chan_ext: 5 GHz channel ext High
+ * @fw_support_ml_mon: FW support ML monitor mode
+ * @sar_flag: SAR flag info
+ * @fw_support_opt_dp_ctrl: FW support OPT_DP_CTRL
+ * @tx_vdev_nss_support: FW supports Vdev Tx NSS report
+ * @supp_wifi_gen: Supported WiFi generations by the target
+ * @cert_wifi_gen: Supported WFA certified WiFi generations
+ * @twt_wake_dur_and_intvl: min/max TWT wake duration and wake interval
+ * received from firmware
+ * @max_ml_sap_num_bss: Max sap bss
+ * @max_ml_sta_num_bss: Max sta bss
+ * @max_ml_bss_num: Max ML bss
+ * @tx_powerboost: Tx power boost
  */
 struct wlan_psoc_host_service_ext2_param {
 	uint8_t reg_db_version_major;
@@ -590,6 +621,7 @@ struct wlan_psoc_host_service_ext2_param {
 	bool is_multipass_sap;
 #endif
 	uint32_t num_max_mlo_link_per_ml_bss_supp;
+	uint32_t num_max_mlo_link_per_ml_sap_supp;
 	uint32_t num_aux_dev_caps;
 
 	uint64_t wireless_modes_ext;
@@ -597,6 +629,19 @@ struct wlan_psoc_host_service_ext2_param {
 	uint32_t high_2ghz_chan_ext;
 	uint32_t low_5ghz_chan_ext;
 	uint32_t high_5ghz_chan_ext;
+	bool fw_support_ml_mon;
+	uint32_t sar_flag;
+	bool fw_support_opt_dp_ctrl;
+	bool tx_vdev_nss_support;
+	uint8_t supp_wifi_gen;
+	uint8_t cert_wifi_gen;
+	struct twt_wake_dur_and_wake_intvl twt_wake_dur_and_intvl;
+	uint8_t max_ml_sap_num_bss;
+	uint8_t max_ml_sta_num_bss;
+	uint8_t	max_ml_bss_num;
+#ifdef FEATURE_WLAN_TX_POWERBOOST
+	bool tx_powerboost;
+#endif
 };
 
 #endif /* _SERVICE_READY_PARAM_H_*/

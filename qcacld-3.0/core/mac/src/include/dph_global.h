@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -113,6 +113,7 @@ typedef struct sDphHashNode {
 	uint8_t fAniCount:1;
 	uint8_t rmfEnabled:1;
 	uint8_t ocv_enabled:1;
+	uint8_t post_csa_sa_query:1;
 	/* LIM state */
 	struct lim_sta_context mlmStaContext;
 	/* qos parameter info */
@@ -212,11 +213,15 @@ typedef struct sDphHashNode {
 	 * end of the structure.
 	 */
 	struct sDphHashNode *next;
+	uint8_t mld_addr[QDF_MAC_ADDR_SIZE];
 #ifdef WLAN_FEATURE_11BE_MLO
 	bool recv_assoc_frm;
-	uint8_t mld_addr[QDF_MAC_ADDR_SIZE];
 	struct mlo_partner_info mlo_info;
+	struct wlan_mlo_eml_cap eml_info;
+	struct wlan_mlo_mld_cap mld_info;
 #endif
+	uint8_t peer_cck_rx_support_5ghz: 1,
+		peer_cck_tx_support_5ghz: 1;
 } tDphHashNode, *tpDphHashNode;
 
 #include "dph_hash_table.h"

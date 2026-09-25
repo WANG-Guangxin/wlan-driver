@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015, 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -24,6 +24,7 @@
 #include <wlan_cm_api.h>
 #include "connection_mgr/core/src/wlan_cm_main_api.h"
 #include "connection_mgr/core/src/wlan_cm_roam.h"
+#include <wlan_mlme_api.h>
 #include <wlan_vdev_mgr_utils_api.h>
 #ifdef WLAN_FEATURE_11BE_MLO
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
@@ -213,6 +214,11 @@ bool wlan_cm_is_vdev_roaming(struct wlan_objmgr_vdev *vdev)
 	return cm_is_vdev_roaming(vdev);
 }
 
+bool wlan_cm_is_link_add_connecting(struct wlan_objmgr_vdev *vdev)
+{
+	return cm_is_link_add_cmd_active(vdev);
+}
+
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 bool wlan_cm_is_vdev_roam_started(struct wlan_objmgr_vdev *vdev)
 {
@@ -276,6 +282,11 @@ bool wlan_cm_is_link_switch_connect_resp(struct wlan_cm_connect_resp *resp)
 	return cm_is_link_switch_connect_resp(resp);
 }
 
+bool wlan_cm_is_link_add_connect_resp(struct wlan_cm_connect_resp *resp)
+{
+	return cm_is_link_add_connect_resp(resp);
+}
+
 void wlan_cm_trigger_panic_on_cmd_timeout(struct wlan_objmgr_vdev *vdev,
 					  enum qdf_hang_reason reason)
 {
@@ -289,6 +300,12 @@ bool wlan_cm_get_active_reassoc_req(struct wlan_objmgr_vdev *vdev,
 	return cm_get_active_reassoc_req(vdev, req);
 }
 #endif
+
+void wlan_cm_reset_active_cm_id(struct wlan_objmgr_vdev *vdev,
+				wlan_cm_id cm_id)
+{
+	cm_reset_active_cm_id(vdev, cm_id);
+}
 
 bool wlan_cm_get_active_disconnect_req(struct wlan_objmgr_vdev *vdev,
 				       struct wlan_cm_vdev_discon_req *req)
@@ -369,7 +386,6 @@ const char *wlan_cm_reason_code_to_str(enum wlan_reason_code reason)
 	}
 }
 
-#ifdef WLAN_POLICY_MGR_ENABLE
 void wlan_cm_hw_mode_change_resp(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 				 wlan_cm_id cm_id, QDF_STATUS status)
 {
@@ -381,7 +397,6 @@ void wlan_cm_hw_mode_change_resp(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 	else
 		cm_hw_mode_change_resp(pdev, vdev_id, cm_id, status);
 }
-#endif /* ifdef POLICY_MGR_ENABLE */
 
 #ifdef WLAN_FEATURE_LL_LT_SAP
 void wlan_cm_bearer_switch_resp(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
@@ -407,25 +422,6 @@ void wlan_cm_req_history_print(struct wlan_objmgr_vdev *vdev)
 	cm_req_history_print(cm_ctx);
 }
 #endif /* SM_ENG_HIST_ENABLE */
-
-#ifndef CONN_MGR_ADV_FEATURE
-void wlan_cm_set_candidate_advance_filter_cb(
-		struct wlan_objmgr_vdev *vdev,
-		void (*filter_fun)(struct wlan_objmgr_vdev *vdev,
-				   struct scan_filter *filter))
-{
-	cm_set_candidate_advance_filter_cb(vdev, filter_fun);
-}
-
-void wlan_cm_set_candidate_custom_sort_cb(
-		struct wlan_objmgr_vdev *vdev,
-		void (*sort_fun)(struct wlan_objmgr_vdev *vdev,
-				 qdf_list_t *list))
-{
-	cm_set_candidate_custom_sort_cb(vdev, sort_fun);
-}
-
-#endif
 
 QDF_STATUS wlan_cm_get_rnr(struct wlan_objmgr_vdev *vdev, wlan_cm_id cm_id,
 			   struct reduced_neighbor_report *rnr)
@@ -592,7 +588,7 @@ QDF_STATUS wlan_cm_sta_update_bw_puncture(struct wlan_objmgr_vdev *vdev,
 
 	if (des_chan->puncture_bitmap == ch_param.reg_punc_bitmap &&
 	    des_chan->ch_width == ch_param.ch_width)
-		return status;
+		return QDF_STATUS_E_INVAL;
 
 	des_chan->ch_freq_seg1 = ch_param.center_freq_seg0;
 	des_chan->ch_freq_seg2 = ch_param.center_freq_seg1;
@@ -606,6 +602,14 @@ QDF_STATUS wlan_cm_sta_update_bw_puncture(struct wlan_objmgr_vdev *vdev,
 		   des_chan->ch_cfreq1, des_chan->ch_cfreq2);
 	QDF_SET_BITS(bw_puncture, 0, 8, des_chan->ch_width);
 	QDF_SET_BITS(bw_puncture, 8, 16, des_chan->puncture_bitmap);
+
+	if (wlan_mlme_update_cur_ch_width(vdev,
+					  des_chan->ch_width, true) !=
+					  QDF_STATUS_SUCCESS) {
+		mlme_err("Failed to update chwidth %d", des_chan->ch_width);
+		return QDF_STATUS_E_FAILURE;
+	}
+
 	return wlan_util_vdev_peer_set_param_send(vdev, peer_mac,
 						  WLAN_MLME_PEER_BW_PUNCTURE,
 						  bw_puncture);
@@ -628,4 +632,9 @@ wlan_cm_bss_mlo_type(struct wlan_objmgr_psoc *psoc,
 		     qdf_list_t *scan_list)
 {
 	return cm_bss_mlo_type(psoc, entry, scan_list);
+}
+
+bool wlan_cm_is_link_switch_connection(struct wlan_objmgr_vdev *vdev)
+{
+	return cm_is_link_switch_connection(vdev);
 }

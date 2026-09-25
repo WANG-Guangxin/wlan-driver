@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +34,47 @@
 
 struct hdd_context;
 struct wlan_hdd_link_info;
+
+#define CONFIG_MAX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_CONFIG_MAX
+#define RATE_TYPE QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_RATE_TYPE
+#define RATE_VALUE QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_RATE_VALUE
+#define RATE_POWER_VALUE QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_RATE_POWER_VALUE
+
+#define CHAIN_MAX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_CONFIG_MAX
+#define CHAIN_INDEX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_CHAIN_INDEX
+#define CHAIN_RATE_CONFIG QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_CHAIN_RATE_CONFIG
+
+#define BAND_MAX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_BAND_MAX
+#define BAND_INDEX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_BAND_INDEX
+#define BAND_CHAIN_CONFIG QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_BAND_CHAIN_CONFIG
+
+#define ADJUST_TX_POWER_MAX QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_MAX
+#define BAND_CONFIG QCA_WLAN_VENDOR_ATTR_ADJUST_TX_POWER_BAND_CONFIG
+
+#define NUM_LEGACY_RATES_2G 4
+#define NUM_LEGACY_RATES_5G_6G 8
+
+#define RATE_TYPE_LEGACY 0
+#define RATE_TYPE_MCS 1
+#define RATE_MCS13 13
+
+/* 2GHz band legacy rates */
+#define RATE_1 1
+#define RATE_2 2
+#define RATE_5_5 5
+#define RATE_11 11
+
+/* 2GHz/5GHz/6GHz band legacy rates */
+#define RATE_6 6
+#define RATE_9 9
+#define RATE_12 12
+#define RATE_18 18
+#define RATE_24 24
+#define RATE_36 36
+#define RATE_48 48
+#define RATE_54 54
+
+#define INVALID_RATE 255
 
 #ifdef WLAN_FEATURE_11BE_MLO
 #define EHT_OPMODE_SUPPORTED 2
@@ -87,6 +128,9 @@ extern const struct nla_policy setband_policy[QCA_WLAN_VENDOR_ATTR_MAX + 1];
 /* QCA_NL80211_VENDOR_SUBCMD_ACS_POLICY policy */
 extern const struct nla_policy wlan_hdd_set_acs_dfs_config_policy[
 			QCA_WLAN_VENDOR_ATTR_ACS_DFS_MAX + 1];
+
+extern const struct nla_policy wlan_hdd_sap_suspend_policy[
+			QCA_WLAN_VENDOR_ATTR_AP_SUSPEND_MAX + 1];
 
 /* QCA_NL80211_VENDOR_SUBCMD_STA_CONNECT_ROAM_POLICY policy */
 extern const struct nla_policy wlan_hdd_set_sta_roam_config_policy[
@@ -274,13 +318,29 @@ typedef enum {
 #define WIFI_FEATURE_IE_ALLOWLIST       0x1000000 /* Support Probe IE allow
 						   * listing
 						   */
-#define WIFI_FEATURE_SCAN_RAND          0x2000000 /* Support MAC & Probe Sequence Number randomization */
-#define WIFI_FEATURE_SET_LATENCY_MODE   0x40000000 /* Set latency mode */
-/* Support changing MAC address without iface reset(down and up) */
-#define WIFI_FEATURE_DYNAMIC_SET_MAC    0x10000000
-
+/* Support MAC & Probe Sequence Number randomization */
+#define WIFI_FEATURE_SCAN_RAND          0x2000000
 /* Support Tx Power Limit setting */
 #define WIFI_FEATURE_SET_TX_POWER_LIMIT 0x4000000
+/* Support changing MAC address without iface reset(down and up) */
+#define WIFI_FEATURE_DYNAMIC_SET_MAC    0x10000000
+/* Support P2P MAC randomization */
+#define WIFI_FEATURE_P2P_RAND_MAC	0x80000000
+#define WIFI_FEATURE_SET_LATENCY_MODE   0x40000000 /* Set latency mode */
+/* Support for configuring roaming mode */
+#define WIFI_FEATURE_ROAMING_MODE_CONTROL 0x800000000
+
+/* Support for configuring VOIP */
+#define WIFI_FEATURE_SET_VOIP_MODE	 0x1000000000
+
+#define WIFI_FEATURE_CACHED_SCAN_RESULTS 0x2000000000
+/* Support MLO SoftAp */
+#define WIFI_FEATURE_MLO_SAP            0x4000000000
+
+/* Dual SL SAP supported */
+#define WIFI_FEATURE_MULTIPLE_MLD_ON_SAP 0x8000000000
+
+#define WIFI_FEATURE_MAX_BIT_POS 64
 
 /* Add more features here */
 #define WIFI_TDLS_SUPPORT			BIT(0)
@@ -381,6 +441,37 @@ extern const struct nla_policy
 	.doit = wlan_hdd_cfg80211_set_trace_level,			\
 	vendor_command_policy(qca_wlan_vendor_set_trace_level_policy,	\
 			      QCA_WLAN_VENDOR_ATTR_SET_TRACE_LEVEL_MAX)	\
+},
+
+#define CHAN_USAGE_REQ_CHAN_LIST_MAX \
+			QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_CHAN_LIST_MAX
+
+#define CHAN_USAGE_REQ_CHAN_LIST_CHAN \
+			QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_CHAN_LIST_CHAN
+
+#define CHAN_USAGE_REQ_CHAN_LIST_OP_CLASS \
+			QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_CHAN_LIST_OP_CLASS
+
+#define CHAN_USAGE_REQ_MAX       QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_MAX
+#define CHAN_USAGE_REQ_MODE      QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_MODE
+#define CHAN_USAGE_REQ_CHAN_LIST QCA_WLAN_VENDOR_ATTR_CHAN_USAGE_REQ_CHAN_LIST
+
+extern const struct nla_policy
+qca_wlan_vendor_p2p_chan_switch_params[CHAN_USAGE_REQ_CHAN_LIST_MAX + 1];
+
+extern const struct nla_policy
+qca_wlan_vendor_p2p_chan_req_mode[CHAN_USAGE_REQ_MAX + 1];
+
+#define FEATURE_AP_ASSIST_P2P_DFS_GROUP					\
+{									\
+	.info.vendor_id = QCA_NL80211_VENDOR_ID,			\
+	.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_CHAN_USAGE_REQ,	\
+	.flags = WIPHY_VENDOR_CMD_NEED_WDEV |				\
+		 WIPHY_VENDOR_CMD_NEED_NETDEV |				\
+		 WIPHY_VENDOR_CMD_NEED_RUNNING,				\
+	.doit = wlan_hdd_cfg80211_p2p_chan_usage_req,			\
+	vendor_command_policy(qca_wlan_vendor_p2p_chan_req_mode,	\
+			      CHAN_USAGE_REQ_MAX)			\
 },
 
 /**
@@ -532,7 +623,7 @@ void wlan_hdd_rso_cmd_status_cb(hdd_handle_t hdd_handle,
 /**
  * wlan_hdd_cfg80211_acs_ch_select_evt: Callback function for ACS evt
  * @link_info: Link info pointer in HDD adapter
- * @store_acs_freq: Store current ACS frequecy flag
+ * @store_acs_freq: Store current ACS frequency flag
  *
  * This is a callback function on ACS procedure is completed.
  * This function send the ACS selected channel information to hostapd
@@ -541,28 +632,6 @@ void wlan_hdd_rso_cmd_status_cb(hdd_handle_t hdd_handle,
  */
 void wlan_hdd_cfg80211_acs_ch_select_evt(struct wlan_hdd_link_info *link_info,
 					 bool store_acs_freq);
-
-#ifdef WLAN_CFR_ENABLE
-/*
- * hdd_cfr_data_send_nl_event() - send cfr data through nl event
- * @vdev_id: vdev id
- * @pid: process pid to which send data event unicast way
- * @data: pointer to the cfr data
- * @data_len: length of data
- *
- * Return: void
- */
-void hdd_cfr_data_send_nl_event(uint8_t vdev_id, uint32_t pid,
-				const void *data, uint32_t data_len);
-
-#define FEATURE_CFR_DATA_VENDOR_EVENTS                                  \
-[QCA_NL80211_VENDOR_SUBCMD_PEER_CFR_CAPTURE_CFG_INDEX] = {              \
-        .vendor_id = QCA_NL80211_VENDOR_ID,                             \
-        .subcmd = QCA_NL80211_VENDOR_SUBCMD_PEER_CFR_CAPTURE_CFG,       \
-},
-#else
-#define FEATURE_CFR_DATA_VENDOR_EVENTS
-#endif
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 /**
@@ -594,7 +663,7 @@ void hdd_send_roam_scan_ch_list_event(struct hdd_context *hdd_ctx,
  */
 int wlan_hdd_cfg80211_update_apies(struct wlan_hdd_link_info *link_info);
 
-int wlan_hdd_sap_cfg_dfs_override(struct hdd_adapter *adapter);
+int wlan_hdd_sap_cfg_dfs_override(struct wlan_hdd_link_info *link_info);
 
 int wlan_hdd_enable_dfs_chan_scan(struct hdd_context *hdd_ctx,
 				  bool enable_dfs_channels);
@@ -848,12 +917,14 @@ QDF_STATUS wlan_hdd_set_wlm_latency_level(struct hdd_adapter *adapter,
  * @adapter: pointer to network adapter
  * @port_id: port id for which host receives set latency level vendor command
  * @client_id: client id for a given port id
+ * @latency_level: latency level requested by user space
  *
  * Return: QDF_STATUS
  */
 QDF_STATUS wlan_hdd_get_set_client_info_id(struct hdd_adapter *adapter,
 					   uint32_t port_id,
-					   uint32_t *client_id);
+					   uint32_t *client_id,
+					   uint16_t latency_level);
 
 /**
  * wlan_hdd_get_client_id_bitmap() - to calculate client id bitmap
@@ -900,7 +971,8 @@ static inline uint8_t wlan_hdd_get_client_id_bitmap(struct hdd_adapter *adapter)
 static inline
 QDF_STATUS wlan_hdd_get_set_client_info_id(struct hdd_adapter *adapter,
 					   uint32_t port_id,
-					   uint32_t *client_id)
+					   uint32_t *client_id,
+					   uint16_t latency_level)
 {
 	return QDF_STATUS_E_FAILURE;
 }
@@ -939,7 +1011,7 @@ hdd_convert_phymode_to_80211mode(eCsrPhyMode mode);
 
 /**
  * hdd_send_update_owe_info_event - Send update OWE info event
- * @adapter: Pointer to adapter
+ * @link_info: Pointer to link info
  * @sta_addr: MAC address of peer STA
  * @owe_ie: OWE IE
  * @owe_ie_len: Length of OWE IE
@@ -950,15 +1022,17 @@ hdd_convert_phymode_to_80211mode(eCsrPhyMode mode);
  */
 #if defined(CFG80211_EXTERNAL_DH_UPDATE_SUPPORT) || \
 (LINUX_VERSION_CODE > KERNEL_VERSION(5, 2, 0))
-void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
-				    uint8_t sta_addr[],
-				    uint8_t *owe_ie,
-				    uint32_t owe_ie_len);
+void
+hdd_send_update_owe_info_event(struct wlan_hdd_link_info *link_info,
+			       uint8_t sta_addr[],
+			       uint8_t *owe_ie,
+			       uint32_t owe_ie_len);
 #else
-static inline void hdd_send_update_owe_info_event(struct hdd_adapter *adapter,
-						  uint8_t sta_addr[],
-						  uint8_t *owe_ie,
-						  uint32_t owe_ie_len)
+static inline void
+hdd_send_update_owe_info_event(struct wlan_hdd_link_info *link_info,
+			       uint8_t sta_addr[],
+			       uint8_t *owe_ie,
+			       uint32_t owe_ie_len)
 {
 }
 #endif
@@ -999,13 +1073,11 @@ struct hdd_hostapd_state;
 /**
  * hdd_softap_deauth_all_sta() - Deauth all sta in the sta list
  * @adapter: pointer to adapter structure
- * @hapd_state: pointer to hostapd state structure
  * @param: pointer to del sta params
  *
  * Return: QDF_STATUS on success, corresponding QDF failure status on failure
  */
 QDF_STATUS hdd_softap_deauth_all_sta(struct hdd_adapter *adapter,
-				     struct hdd_hostapd_state *hapd_state,
 				     struct csr_del_sta_params *param);
 
 /**
@@ -1187,6 +1259,28 @@ int hdd_vdev_send_sta_keep_alive_interval(struct wlan_hdd_link_info *link_info,
  */
 void wlan_hdd_save_sta_keep_alive_interval(struct hdd_adapter *adapter,
 					   uint16_t sta_alive_interval);
+
+/**
+ * wlan_hdd_get_standby_link_chan_info() - get channel info of standby link in
+ * mlo link connection and copied in chan_info structure
+ * @adapter: HDD adapter pointer
+ * @link_id: Link id of standby link
+ * @chan_info: channel info from wlan channel structure
+ */
+
+#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
+int
+wlan_hdd_get_standby_link_chan_info(struct hdd_adapter *adapter, int link_id,
+				    struct wlan_channel *chan_info);
+#else
+static inline int
+wlan_hdd_get_standby_link_chan_info(struct hdd_adapter *adapter, int link_id,
+				    struct wlan_channel *chan_info)
+{
+	return -EINVAL;
+}
+#endif
+
 /**
  * hdd_convert_phy_bw_to_nl_bw - Convert phy bandwidth to nl bandwidth
  * @bw: phy bandwidth
@@ -1196,4 +1290,43 @@ void wlan_hdd_save_sta_keep_alive_interval(struct hdd_adapter *adapter,
 enum nl80211_chan_width
 hdd_convert_phy_bw_to_nl_bw(enum phy_ch_width bw);
 
+#ifdef WLAN_FEATURE_ACTION_OUI
+/**
+ * wlan_hdd_cfg80211_set_action_oui() - set action OUI
+ * @wiphy: wiphy pointer
+ * @wdev: pointer to struct wireless_dev
+ * @data: pointer to incoming NL vendor data
+ * @data_len: length of @data
+ *
+ * Return: 0 on success; error number otherwise.
+ */
+int wlan_hdd_cfg80211_set_action_oui(struct wiphy *wiphy,
+				     struct wireless_dev *wdev,
+				     const void *data,
+				     int data_len);
+#else
+static inline
+int wlan_hdd_cfg80211_set_action_oui(struct wiphy *wiphy,
+				     struct wireless_dev *wdev,
+				     const void *data,
+				     int data_len)
+{
+	return -EOPNOTSUPP;
+}
+#endif
+
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/** wlan_hdd_link_removal_is_in_progress() - check link is removing or not
+ * @adapter: adapter pointer
+ *
+ * Return: true if link removal in progress, otherwise false
+ */
+bool wlan_hdd_link_removal_is_in_progress(struct hdd_adapter *adapter);
+#else
+static inline
+bool wlan_hdd_link_removal_is_in_progress(struct hdd_adapter *adapter)
+{
+	return false;
+}
+#endif
 #endif

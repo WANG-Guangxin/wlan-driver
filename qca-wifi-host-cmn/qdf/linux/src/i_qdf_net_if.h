@@ -29,6 +29,7 @@
 #include <qdf_types.h>
 #include <qdf_util.h>
 #include <linux/netdevice.h>
+#include <linux/if_vlan.h>
 
 struct qdf_net_if;
 
@@ -133,6 +134,21 @@ __qdf_net_if_hold_dev(struct qdf_net_if  *nif)
 	dev_hold((struct net_device *)nif);
 
 	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * __qdf_net_if_is_vlan_dev() - Abstraction of is_vlan_dev API
+ * @nif: network device
+ *
+ * Return: true if network device is vlan else false
+ */
+static inline bool
+__qdf_net_if_is_vlan_dev(struct qdf_net_if  *nif)
+{
+	if (!nif)
+		return QDF_STATUS_E_INVAL;
+
+	return is_vlan_dev((struct net_device *)nif);
 }
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0))

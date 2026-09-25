@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -96,7 +96,7 @@
  */
 #define CFG_MAX_CONC_CXNS CFG_INI_UINT(\
 					"gMaxConcurrentActiveSessions", \
-					1, 4, 3, \
+					1, WLAN_MAX_VDEVS, 3, \
 					CFG_VALUE_OR_DEFAULT, \
 					"Config max num allowed connections")
 
@@ -636,7 +636,7 @@ CFG_INI_UINT("g_pcl_band_priority", 0, 1, 0, CFG_VALUE_OR_DEFAULT, \
  * g_multi_sap_allowed_on_same_band - Allow multi sap started on same band
  * @Min: 0
  * @Max: 1
- * @Default: 1
+ * @Default: 0
  *
  * This ini is used to allow multi sap started on same band or not.
  * 0 - Disallow multi sap started on same band
@@ -649,7 +649,7 @@ CFG_INI_UINT("g_pcl_band_priority", 0, 1, 0, CFG_VALUE_OR_DEFAULT, \
  * </ini>
  */
 #define CFG_MULTI_SAP_ALLOWED_ON_SAME_BAND \
-CFG_INI_BOOL("g_multi_sap_allowed_on_same_band", 1, \
+CFG_INI_BOOL("g_multi_sap_allowed_on_same_band", 0, \
 	     "Allow multi SAP started on same band")
 
 #ifdef WLAN_FEATURE_SR

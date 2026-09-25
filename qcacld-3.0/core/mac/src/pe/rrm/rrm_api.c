@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -256,7 +256,7 @@ rrm_process_link_measurement_request(struct mac_context *mac,
 				pLinkReq->MaxTxPower.maxTxPower;
 		/* Set is_power_constraint_abs to true to calculate tpc power */
 		mlme_obj->reg_tpc_obj.is_power_constraint_abs = true;
-		lim_calculate_tpc(mac, pe_session);
+		lim_calculate_tpc(mac, pe_session, false);
 
 		LinkReport.txPower =
 			mlme_obj->reg_tpc_obj.chan_power_info[0].tx_power;
@@ -278,6 +278,8 @@ rrm_process_link_measurement_request(struct mac_context *mac,
 
 		if (pLinkReq->MaxTxPower.maxTxPower != ap_pwr_constraint) {
 			tx_ops = wlan_reg_get_tx_ops(mac->psoc);
+			if (!tx_ops)
+				return QDF_STATUS_E_FAILURE;
 
 			if (tx_ops->set_tpc_power)
 				tx_ops->set_tpc_power(mac->psoc,
@@ -526,7 +528,7 @@ void rrm_get_country_code_from_connected_profile(struct mac_context *mac,
 /**
  * wlan_diag_log_beacon_rpt_req_event() - Send Beacon Report Request logging
  * event.
- * @token: Dialog token
+ * @token: Measurement token
  * @mode: Measurement mode
  * @op_class: operating class
  * @chan: channel number
@@ -549,7 +551,7 @@ wlan_diag_log_beacon_rpt_req_event(uint8_t token, uint8_t mode,
 	wlan_diag_event.diag_cmn.ktime_us =  qdf_ktime_to_us(qdf_ktime_get());
 
 	wlan_diag_event.subtype = WLAN_CONN_DIAG_BCN_RPT_REQ_EVENT;
-	wlan_diag_event.version = DIAG_BCN_RPT_VERSION_2;
+	wlan_diag_event.version = DIAG_BCN_RPT_VERSION_3;
 
 	if (mlo_is_mld_sta(pe_session->vdev))
 		wlan_diag_event.band =
@@ -903,7 +905,7 @@ rrm_process_sta_stats_report_req(struct mac_context *mac,
 {
 	QDF_STATUS status;
 	uint16_t meas_duration = MIN_MEAS_DURATION_FOR_STA_STATS;
-	uint8_t max_meas_duration;
+	uint16_t max_meas_duration;
 	struct rrm_sta_stats *rrm_sta_statistics;
 
 	max_meas_duration = rrm_get_max_meas_duration(mac, pe_session);
@@ -942,8 +944,11 @@ rrm_process_sta_stats_report_req(struct mac_context *mac,
 	rrm_sta_statistics->rrm_report.report.statistics_report.group_id =
 	sta_stats_req->measurement_request.sta_stats.group_identity;
 	rrm_sta_statistics->rrm_report.report.statistics_report.meas_duration
-		= sta_stats_req->measurement_request.sta_stats.meas_duration;
+		= meas_duration;
 
+	pe_debug("sta stats req vdev :%d, meas_dur:%d, max_dur:%d group id %d",
+		 pe_session->vdev_id, meas_duration, max_meas_duration,
+		 sta_stats_req->measurement_request.sta_stats.group_identity);
 	switch  (sta_stats_req->measurement_request.sta_stats.group_identity) {
 	case STA_STAT_GROUP_ID_COUNTER_STATS:
 	case STA_STAT_GROUP_ID_MAC_STATS:
@@ -1437,6 +1442,12 @@ rrm_check_ml_ie(uint8_t *ies, uint16_t len, uint8_t *mlie_copy_len)
 	util_get_mlie_common_info_len(ml_ie, ml_ie_total_len,
 				      &ml_common_info_length);
 
+	if (ml_common_info_length > ml_ie_total_len) {
+		mlo_err("Common info length greater than mlie length %du %zu",
+			ml_common_info_length, ml_ie_total_len);
+		return NULL;
+	}
+
 	ml_bv_ie_len = sizeof(struct wlan_ie_multilink) + ml_common_info_length;
 	if (ml_bv_ie_len) {
 		mlie_copy = qdf_mem_malloc(ml_bv_ie_len);
@@ -1461,6 +1472,10 @@ rrm_copy_ml_ie(uint8_t eid, uint8_t extn_eid,
 		extn_eid == WLAN_EXTN_ELEMID_MULTI_LINK) {
 		if (ml_ie && ml_len && pIes) {
 			qdf_mem_copy(pIes, ml_ie, ml_len);
+			pe_debug("Dump ML IE:");
+			QDF_TRACE_HEX_DUMP(QDF_MODULE_ID_PE,
+					   QDF_TRACE_LEVEL_DEBUG,
+					   ml_ie, ml_len);
 			return true;
 		}
 	}
@@ -1572,34 +1587,43 @@ rrm_fill_beacon_ies(struct mac_context *mac, uint8_t *pIes,
 
 		i = 0;
 		do {
-			if (((!eids) || (*pBcnIes == eids[i])) ||
+			if ((!eids || (*pBcnIes == eids[i])) ||
 			    ((*pBcnIes == eid) &&
 			     (extn_eids && *(pBcnIes + 2) == extn_eids[i]))) {
 				if (((*pNumIes) + len) < pIesMaxSize) {
-						qdf_mem_copy(pIes, pBcnIes, len);
-						pIes += len;
-						*pNumIes += len;
-				} else {
-					if (rrm_copy_ml_ie(*pBcnIes, *(pBcnIes + 2), ml_copy, ml_len, pIes)) {
+					if ((rrm_copy_ml_ie(*pBcnIes,
+							    *(pBcnIes + 2),
+							    ml_copy, ml_len,
+							    pIes))) {
 						pIes += ml_len;
 						*pNumIes += ml_len;
-						start_offset = start_offset + len - ml_len;
-					} else {
-					/*
-					 * If max size of fragment is reached,
-					 * calculate the remaining length and
-					 * break. For first fragment, account
-					 * for the fixed fields also.
-					 */
-						rem_len = total_ies_len - *pNumIes -
-							  start_offset;
-					if (start_offset == 0)
-						rem_len = rem_len +
-						BEACON_FRAME_IES_OFFSET;
-					pe_debug("rem_len %d ies added %d",
-						 rem_len, *pNumIes);
+						pe_debug("ies_filled_len:%d last_filled_ie_len:%d",
+							 *pNumIes, ml_len);
+						break;
 					}
+
+					qdf_mem_copy(pIes, pBcnIes, len);
+					pIes += len;
+					*pNumIes += len;
+
+					pe_debug("ies_filled_len:%d last_filled_ie_len:%d",
+						 *pNumIes, len);
+					break;
 				}
+
+				/*
+				 * If max size of fragment is reached, calculate
+				 * the remaining length and break. For first
+				 * fragment, account for the fixed fields also.
+				 */
+				rem_len = total_ies_len - *pNumIes -
+					  start_offset;
+				if (start_offset == 0)
+					rem_len += BEACON_FRAME_IES_OFFSET;
+
+				pe_debug("rem_len %d ies added %d", rem_len,
+					 *pNumIes);
+
 				break;
 			}
 			i++;
@@ -1612,8 +1636,7 @@ rrm_fill_beacon_ies(struct mac_context *mac, uint8_t *pIes,
 		BcnNumIes -= len;
 	}
 
-	if (ml_copy)
-		qdf_mem_free(ml_copy);
+	qdf_mem_free(ml_copy);
 
 	pe_debug("Total length of Ies added = %d rem_len %d",
 		 *pNumIes, rem_len);
@@ -1621,6 +1644,7 @@ rrm_fill_beacon_ies(struct mac_context *mac, uint8_t *pIes,
 	return rem_len;
 }
 
+#define RRM_MAX_NUM_MEASUREMENT_REPORT 8
 /**
  * rrm_process_beacon_report_xmit() - create a rrm action frame
  * @mac_ctx: Global pointer to MAC context
@@ -1648,9 +1672,9 @@ rrm_process_beacon_report_xmit(struct mac_context *mac_ctx,
 	uint16_t offset = 0;
 	uint8_t frag_id = 0;
 	uint8_t num_frames, num_reports_in_frame, final_measurement_index;
-	uint32_t populated_beacon_report_size = 0;
+	uint32_t populated_beacon_report_size = 0, dot11_meas_rpt_size = 0;
 	uint32_t max_reports_in_frame = 0;
-	uint32_t radio_meas_rpt_size = 0, dot11_meas_rpt_size = 0;
+	uint32_t radio_meas_rpt_size = 0;
 	bool is_last_measurement_frame;
 
 
@@ -1803,7 +1827,7 @@ rrm_process_beacon_report_xmit(struct mac_context *mac_ctx,
 			 * If last beacon report indication is not supported,
 			 * truncate and move on to the next beacon.
 			 */
-			if (rem_len &&
+			if (rem_len && bss_desc &&
 			    curr_req->request.Beacon.
 			    last_beacon_report_indication) {
 				offset = GET_IE_LEN_IN_BSS(
@@ -1842,12 +1866,16 @@ rrm_process_beacon_report_xmit(struct mac_context *mac_ctx,
 			num_frames++;
 
 		/* Calculate num of maximum mgmt reports per frame */
-		dot11_meas_rpt_size = sizeof(tDot11fRadioMeasurementReport);
+		dot11_meas_rpt_size =
+			sizeof(tDot11fIEMeasurementReport) +
+			qdf_offsetof(tDot11fRadioMeasurementReport,
+				     MeasurementReport);
 		max_reports_in_frame = MAX_MGMT_MPDU_LEN / dot11_meas_rpt_size;
 
 		for (j = 0; j < num_frames; j++) {
-			num_reports_in_frame = QDF_MIN((i - report_index),
-						max_reports_in_frame);
+			num_reports_in_frame = QDF_MIN(i - report_index,
+						       QDF_MIN(max_reports_in_frame,
+							       RRM_MAX_NUM_MEASUREMENT_REPORT));
 
 			final_measurement_index =
 				mac_ctx->rrm.rrmPEContext.num_active_request;
@@ -1876,8 +1904,7 @@ end:
 		rrm_cleanup(mac_ctx, beacon_xmit_ind->measurement_idx);
 	}
 
-	if (report)
-		qdf_mem_free(report);
+	qdf_mem_free(report);
 
 	return status;
 }
@@ -2411,11 +2438,10 @@ QDF_STATUS rrm_reject_req(tpSirMacRadioMeasureReport *radiomes_report,
 {
 	tpSirMacRadioMeasureReport report;
 
-	if (!*radiomes_report) {
 	/*
-	 * Allocate memory to send reports for
-	 * any subsequent requests.
+	 * Allocate memory to send reports for any subsequent requests.
 	 */
+	if (!*radiomes_report) {
 		*radiomes_report = qdf_mem_malloc(sizeof(*report) *
 				(rrm_req->num_MeasurementRequest - index));
 		if (!*radiomes_report)
@@ -2442,6 +2468,9 @@ QDF_STATUS rrm_reject_req(tpSirMacRadioMeasureReport *radiomes_report,
  * @peer: Macaddress of the peer requesting the radio measurement.
  * @rrm_req: Array of Measurement request IEs
  * @session_entry: session entry.
+ * @pHdr: pointer to mac mgmt frame header
+ * @frame_len: Frame length
+ * @pRxPacketInfo: pointer to Rx packet info
  *
  * Processes the Radio Resource Measurement request.
  *
@@ -2451,11 +2480,14 @@ QDF_STATUS
 rrm_process_radio_measurement_request(struct mac_context *mac_ctx,
 				      tSirMacAddr peer,
 				      tDot11fRadioMeasurementRequest *rrm_req,
-				      struct pe_session *session_entry)
+				      struct pe_session *session_entry,
+				      tpSirMacMgmtHdr pHdr, uint32_t frame_len,
+				      uint8_t *pRxPacketInfo)
 {
 	uint8_t i, index;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	tpSirMacRadioMeasureReport report = NULL;
+	tDot11fIEMeasurementRequest *req;
 	uint8_t num_report = 0;
 	bool reject = false;
 
@@ -2472,10 +2504,36 @@ rrm_process_radio_measurement_request(struct mac_context *mac_ctx,
 		qdf_mem_free(report);
 		return QDF_STATUS_E_FAILURE;
 	}
+
+	if (QDF_IS_STATUS_ERROR(wlan_vdev_is_up(session_entry->vdev))) {
+		pe_info_rl("Vdev:%d is not up, reject RRM request",
+			   session_entry->vdev_id);
+		req = &rrm_req->MeasurementRequest[0];
+		wlan_diag_log_beacon_rpt_req_event(
+			req->measurement_token,
+			req->measurement_request.Beacon.meas_mode,
+			req->measurement_request.Beacon.regClass,
+			req->measurement_request.Beacon.channel,
+			req->measurement_type,
+			req->measurement_request.Beacon.meas_duration,
+			session_entry);
+		reject = true;
+		goto reject;
+	}
+
 	/* PF Fix */
 	if (rrm_req->NumOfRepetitions.repetitions > 0) {
 		pe_info("RX: [802.11 RRM] number of repetitions %d, sending incapable report",
 			rrm_req->NumOfRepetitions.repetitions);
+		req = &rrm_req->MeasurementRequest[0];
+		wlan_diag_log_beacon_rpt_req_event(
+			req->measurement_token,
+			req->measurement_request.Beacon.meas_mode,
+			req->measurement_request.Beacon.regClass,
+			req->measurement_request.Beacon.channel,
+			req->measurement_type,
+			req->measurement_request.Beacon.meas_duration,
+			session_entry);
 		/*
 		 * Send a report with incapable bit set.
 		 * Not supporting repetitions.
@@ -2490,16 +2548,27 @@ rrm_process_radio_measurement_request(struct mac_context *mac_ctx,
 	}
 
 	for (index = 0; index < MAX_MEASUREMENT_REQUEST; index++) {
-		if (mac_ctx->rrm.rrmPEContext.pCurrentReq[index]) {
-			reject = true;
-			pe_debug("RRM req for index: %d is already in progress",
-				 index);
-			break;
-		}
+		if (!mac_ctx->rrm.rrmPEContext.pCurrentReq[index])
+			continue;
+		req = &rrm_req->MeasurementRequest[index];
+		wlan_diag_log_beacon_rpt_req_event(
+				req->measurement_token,
+				req->measurement_request.Beacon.meas_mode,
+				req->measurement_request.Beacon.regClass,
+				req->measurement_request.Beacon.channel,
+				req->measurement_type,
+				req->measurement_request.Beacon.meas_duration,
+				session_entry);
+		reject = true;
+		pe_debug("RRM req for index: %d is already in progress",
+			 index);
+		break;
 	}
 
+reject:
 	if (reject) {
-		for (i = 0; i < rrm_req->num_MeasurementRequest; i++) {
+		for (i = 0; i < rrm_req->num_MeasurementRequest &&
+		     i < MAX_MEASUREMENT_REQUEST; i++) {
 			status =
 			    rrm_reject_req(&report, rrm_req, &num_report, i,
 					   rrm_req->MeasurementRequest[i].
@@ -2522,7 +2591,8 @@ rrm_process_radio_measurement_request(struct mac_context *mac_ctx,
 		     sizeof(uint8_t) * MAX_NUM_CHANNELS);
 	mac_ctx->rrm.rrmPEContext.beacon_rpt_chan_num = 0;
 
-	for (i = 0; i < rrm_req->num_MeasurementRequest; i++) {
+	for (i = 0; i < rrm_req->num_MeasurementRequest &&
+	     i < MAX_MEASUREMENT_REQUEST; i++) {
 		switch (rrm_req->MeasurementRequest[i].measurement_type) {
 		case SIR_MAC_RRM_CHANNEL_LOAD_TYPE:
 			/* Process channel load request */
@@ -2552,6 +2622,12 @@ rrm_process_radio_measurement_request(struct mac_context *mac_ctx,
 		case SIR_MAC_RRM_LCI_TYPE:
 		case SIR_MAC_RRM_LOCATION_CIVIC_TYPE:
 		case SIR_MAC_RRM_FINE_TIME_MEAS_TYPE:
+			lim_send_sme_mgmt_frame_ind(
+				mac_ctx, pHdr->fc.subType, (uint8_t *)pHdr,
+				frame_len + sizeof(tSirMacMgmtHdr), 0,
+				WMA_GET_RX_FREQ(pRxPacketInfo),
+				WMA_GET_RX_RSSI_NORMALIZED(pRxPacketInfo),
+				RXMGMT_FLAG_NONE);
 			pe_debug("RRM with type: %d sent to userspace",
 			    rrm_req->MeasurementRequest[i].measurement_type);
 			break;

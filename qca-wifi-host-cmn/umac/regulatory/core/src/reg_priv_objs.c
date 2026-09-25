@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -34,6 +34,7 @@
 #include "reg_build_chan_list.h"
 #include "reg_host_11d.h"
 #include "reg_callbacks.h"
+#include "wlan_utility.h"
 #ifdef CONFIG_AFC_SUPPORT
 #include <cfg_ucfg_api.h>
 #endif
@@ -127,6 +128,7 @@ QDF_STATUS wlan_regulatory_psoc_obj_created_notification(
 	soc_reg_obj->sta_sap_scc_on_indoor_channel = true;
 	soc_reg_obj->set_fcc_channel = false;
 	soc_reg_obj->p2p_indoor_ch_support = false;
+	soc_reg_obj->disable_unii_1_2a = false;
 
 	for (i = 0; i < MAX_STA_VDEV_CNT; i++)
 		soc_reg_obj->vdev_ids_11d[i] = INVALID_VDEV_ID;
@@ -157,6 +159,7 @@ QDF_STATUS wlan_regulatory_psoc_obj_created_notification(
 	}
 
 	reg_debug("reg psoc obj created with status %d", status);
+	qdf_minidump_log(soc_reg_obj, sizeof(*soc_reg_obj), "psoc_regulatory");
 
 	return status;
 }
@@ -183,6 +186,8 @@ QDF_STATUS wlan_regulatory_psoc_obj_destroyed_notification(
 		reg_err_rl("psoc_priv_obj private obj detach failed");
 
 	reg_debug("reg psoc obj detached");
+	qdf_minidump_remove(psoc_priv_obj, sizeof(*psoc_priv_obj),
+			    "psoc_regulatory");
 
 	qdf_mem_common_free(psoc_priv_obj);
 
@@ -329,6 +334,8 @@ QDF_STATUS wlan_regulatory_pdev_obj_created_notification(
 	parent_psoc = wlan_pdev_get_psoc(pdev);
 	pdev_id = wlan_objmgr_pdev_get_pdev_id(pdev);
 	tx_ops = reg_get_psoc_tx_ops(parent_psoc);
+	if (!tx_ops)
+		return QDF_STATUS_E_FAILURE;
 
 	if (tx_ops->get_phy_id_from_pdev_id)
 		tx_ops->get_phy_id_from_pdev_id(parent_psoc, pdev_id, &phy_id);
@@ -397,6 +404,8 @@ QDF_STATUS wlan_regulatory_pdev_obj_created_notification(
 	reg_init_6g_vars(pdev_priv_obj);
 	pdev_priv_obj->chan_list_recvd =
 		psoc_priv_obj->chan_list_recvd[phy_id];
+	pdev_priv_obj->disable_unii_1_2a =
+		psoc_priv_obj->disable_unii_1_2a;
 
 	status = wlan_objmgr_pdev_component_obj_attach(
 			pdev, WLAN_UMAC_COMP_REGULATORY, pdev_priv_obj,
@@ -425,6 +434,8 @@ QDF_STATUS wlan_regulatory_pdev_obj_created_notification(
 		reg_11d_host_scan_init(parent_psoc);
 
 	reg_debug("reg pdev obj created with status %d", status);
+	wlan_minidump_log(pdev_priv_obj, sizeof(*pdev_priv_obj), parent_psoc,
+			  WLAN_MD_OBJMGR_PDEV_AFC_REG, "pdev_regulatory");
 
 	return status;
 }
@@ -483,6 +494,7 @@ QDF_STATUS wlan_regulatory_pdev_obj_destroyed_notification(
 	struct wlan_regulatory_pdev_priv_obj *pdev_priv_obj;
 	struct wlan_regulatory_psoc_priv_obj *psoc_priv_obj;
 	uint32_t pdev_id;
+	struct wlan_objmgr_psoc *psoc;
 
 	pdev_priv_obj = reg_get_pdev_obj(pdev);
 
@@ -501,6 +513,11 @@ QDF_STATUS wlan_regulatory_pdev_obj_destroyed_notification(
 
 	if (!psoc_priv_obj->is_11d_offloaded)
 		reg_11d_host_scan_deinit(wlan_pdev_get_psoc(pdev));
+
+	psoc = wlan_pdev_get_psoc(pdev);
+	wlan_minidump_remove(pdev_priv_obj, sizeof(*pdev_priv_obj),
+			     psoc, WLAN_MD_OBJMGR_PDEV_AFC_REG,
+			     "pdev_regulatory");
 
 	reg_free_afc_pwr_info(pdev_priv_obj);
 	pdev_priv_obj->pdev_ptr = NULL;

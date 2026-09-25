@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -45,16 +46,18 @@ bool __qdf_trace_dp_rx_tcp_pkt_enabled(void)
  * @srcport: TCP source port
  * @dstport: TCP destination port
  * @latency: latency
+ * @status: Rx status
  *
  * Return: None
  */
 static inline
 void __qdf_trace_dp_rx_tcp_pkt(struct sk_buff *skb, uint32_t tcp_seq_num,
 			       uint32_t tcp_ack_num, uint16_t srcport,
-			       uint16_t dstport, uint64_t latency)
+			       uint16_t dstport, uint64_t latency,
+			       uint8_t status)
 {
 	trace_dp_rx_tcp_pkt(skb, tcp_seq_num, tcp_ack_num, srcport, dstport,
-			    latency);
+			    latency, status);
 }
 
 /**
@@ -77,16 +80,18 @@ bool __qdf_trace_dp_tx_comp_tcp_pkt_enabled(void)
  * @srcport: TCP source port
  * @dstport: TCP destination port
  * @latency: latency
+ * @status: Tx status
  *
  * Return: None
  */
 static inline
 void __qdf_trace_dp_tx_comp_tcp_pkt(struct sk_buff *skb, uint32_t tcp_seq_num,
 				    uint32_t tcp_ack_num, uint16_t srcport,
-				    uint16_t dstport, uint64_t latency)
+				    uint16_t dstport, uint64_t latency,
+				    uint8_t status)
 {
 	trace_dp_tx_comp_tcp_pkt(skb, tcp_seq_num, tcp_ack_num, srcport,
-				 dstport, latency);
+				 dstport, latency, status);
 }
 
 /**
@@ -108,15 +113,16 @@ bool __qdf_trace_dp_rx_udp_pkt_enabled(void)
  * @srcport: UDP source port
  * @dstport: UDP destination port
  * @latency: latency
+ * @status: Rx status
  *
  * Return: None
  */
 static inline
 void __qdf_trace_dp_rx_udp_pkt(struct sk_buff *skb, uint16_t ip_id,
 			       uint16_t srcport, uint16_t dstport,
-			       uint64_t latency)
+			       uint64_t latency, uint8_t status)
 {
-	trace_dp_rx_udp_pkt(skb, ip_id, srcport, dstport, latency);
+	trace_dp_rx_udp_pkt(skb, ip_id, srcport, dstport, latency, status);
 }
 
 /**
@@ -138,15 +144,17 @@ bool __qdf_trace_dp_tx_comp_udp_pkt_enabled(void)
  * @srcport: UDP source port
  * @dstport: UDP destination port
  * @latency: latency
+ * @status: Tx status
  *
  * Return: None
  */
 static inline
 void __qdf_trace_dp_tx_comp_udp_pkt(struct sk_buff *skb, uint16_t ip_id,
 				    uint16_t srcport, uint16_t dstport,
-				    uint64_t latency)
+				    uint64_t latency, uint8_t status)
 {
-	trace_dp_tx_comp_udp_pkt(skb, ip_id, srcport, dstport, latency);
+	trace_dp_tx_comp_udp_pkt(skb, ip_id, srcport, dstport, latency,
+				 status);
 }
 
 /**
@@ -287,6 +295,7 @@ bool __qdf_trace_dp_del_reg_write_enabled(void)
  * @srng_id: srng id
  * @enq_val: enqueue value
  * @deq_val: dequeue value
+ * @sched_time: scheduled time
  * @enq_time: enqueue time
  * @deq_time: dequeue time
  *
@@ -294,11 +303,39 @@ bool __qdf_trace_dp_del_reg_write_enabled(void)
  */
 static inline
 void __qdf_trace_dp_del_reg_write(uint8_t srng_id, uint32_t enq_val,
-				  uint32_t deq_val, uint64_t enq_time,
-				  uint64_t deq_time)
+				  uint32_t deq_val, uint64_t sched_time,
+				  uint64_t enq_time, uint64_t deq_time)
 {
-	trace_dp_del_reg_write(srng_id, enq_val, deq_val, enq_time,
+	trace_dp_del_reg_write(srng_id, enq_val, deq_val, sched_time, enq_time,
 			       deq_time);
+}
+
+/**
+ * __qdf_trace_dp_tx_enqueue_enabled() - Get the dp_tx_enqueue tracepoint
+ *  enabled or disabled state
+ *
+ * Return: True if the tracepoint is enabled else false
+ */
+static inline
+bool __qdf_trace_dp_tx_enqueue_enabled(void)
+{
+	return trace_dp_tx_enqueue_enabled();
+}
+
+/**
+ * __qdf_trace_dp_tx_enqueue() - Trace dp_tx_enqueue
+ * @skb: pointer to network buffer
+ * @hp: head idx
+ * @ring_id: TCL ring id
+ * @coalesce: TCL register write coalescing
+ *
+ * Return: None
+ */
+static inline
+void __qdf_trace_dp_tx_enqueue(struct sk_buff *skb, uint32_t hp,
+			       uint8_t ring_id, int coalesce)
+{
+	trace_dp_tx_enqueue(skb, hp, ring_id, coalesce);
 }
 
 /**
@@ -325,5 +362,39 @@ static inline void
 __qdf_trace_dp_ce_tasklet_sched_latency(uint8_t ce_id, uint64_t sched_latency)
 {
 	trace_dp_ce_tasklet_sched_latency(ce_id, sched_latency);
+}
+
+/**
+ * __qdf_trace_hif_hist_event_enabled() - Get the hif event tracepoint
+ *  enabled or disabled state
+ *
+ * Return: True if the tracepoint is enabled else false
+ */
+static inline
+bool __qdf_trace_hif_hist_event_enabled(void)
+{
+	return trace_hif_hist_event_enabled();
+}
+
+/**
+ * __qdf_trace_hif_hist_event() - Trace hif history event
+ *  latency
+ * @ce: copy engine or not
+ * @hal_ring_id: ring id
+ * @hp: ring hp
+ * @tp: ring tp
+ * @cpu_id: cpu id
+ * @timestamp: time stamp
+ * @type: event type
+ *
+ * Return: None
+ */
+static inline void
+__qdf_trace_hif_hist_event(bool ce, uint8_t hal_ring_id, uint32_t hp,
+			   uint32_t tp, int cpu_id, uint64_t timestamp,
+			   uint8_t type)
+{
+	trace_hif_hist_event(ce, hal_ring_id, hp, tp, cpu_id,
+			     timestamp, type);
 }
 #endif /* _I_QDF_TRACEPOINT_H */

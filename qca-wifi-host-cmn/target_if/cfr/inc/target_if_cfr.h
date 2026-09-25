@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -144,54 +145,6 @@ void target_if_cfr_set_cfr_support(struct wlan_objmgr_psoc *psoc,
 				   uint8_t value);
 
 /**
- * target_if_cfr_set_capture_count_support() - Function to set capture count
- *					       support.
- * @psoc: pointer to psoc object
- * @value: value to be set
- *
- * Return: success/failure
- */
-QDF_STATUS
-target_if_cfr_set_capture_count_support(struct wlan_objmgr_psoc *psoc,
-					uint8_t value);
-
-/**
- * target_if_cfr_set_mo_marking_support() - Function to set MO marking support
- * @psoc: pointer to psoc object
- * @value: value to be set
- *
- * Return: success/failure
- */
-QDF_STATUS
-target_if_cfr_set_mo_marking_support(struct wlan_objmgr_psoc *psoc,
-				     uint8_t value);
-
-/**
- * target_if_cfr_set_aoa_for_rcc_support() - Function to set AoA for RCC
- * @psoc: pointer to psoc object
- * @value: value to be set
- *
- * Return: success/failure
- */
-QDF_STATUS
-target_if_cfr_set_aoa_for_rcc_support(struct wlan_objmgr_psoc *psoc,
-				      uint8_t value);
-
-/**
- * target_if_cfr_info_send() - Function to send cfr info to upper layers
- * @pdev: pointer to pdev object
- * @head: pointer to cfr info head
- * @hlen: head len
- * @data: pointer to cfr info data
- * @dlen: data len
- * @tail: pointer to cfr info tail
- * @tlen: tail len
- */
-void target_if_cfr_info_send(struct wlan_objmgr_pdev *pdev, void *head,
-			     size_t hlen, void *data, size_t dlen, void *tail,
-			     size_t tlen);
-
-/**
  * target_if_cfr_fill_header() - Function to fill cfr header cmn section
  * @hdr: pointer to the csi_cfr_header
  * @is_wifi_2_0: flag to indicate legacy and non legacy radio
@@ -202,4 +155,88 @@ void target_if_cfr_fill_header(struct csi_cfr_header *hdr,
 			       bool is_wifi_2_0,
 			       uint32_t target_type,
 			       bool is_rcc);
+
+/**
+ * target_if_cfr_start_lut_age_timer() - Start timer to flush aged-out LUT
+ * entries
+ * @pdev: pointer to pdev object
+ *
+ * Return: None
+ */
+void target_if_cfr_start_lut_age_timer(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * target_if_cfr_stop_lut_age_timer() - Stop timer to flush aged-out LUT
+ * entries
+ * @pdev: pointer to pdev object
+ *
+ * Return: None
+ */
+void target_if_cfr_stop_lut_age_timer(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * cfr_free_pending_dbr_events() - Flush all pending DBR events. This is useful
+ * in cases where for RXTLV drops in host monitor status ring is huge.
+ * @pdev: objmgr pdev
+ *
+ * return: none
+ */
+void cfr_free_pending_dbr_events(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * get_lut_entry() - Retrieve LUT entry using cookie number
+ * @pcfr: PDEV CFR object
+ * @offset: cookie number
+ *
+ * Return: look up table entry
+ */
+struct look_up_table *get_lut_entry(struct pdev_cfr *pcfr,
+				    int offset);
+
+/**
+ * release_lut_entry() - Clear all params in an LUT entry
+ * @pdev: objmgr PDEV
+ * @lut: pointer to LUT
+ *
+ * Return: None
+ */
+void release_lut_entry(struct wlan_objmgr_pdev *pdev,
+		       struct look_up_table *lut);
+
+/*
+ * lut_ageout_timer_task() - Timer to flush pending TXRX/DBR events
+ *
+ * Return: none
+ * NB: kernel-doc script doesn't parse os_timer_func
+
+ */
+os_timer_func(lut_ageout_timer_task);
+
+/**
+ * target_if_cfr_start_report_interval_timer() - Start timer to send
+ * last report entries
+ * @pdev: pointer to pdev object
+ *
+ * Return: None
+ */
+void target_if_cfr_start_report_interval_timer(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * target_if_cfr_stop_report_interval_timer() - Stop timer to send last data
+ * entries
+ * @pdev: pointer to pdev object
+ *
+ * Return: None
+ */
+void target_if_cfr_stop_report_interval_timer(struct wlan_objmgr_pdev *pdev);
+
+/*
+ * cfr_report_interval_timer_task() - Timer to send report to userspace
+ *
+ * Return: none
+ * NB: kernel-doc script doesn't parse os_timer_func
+
+ */
+os_timer_func(cfr_report_interval_timer_task);
+
 #endif

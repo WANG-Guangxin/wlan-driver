@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -306,7 +306,8 @@ static void ce_fastpath_rx_handle(struct CE_state *ce_state,
 	uint32_t write_index;
 
 	qdf_spin_unlock(&ce_state->ce_index_lock);
-	ce_state->fastpath_handler(ce_state->context,	cmpl_msdus, num_cmpls);
+	ce_state->fastpath_handler(ce_state->context, cmpl_msdus,
+				   num_cmpls, ce_state->id);
 	qdf_spin_lock(&ce_state->ce_index_lock);
 
 	/* Update Destination Ring Write Index */
@@ -485,7 +486,7 @@ more_data:
 			hif_err("Potential infinite loop detected during Rx processing nentries_mask:0x%x sw read_idx:0x%x hw read_idx:0x%x",
 				  nentries_mask,
 				  ce_state->dest_ring->sw_index,
-				  CE_DEST_RING_READ_IDX_GET(scn, ctrl_addr));
+				  (uint32_t)CE_DEST_RING_READ_IDX_GET(scn, ctrl_addr));
 		}
 	}
 #ifdef NAPI_YIELD_BUDGET_BASED
@@ -853,6 +854,8 @@ ce_completed_recv_next_nolock_legacy(struct CE_state *CE_state,
 	*transfer_idp = dest_desc_info.meta_data;
 	*flagsp = (dest_desc_info.byte_swap) ? CE_RECV_FLAG_SWAPPED : 0;
 
+	qdf_mem_zero(dest_desc, sizeof(struct CE_dest_desc));
+
 	if (per_CE_contextp)
 		*per_CE_contextp = CE_state->recv_context;
 
@@ -949,6 +952,7 @@ ce_completed_send_next_nolock_legacy(struct CE_state *CE_state,
 	unsigned int sw_index = src_ring->sw_index;
 	unsigned int read_index;
 	struct hif_softc *scn = CE_state->scn;
+	void *ctx = NULL;
 
 	if (src_ring->hw_index == sw_index) {
 		/*
@@ -994,6 +998,12 @@ ce_completed_send_next_nolock_legacy(struct CE_state *CE_state,
 		*bufferp = HIF_CE_DESC_ADDR_TO_DMA(shadow_src_desc);
 		*nbytesp = shadow_src_desc->nbytes;
 		*transfer_idp = shadow_src_desc->meta_data;
+
+		if (CE_state->id == CE_ID_3) {
+			ctx = src_ring->per_transfer_context[sw_index];
+			hif_ce_tx_desc_data_record(scn, *bufferp,
+						   (qdf_nbuf_t)ctx);
+		}
 #ifdef QCA_WIFI_3_0
 		*toeplitz_hash_result = src_desc->toeplitz_hash_result;
 #else

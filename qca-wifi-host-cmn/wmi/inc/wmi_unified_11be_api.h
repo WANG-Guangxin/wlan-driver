@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -99,6 +99,20 @@ QDF_STATUS wmi_extract_mlo_link_removal_evt_fixed_param(
 		struct wmi_unified *wmi_handle,
 		void *buf,
 		struct mlo_link_removal_evt_params *params);
+
+/**
+ * wmi_extract_mlo_3_link_tlt_selection_fixed_param() - Extract fixed
+ * parameters TLV from the MLO 3 link tlt selection WMI  event
+ * @wmi_handle: wmi handle
+ * @buf: pointer to event buffer
+ * @params: MLO 3 link tlt selection event parameters
+ *
+ * Return: QDF_STATUS_SUCCESS of operation
+ */
+QDF_STATUS wmi_extract_mlo_3_link_tlt_selection_fixed_param(
+		struct wmi_unified *wmi_handle,
+		void *buf,
+		struct mlo_tlt_selection_evt_params *params);
 
 /**
  * wmi_extract_mlo_link_removal_tbtt_update() - Extract TBTT update TLV
@@ -215,6 +229,17 @@ QDF_STATUS wmi_extract_mlo_link_state_info_event(
 
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
 /**
+ * wmi_send_link_reconfig_req_cmd - send link reconfig command to FW
+ * @wmi: wmi handler
+ * @params: reconfig req param
+ *
+ * Return: QDF status
+ */
+QDF_STATUS wmi_send_link_reconfig_req_cmd(
+			wmi_unified_t wmi,
+			struct wmi_link_reconfig_req_params *params);
+
+/**
  * wmi_send_mlo_link_switch_req_cnf_cmd() - Send WMI command to FW on
  * status of Link switch request received.
  * @wmi: wmi handle
@@ -238,6 +263,48 @@ wmi_send_mlo_link_switch_req_cnf_cmd(wmi_unified_t wmi,
 QDF_STATUS
 wmi_extract_mlo_link_switch_request_evt(struct wmi_unified *wmi, void *buf,
 					struct wlan_mlo_link_switch_req *req);
+
+/**
+ * wmi_send_mlo_link_recfg_complete_cmd() - Send link recfg complete wmi
+ * command
+ * @wmi: wmi handle
+ * @params: link recfg complete params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_send_mlo_link_recfg_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_link_recfg_complete_params *params);
+
+/**
+ * wmi_send_mlo_ttlm_complete_cmd() - Send TTLM complete wmi
+ * command
+ * @wmi: wmi handle
+ * @params: TTLM complete params
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_send_mlo_ttlm_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_ttlm_complete_params *params);
+
+/**
+ * wmi_extract_mlo_link_recfg_indication_evt() - Extract params TLV
+ * from the MLO link recfg indication WMI event.
+ * @wmi: wmi handle
+ * @buf: pointer to event buffer
+ * @len: length of wmi event
+ * @info: link add/del information of link recfg indication event
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wmi_extract_mlo_link_recfg_indication_evt(
+				wmi_unified_t wmi,
+				void *buf, uint8_t len,
+				struct wlan_mlo_link_recfg_ind_param *info);
 #else
 static inline QDF_STATUS
 wmi_send_mlo_link_switch_req_cnf_cmd(wmi_unified_t wmi,
@@ -249,6 +316,38 @@ wmi_send_mlo_link_switch_req_cnf_cmd(wmi_unified_t wmi,
 static inline QDF_STATUS
 wmi_extract_mlo_link_switch_request_evt(struct wmi_unified *wmi, void *buf,
 					struct wlan_mlo_link_switch_req *req)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+wmi_send_mlo_link_recfg_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_link_recfg_complete_params *params)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+wmi_send_mlo_ttlm_complete_cmd(
+			wmi_unified_t wmi,
+			struct wlan_mlo_ttlm_complete_params *params)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
+wmi_extract_mlo_link_recfg_indication_evt(
+				wmi_unified_t wmi,
+				void *buf, uint8_t len,
+				struct wlan_mlo_link_recfg_ind_param *info)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS wmi_send_link_reconfig_req_cmd(
+			wmi_unified_t wmi,
+			struct wmi_link_reconfig_req_params *params)
 {
 	return QDF_STATUS_SUCCESS;
 }

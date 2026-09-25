@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -56,6 +56,12 @@
 #include "wlan_crypto_def_i.h"
 #include "wlan_crypto_global_api.h"
 #include "wlan_cm_bss_score_param.h"
+#include "wlan_mlme_api.h"
+#include <wlan_action_oui_main.h>
+#include <wlan_mlo_mgr_sta.h>
+#include "wlan_serialization_api.h"
+#include <wlan_cm_api.h>
+#include <wlan_mlo_mgr_link_switch.h>
 
 #ifdef FEATURE_6G_SCAN_CHAN_SORT_ALGO
 
@@ -133,9 +139,14 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 	struct scan_rnr_node *rnr_node;
 	struct wlan_country_ie *cc_ie;
 	struct wlan_objmgr_psoc *psoc;
+	struct wlan_scan_obj *scan_obj;
 
 	psoc = wlan_pdev_get_psoc(pdev);
 	if (!psoc)
+		return;
+
+	scan_obj = wlan_psoc_get_scan_obj(psoc);
+	if (!scan_obj)
 		return;
 
 	chan_freq = entry->channel.chan_freq;
@@ -145,16 +156,17 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 	if (!(is_6g_bss || entry->ie_list.rnrie))
 		return;
 
-	scm_debug("BSS freq %d BSSID: "QDF_MAC_ADDR_FMT, chan_freq,
-		  QDF_MAC_ADDR_REF(entry->bssid.bytes));
 	if (is_6g_bss) {
+		qdf_mutex_acquire(&scan_obj->rnr_channel_db.rnr_db_lock);
 		channel = scm_get_chan_meta(psoc, chan_freq);
 		if (!channel) {
-			scm_debug("Failed to get chan Meta freq %d", chan_freq);
+			qdf_mutex_release(
+				&scan_obj->rnr_channel_db.rnr_db_lock);
 			return;
 		}
 		channel->bss_beacon_probe_count++;
 		channel->beacon_probe_last_time_found = entry->scan_entry_time;
+		qdf_mutex_release(&scan_obj->rnr_channel_db.rnr_db_lock);
 	}
 
 	/*
@@ -170,6 +182,7 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 	else
 		cc = NULL;
 
+	qdf_mutex_acquire(&scan_obj->rnr_channel_db.rnr_db_lock);
 	for (i = 0; i < MAX_RNR_BSS; i++) {
 		rnr_bss = &entry->rnr.bss_info[i];
 		/* Skip if entry is not valid */
@@ -180,18 +193,31 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 			wlan_reg_chan_opclass_to_freq_prefer_global(pdev, cc,
 								    rnr_bss->channel_number,
 								    rnr_bss->operating_class);
+		if (!chan_freq)
+			scm_debug_rl("Invalid op_class %d",
+				     rnr_bss->operating_class);
 
 		channel = scm_get_chan_meta(psoc, chan_freq);
-		if (!channel) {
-			scm_debug("Failed to get chan Meta freq %d", chan_freq);
+		if (!channel)
 			continue;
-		}
+
 		channel->bss_beacon_probe_count++;
 
 		/* Skip non Tx MBSSID profile */
 		if (QDF_GET_BITS(rnr_bss->bss_params, 2, 2) == 0x1) {
-			scm_debug("skip nontx freq %d: " QDF_MAC_ADDR_FMT " short ssid %x",
-				  chan_freq,
+			scm_debug(QDF_MAC_ADDR_FMT "(freq %d): skip nontx freq %d " QDF_MAC_ADDR_FMT " short ssid %x",
+				  QDF_MAC_ADDR_REF(entry->bssid.bytes),
+				  entry->channel.chan_freq, chan_freq,
+				  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
+				  rnr_bss->short_ssid);
+			continue;
+		}
+
+		if (scm_is_rnr_present(channel, &rnr_bss->bssid,
+				       rnr_bss->short_ssid)) {
+			scm_debug(QDF_MAC_ADDR_FMT "(freq %d): skip dup freq %d " QDF_MAC_ADDR_FMT " short ssid %x",
+				  QDF_MAC_ADDR_REF(entry->bssid.bytes),
+				  entry->channel.chan_freq, chan_freq,
 				  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
 				  rnr_bss->short_ssid);
 			continue;
@@ -199,20 +225,15 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 
 		/* Don't add RNR entry if list is full */
 		if (qdf_list_size(&channel->rnr_list) >= WLAN_MAX_RNR_COUNT) {
-			scm_debug("List is full");
-			return;
-		}
-		if (scm_is_rnr_present(channel, &rnr_bss->bssid,
-				       rnr_bss->short_ssid)) {
-			scm_debug("skip dup freq %d: "QDF_MAC_ADDR_FMT" short ssid %x",
-				  chan_freq,
-				  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
-				  rnr_bss->short_ssid);
-			continue;
+			scm_debug(QDF_MAC_ADDR_FMT "(freq %d): List is full, skip",
+				  QDF_MAC_ADDR_REF(entry->bssid.bytes),
+				  entry->channel.chan_freq);
+			goto rel_lock;
 		}
 		rnr_node = qdf_mem_malloc(sizeof(struct scan_rnr_node));
 		if (!rnr_node)
-			return;
+			goto rel_lock;
+
 		rnr_node->entry.timestamp = entry->scan_entry_time;
 		if (!qdf_is_macaddr_zero(&rnr_bss->bssid))
 			qdf_mem_copy(&rnr_node->entry.bssid,
@@ -222,12 +243,17 @@ static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
 			rnr_node->entry.short_ssid = rnr_bss->short_ssid;
 		if (rnr_bss->bss_params)
 			rnr_node->entry.bss_params = rnr_bss->bss_params;
-		scm_debug("Add freq %d: "QDF_MAC_ADDR_FMT" short ssid %x", chan_freq,
-			  QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
+		scm_debug(QDF_MAC_ADDR_FMT "(freq %d): Add freq %d " QDF_MAC_ADDR_FMT " short ssid %x",
+			  QDF_MAC_ADDR_REF(entry->bssid.bytes),
+			  entry->channel.chan_freq,
+			  chan_freq, QDF_MAC_ADDR_REF(rnr_bss->bssid.bytes),
 			  rnr_bss->short_ssid);
 		qdf_list_insert_back(&channel->rnr_list,
 				     &rnr_node->node);
 	}
+
+rel_lock:
+	qdf_mutex_release(&scan_obj->rnr_channel_db.rnr_db_lock);
 }
 
 void scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
@@ -261,6 +287,7 @@ void scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
 	    scan_mode == SCAN_MODE_6G_ALL_DUTY_CYCLE)
 		return;
 
+	qdf_mutex_acquire(&scan_obj->rnr_channel_db.rnr_db_lock);
 	for (i = 0; i < pno_chan_list->num_chan; i++) {
 		freq = pno_chan_list->chan[i].freq;
 
@@ -283,6 +310,7 @@ void scm_filter_rnr_flag_pno(struct wlan_objmgr_vdev *vdev,
 			}
 		}
 	}
+	qdf_mutex_release(&scan_obj->rnr_channel_db.rnr_db_lock);
 }
 #else
 static void scm_add_rnr_channel_db(struct wlan_objmgr_pdev *pdev,
@@ -787,6 +815,8 @@ scm_copy_info_from_dup_entry(struct wlan_objmgr_pdev *pdev,
 {
 	struct scan_cache_entry *scan_entry;
 	uint64_t time_gap;
+	uint8_t *he_ops;
+	struct he_oper_6g_param *he_6g_params;
 
 	scan_entry = scan_node->entry;
 
@@ -869,6 +899,32 @@ scm_copy_info_from_dup_entry(struct wlan_objmgr_pdev *pdev,
 		scan_params->channel_mismatch = true;
 	}
 
+	/*
+	 * An AP that is transmitting Beacon frame as non-HT DUP PPDU, will be
+	 * transmitting the Beacon across the BW on the AP.
+	 * Case where duplicate beacon is received on a different channel can
+	 * have fluctuation in RSSI values. Considering best RSSI in this case.
+	 * Check RSSI reported in the scan result and mark mismatch if RSSI
+	 * reported is lower than RSSI stored in scan entry for the same BSS.
+	 * This is done considering this scan result is because of leaked signal
+	 */
+	if ((scan_params->frm_subtype == MGMT_SUBTYPE_BEACON ||
+	     scan_params->frm_subtype == MGMT_SUBTYPE_PROBE_RESP) &&
+	     (scan_params->recv_freq !=
+	      scan_entry->channel.chan_freq) &&
+	     (time_gap < WLAN_RSSI_AVERAGING_TIME)) {
+		he_ops = util_scan_entry_heop(scan_params);
+		if (he_ops) {
+			he_6g_params = util_scan_get_he_6g_params(he_ops);
+			if (he_6g_params && he_6g_params->duplicate_beacon &&
+			    (scan_params->rssi_raw < scan_entry->rssi_raw)) {
+				scan_params->channel.chan_freq =
+					scan_entry->channel.chan_freq;
+				scan_params->channel_mismatch = true;
+			}
+		}
+	}
+
 	/* Use old value for rssi if beacon was heard on adjacent channel. */
 	if (scan_params->channel_mismatch) {
 		scan_params->snr = scan_entry->snr;
@@ -909,6 +965,15 @@ scm_copy_info_from_dup_entry(struct wlan_objmgr_pdev *pdev,
 
 	/* copy mlme info from scan_entry to scan_params*/
 	scm_update_mlme_info(scan_entry, scan_params);
+
+	/*
+	 * Do not inherit if the new entry is generated.
+	 * Inherit for all other cases, the flag would be
+	 * reset in scm_add_update_entry(), if the new
+	 * entry is not generated.
+	 */
+	if (!scan_params->is_gen_entry)
+		scan_params->is_gen_entry = scan_entry->is_gen_entry;
 }
 
 /**
@@ -962,45 +1027,10 @@ scm_find_duplicate(struct wlan_objmgr_pdev *pdev,
 
 /*
  * Buffer len size to add the dynamic scan frame debug info
- * 7 (pdev id) + 21 (security info) + 8 (hidden info) + 15 (chan mismatch) +
+ * 7 (pdev id) + 27 (security info) + 8 (hidden info) + 15 (chan mismatch) +
  * 8 (CSA IE info) + 31 (ML info) + 5 extra
  */
-#define SCAN_DUMP_MAX_LEN 95
-
-#ifdef WLAN_FEATURE_11BE_MLO
-/**
- * scm_dump_ml_scan_info(): Dump ml scan info
- * @scan_params: new received entry
- * @log_str: Buffer pointer
- * @str_len: max string length
- * @len: already filled length in buffer
- *
- * Return: length filled in buffer
- */
-static uint32_t scm_dump_ml_scan_info(struct scan_cache_entry *scan_params,
-				      char *log_str, uint32_t str_len,
-				      uint32_t len)
-{
-	/* Scenario: When both STA and AP support ML then
-	 * Driver will fill ml_info structure and print the MLD address and no.
-	 * of links.
-	 */
-	if (qdf_is_macaddr_zero(&scan_params->ml_info.mld_mac_addr))
-		return 0;
-
-	return qdf_scnprintf(log_str + len, str_len - len,
-		", MLD " QDF_MAC_ADDR_FMT " links %d",
-		QDF_MAC_ADDR_REF(scan_params->ml_info.mld_mac_addr.bytes),
-		scan_params->ml_info.num_links);
-}
-#else
-static uint32_t scm_dump_ml_scan_info(struct scan_cache_entry *scan_params,
-				      char *log_str, uint32_t str_len,
-				      uint32_t len)
-{
-	return 0;
-}
-#endif
+#define SCAN_DUMP_MAX_LEN 101
 
 static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
 				struct scan_cache_entry *scan_params)
@@ -1020,7 +1050,7 @@ static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
 	security_type = scan_params->security_type;
 	if (security_type)
 		len += qdf_scnprintf(log_str + len, str_len - len,
-				     "%s%s%s%s",
+				     "%s%s%s%s%s",
 				     security_type & SCAN_SECURITY_TYPE_WPA ?
 				     "[WPA]" : "",
 				     security_type & SCAN_SECURITY_TYPE_RSN ?
@@ -1028,7 +1058,9 @@ static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
 				     security_type & SCAN_SECURITY_TYPE_WAPI ?
 				     "[WAPI]" : "",
 				     security_type & SCAN_SECURITY_TYPE_WEP ?
-				     "[WEP]" : "");
+				     "[WEP]" : "",
+				     security_type & SCAN_SECURITY_TYPE_RSNO ?
+				     "[RSNO]" : "");
 
 	/* Add hidden info if present */
 	if (scan_params->is_hidden_ssid)
@@ -1046,9 +1078,9 @@ static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
 		len += qdf_scnprintf(log_str + len, str_len - len, "[CSA IE]");
 
 	/* Add ML info */
-	len += scm_dump_ml_scan_info(scan_params, log_str, str_len, len);
+	len += util_scan_get_ml_info(scan_params, log_str, str_len, len);
 
-	scm_nofl_debug("Rcvd %s(%d): " QDF_MAC_ADDR_FMT " \"" QDF_SSID_FMT "\" freq %d rssi %d tsf %u seq %d snr %d phy %d %s",
+	scm_nofl_debug("Rcvd %s(%d): " QDF_MAC_ADDR_FMT " \"" QDF_SSID_FMT "\" freq %d rssi %d tsf %u seq %d snr %d phy %d gen %d %s",
 		       (scan_params->frm_subtype == MGMT_SUBTYPE_PROBE_RESP) ?
 		       "prb rsp" : "bcn", scan_params->raw_frame.len,
 		       QDF_MAC_ADDR_REF(scan_params->bssid.bytes),
@@ -1056,7 +1088,8 @@ static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
 				    scan_params->ssid.ssid),
 		       scan_params->channel.chan_freq, scan_params->rssi_raw,
 		       scan_params->tsf_delta, scan_params->seq_num,
-		       scan_params->snr, scan_params->phy_mode, log_str);
+		       scan_params->snr, scan_params->phy_mode,
+		       scan_params->is_gen_entry, log_str);
 }
 
 /**
@@ -1064,11 +1097,13 @@ static void scm_dump_scan_entry(struct wlan_objmgr_pdev *pdev,
  * @psoc: psoc ptr
  * @pdev: pdev pointer
  * @scan_params: new received entry
+ * @is_gen_entry: Generated scan entry
  *
  * Return: QDF_STATUS
  */
 static QDF_STATUS scm_add_update_entry(struct wlan_objmgr_psoc *psoc,
-	struct wlan_objmgr_pdev *pdev, struct scan_cache_entry *scan_params)
+	struct wlan_objmgr_pdev *pdev, struct scan_cache_entry *scan_params,
+	bool is_gen_entry)
 {
 	struct scan_cache_node *dup_node = NULL;
 	struct scan_cache_node *scan_node = NULL;
@@ -1096,6 +1131,19 @@ static QDF_STATUS scm_add_update_entry(struct wlan_objmgr_psoc *psoc,
 
 	is_dup_found = scm_find_duplicate(pdev, scan_obj, scan_db, scan_params,
 					  &dup_node);
+
+	/*
+	 * Dupe entry is_gen |  New entry is_gen | Final
+	 *	0			0	    0
+	 *	0			1	    0
+	 *	1			0	    0
+	 *	1			1	    1
+	 *
+	 * For second case, mark the final entry as not generated
+	 * since atleast one actual scan entry was present.
+	 */
+	if (!is_gen_entry || !is_dup_found)
+		scan_params->is_gen_entry = is_gen_entry;
 
 	scm_dump_scan_entry(pdev, scan_params);
 
@@ -1134,41 +1182,46 @@ static QDF_STATUS scm_add_update_entry(struct wlan_objmgr_psoc *psoc,
 	return QDF_STATUS_SUCCESS;
 }
 
-#ifdef CONFIG_REG_CLIENT
 /**
- * scm_is_bss_allowed_for_country() - Check if bss is allowed to start for a
- * specific country and power mode (VLP?LPI/SP) for 6GHz.
+ * scm_skip_bcn_ch_mismatch_check_by_oui() - check chan mismatch beacon
+ * frame drop or not based on OUI config
  * @psoc: psoc ptr
- * @scan_entry: ptr to scan entry
+ * @scan_entry: scan entry
+ * @bcn: beacon frame info
  *
- * Return: True if allowed, False if not.
+ * For some IOT APs, they are always switching channel for STA to scan and
+ * find it, but not connecting to it. But such behaviour APs, don't drop
+ * the beacon if channel mismatching.
+ *
+ * Return: QDF_STATUS
  */
-static bool scm_is_bss_allowed_for_country(struct wlan_objmgr_psoc *psoc,
-					   struct scan_cache_entry *scan_entry)
+static bool scm_skip_bcn_ch_mismatch_check_by_oui(
+			struct wlan_objmgr_psoc *psoc,
+			struct scan_cache_entry *scan_entry,
+			struct scan_bcn_probe_event *bcn)
 {
-	struct wlan_country_ie *cc_ie;
-	uint8_t programmed_country[REG_ALPHA2_LEN + 1];
+	struct action_oui_search_attr attr;
 
-	if (wlan_reg_is_6ghz_chan_freq(scan_entry->channel.chan_freq)) {
-		cc_ie = util_scan_entry_country(scan_entry);
-		if (!cc_ie)
-			return false;
-		wlan_reg_read_current_country(psoc, programmed_country);
-		if (cc_ie && qdf_mem_cmp(cc_ie->cc, programmed_country,
-					 REG_ALPHA2_LEN)) {
-			if (wlan_reg_is_us(programmed_country))
-				return false;
-		}
-	}
+	qdf_mem_zero(&attr, sizeof(attr));
+	attr.ie_data = util_scan_entry_ie_data(scan_entry);
+	attr.ie_length = util_scan_entry_ie_len(scan_entry);
+	attr.mac_addr = scan_entry->bssid.bytes;
+
+	if (!wlan_action_oui_search(psoc, &attr,
+				    ACTION_OUI_SKIP_BCN_CH_MISMATCH_CHK))
+		return false;
+
+	scm_nofl_debug(QDF_MAC_ADDR_FMT ": frame(%d) chan mismatch no-drop by oui, seq %d frame freq %d rx data freq %d RSSI %d",
+		       QDF_MAC_ADDR_REF(
+		       scan_entry->bssid.bytes),
+		       bcn->frm_type,
+		       scan_entry->seq_num,
+		       scan_entry->channel.chan_freq,
+		       bcn->rx_data->chan_freq,
+		       scan_entry->rssi_raw);
+
 	return true;
 }
-#else
-static bool scm_is_bss_allowed_for_country(struct wlan_objmgr_psoc *psoc,
-					   struct scan_cache_entry *scan_entry)
-{
-	return true;
-}
-#endif
 
 /**
  * scm_is_p2p_wildcard_ssid() - check p2p wildcard ssid or not
@@ -1191,6 +1244,153 @@ static bool scm_is_p2p_wildcard_ssid(struct scan_cache_entry *scan_entry)
 	return false;
 }
 
+#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
+/**
+ * struct scm_assoc_state_update_arg - Argument for targeted assoc_state update
+ * @bssid: BSSID of the new beacon/probe response to match
+ * @freq: channel frequency of the new beacon to match
+ * @found: set to true once a matching link is found and updated
+ */
+struct scm_assoc_state_update_arg {
+	struct qdf_mac_addr bssid;
+	qdf_freq_t freq;
+	bool found;
+};
+
+/**
+ * scm_check_and_update_non_mlo_assoc_state() - Update assoc_state for
+ *                                               non-MLO connected STA
+ * @pdev: pdev pointer
+ * @vdev: vdev pointer
+ * @update_arg: BSSID/freq to match against connected BSSID
+ *
+ * For non-MLO STA vdevs, checks if the connected BSSID/freq matches the
+ * beacon's BSSID/freq in @update_arg. If matched, updates the scan entry
+ * assoc_state to SCAN_ENTRY_CON_STATE_ASSOC.
+ */
+static void
+scm_check_and_update_non_mlo_assoc_state(
+				struct wlan_objmgr_pdev *pdev,
+				struct wlan_objmgr_vdev *vdev,
+				struct scm_assoc_state_update_arg *update_arg)
+{
+	struct qdf_mac_addr connected_bssid;
+	struct wlan_channel *chan;
+	struct wlan_ssid ssid;
+
+	if (!ucfg_cm_is_vdev_active(vdev))
+		return;
+
+	if (QDF_IS_STATUS_ERROR(wlan_vdev_get_bss_peer_mac(vdev,
+							   &connected_bssid)))
+		return;
+
+	if (!qdf_is_macaddr_equal(&connected_bssid, &update_arg->bssid))
+		return;
+
+	chan = wlan_vdev_get_active_channel(vdev);
+	if (!chan || chan->ch_freq != update_arg->freq)
+		return;
+
+	wlan_vdev_mlme_get_ssid(vdev, ssid.ssid, &ssid.length);
+	/* update the scan entry assoc_state */
+	scm_update_assoc_state_con_for_bss(pdev, &update_arg->bssid,
+					   &ssid, update_arg->freq);
+	update_arg->found = true;
+}
+
+/**
+ * scm_check_and_update_assoc_state() - pdev vdev-iterate handler for targeted
+ *                                       assoc_state update
+ * @pdev: pdev pointer
+ * @obj: vdev object
+ * @arg: pointer to scm_assoc_state_update_arg
+ *
+ * For each vdev, checks if the BSSID/freq in @arg matches any MLO link.
+ * If matched, updates only that link's scan entry assoc_state to
+ * SCAN_ENTRY_CON_STATE_ASSOC and sets found = true to stop further iteration.
+ * For non-MLO vdevs, delegates to scm_check_and_update_non_mlo_assoc_state().
+ */
+static void
+scm_check_and_update_assoc_state(struct wlan_objmgr_pdev *pdev,
+				 void *obj, void *arg)
+{
+	struct wlan_objmgr_vdev *vdev = (struct wlan_objmgr_vdev *)obj;
+	struct scm_assoc_state_update_arg *update_arg =
+		(struct scm_assoc_state_update_arg *)arg;
+	struct mlo_link_info *link_info;
+	uint8_t link_info_iter;
+	struct wlan_ssid ssid;
+
+	/* if vdev is not STA/CLI return */
+	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_STA_MODE &&
+	    wlan_vdev_mlme_get_opmode(vdev) != QDF_P2P_CLIENT_MODE)
+		return;
+
+	/* Stop once a match has been found and updated */
+	if (update_arg->found)
+		return;
+
+	/* mlo_mgr_get_ap_link returns NULL for non-MLO vdevs */
+	link_info = mlo_mgr_get_ap_link(vdev);
+	if (!link_info) {
+		scm_check_and_update_non_mlo_assoc_state(pdev, vdev,
+							 update_arg);
+		return;
+	}
+
+	for (link_info_iter = 0; link_info_iter < WLAN_MAX_ML_BSS_LINKS;
+			link_info_iter++, link_info++) {
+		if (qdf_is_macaddr_zero(&link_info->ap_link_addr))
+			continue;
+		if (qdf_is_macaddr_equal(&link_info->ap_link_addr,
+					 &update_arg->bssid) &&
+					 link_info->link_chan_info->ch_freq ==
+					 update_arg->freq) {
+			wlan_vdev_mlme_get_ssid(vdev, ssid.ssid, &ssid.length);
+			/* update the scan entry assoc_state */
+			scm_update_assoc_state_con_for_bss(pdev,
+							   &update_arg->bssid,
+							   &ssid,
+							   update_arg->freq);
+			update_arg->found = true;
+			break;
+		}
+	}
+}
+
+/**
+ * scm_update_assoc_state_for_new_beacon() - Update assoc_state for the
+ *                                            specific new beacon's BSSID
+ * @pdev: pdev pointer
+ * @scan_entry: newly added scan entry
+ *
+ * Loop vdev to check if this bssid is present in connected/link or not.
+ * If yes then update the scan entry assoc_state to
+ * SCAN_ENTRY_CON_STATE_ASSOC.
+ */
+static void
+scm_update_assoc_state_for_new_beacon(struct wlan_objmgr_pdev *pdev,
+				      struct scan_cache_entry *scan_entry)
+{
+	struct scm_assoc_state_update_arg update_arg;
+
+	qdf_copy_macaddr(&update_arg.bssid, &scan_entry->bssid);
+	update_arg.freq = scan_entry->channel.chan_freq;
+	update_arg.found = false;
+
+	wlan_objmgr_pdev_iterate_obj_list(pdev, WLAN_VDEV_OP,
+					  scm_check_and_update_assoc_state,
+					  &update_arg, 0, WLAN_SCAN_ID);
+}
+#else
+static inline void
+scm_update_assoc_state_for_new_beacon(struct wlan_objmgr_pdev *pdev,
+				      struct scan_cache_entry *scan_entry)
+{
+}
+#endif
+
 QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 {
 	struct wlan_objmgr_psoc *psoc;
@@ -1204,6 +1404,8 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 	struct scan_cache_node *scan_node;
 	struct wlan_frame_hdr *hdr = NULL;
 	struct wlan_crypto_params sec_params;
+	enum reg_6g_ap_type power_type_6g;
+	struct scan_mbssid_info *mbssid_info;
 
 	if (!bcn) {
 		scm_err("bcn is NULL");
@@ -1275,8 +1477,21 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 
 		scan_entry = scan_node->entry;
 
+		if (wlan_reg_is_6ghz_chan_freq(scan_entry->channel.chan_freq) &&
+		    (!scan_entry->ie_list.hecap || !scan_entry->ie_list.heop)) {
+			scm_nofl_debug(QDF_MAC_ADDR_FMT ": Drop frame(%d) as HE cap or HE op not present for 6GHz(%d)",
+				  QDF_MAC_ADDR_REF(
+				  scan_entry->bssid.bytes),
+				  bcn->frm_type,
+				  scan_entry->channel.chan_freq);
+			util_scan_free_cache_entry(scan_entry);
+			qdf_mem_free(scan_node);
+			continue;
+		}
 		if (scan_obj->drop_bcn_on_chan_mismatch &&
-		    scan_entry->channel_mismatch) {
+		    scan_entry->channel_mismatch &&
+		    !scm_skip_bcn_ch_mismatch_check_by_oui(psoc, scan_entry,
+							   bcn)) {
 			scm_nofl_debug(QDF_MAC_ADDR_FMT ": Drop frame(%d) for chan mismatch, seq %d frame freq %d rx data freq %d RSSI %d",
 				       QDF_MAC_ADDR_REF(
 				       scan_entry->bssid.bytes),
@@ -1306,9 +1521,8 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 			continue;
 		}
 		if (util_scan_entry_rsn(scan_entry)) {
-			status = wlan_crypto_rsnie_check(
-					&sec_params,
-					util_scan_entry_rsn(scan_entry));
+			status = util_scan_is_valid_rsn_present(scan_entry,
+								&sec_params);
 			if (QDF_IS_STATUS_ERROR(status) &&
 			    !scm_is_p2p_wildcard_ssid(scan_entry)) {
 				scm_nofl_debug(QDF_MAC_ADDR_FMT ": Drop frame(%d) with invalid RSN IE freq %d, parse status %d",
@@ -1334,8 +1548,8 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 				qdf_mem_free(scan_node);
 				continue;
 			}
-			status = wlan_crypto_rsnie_check(&sec_params,
-					util_scan_entry_rsn(scan_entry));
+			status = util_scan_is_valid_rsn_present(scan_entry,
+								&sec_params);
 			if (QDF_IS_STATUS_ERROR(status)) {
 				scm_info_rl(QDF_MAC_ADDR_FMT ": Drop frame(%d) with invalid RSN IE in 6GHz(%d), parse status %d",
 					    QDF_MAC_ADDR_REF(
@@ -1382,29 +1596,37 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 			}
 		}
 
+		mbssid_info = &scan_entry->mbssid_info;
+		if (!qdf_is_macaddr_zero(
+			(struct qdf_mac_addr *)&mbssid_info->non_trans_bssid)) {
+			scan_entry->is_gen_entry = 1;
+			bcn->is_gen_entry = 1;
+		}
+
 		scan_entry->non_intersected_phymode = scan_entry->phy_mode;
 
 		if (scan_obj->cb.update_beacon)
 			scan_obj->cb.update_beacon(pdev, scan_entry);
 
-		/**
-		 * Do not drop the frame if Wi-Fi safe mode or RF test mode is
-		 * enabled. wlan_cm_get_check_6ghz_security API returns true if
-		 * neither Safe mode nor RF test mode are enabled.
-		 */
-		if (!wlan_cm_get_standard_6ghz_conn_policy(psoc) &&
-		    !scm_is_bss_allowed_for_country(psoc, scan_entry) &&
-		    wlan_cm_get_check_6ghz_security(psoc)) {
-			scm_info_rl(QDF_MAC_ADDR_FMT ": Drop frame(%d) freq %d, as country not present OR VLP mode not supported for US",
-				    QDF_MAC_ADDR_REF(scan_entry->bssid.bytes),
-				    bcn->frm_type,
-				    scan_entry->channel.chan_freq);
-			util_scan_free_cache_entry(scan_entry);
-			qdf_mem_free(scan_node);
-			continue;
+		if (wlan_reg_is_6ghz_chan_freq(scan_entry->channel.chan_freq)) {
+			status = wlan_reg_get_best_6g_power_type(
+					psoc, pdev, &power_type_6g,
+					scan_entry->ap_pwr_type_6g,
+					scan_entry->channel.chan_freq);
+			if (QDF_IS_STATUS_ERROR(status)) {
+				scm_info_rl(QDF_MAC_ADDR_FMT ": Drop frame(%d) freq %d, as power type %d is not supported",
+					QDF_MAC_ADDR_REF(scan_entry->bssid.bytes),
+					bcn->frm_type,
+					scan_entry->channel.chan_freq,
+					scan_entry->ap_pwr_type_6g);
+				util_scan_free_cache_entry(scan_entry);
+				qdf_mem_free(scan_node);
+				continue;
+			}
 		}
 
-		status = scm_add_update_entry(psoc, pdev, scan_entry);
+		status = scm_add_update_entry(psoc, pdev, scan_entry,
+					      bcn->is_gen_entry);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			scm_debug(QDF_MAC_ADDR_FMT ": Failed to add entry for frame(%d) seq %d freq %d",
 				  QDF_MAC_ADDR_REF(scan_entry->bssid.bytes),
@@ -1415,6 +1637,21 @@ QDF_STATUS __scm_handle_bcn_probe(struct scan_bcn_probe_event *bcn)
 			qdf_mem_free(scan_node);
 			continue;
 		}
+
+		/*
+		 * If scan is not in progress, check if this new beacon's
+		 * BSSID belongs to a connected/standby MLO link and update
+		 * only that specific scan entry's assoc_state. This handles
+		 * the case where a scan entry was flushed due to CSA and a
+		 * new beacon/probe response is received outside scan.
+		 * Only the new beacon's BSSID is updated (not all links),
+		 * making this efficient for the per-beacon path.
+		 * The scan complete handler (wlan_cm_update_all_sta_links_
+		 * assoc_state) handles the bulk update for all links at scan
+		 * completion.
+		 */
+		if (wlan_get_pdev_status(pdev) == SCAN_NOT_IN_PROGRESS)
+			scm_update_assoc_state_for_new_beacon(pdev, scan_entry);
 
 		if (bcn->save_rnr_info)
 			scm_add_rnr_channel_db(pdev, scan_entry);
@@ -1980,6 +2217,9 @@ QDF_STATUS scm_channel_list_db_init(struct wlan_objmgr_psoc *psoc)
 		qdf_list_create(&rnr_channel_db->channel[j].rnr_list,
 				WLAN_MAX_RNR_COUNT);
 	}
+
+	qdf_mutex_create(&rnr_channel_db->rnr_db_lock);
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -1994,6 +2234,8 @@ QDF_STATUS scm_channel_list_db_deinit(struct wlan_objmgr_psoc *psoc)
 	rnr_channel_db = scm_get_rnr_channel_db(psoc);
 	if (!rnr_channel_db)
 		return QDF_STATUS_E_INVAL;
+
+	qdf_mutex_destroy(&rnr_channel_db->rnr_db_lock);
 
 	for (i = 0; i < QDF_ARRAY_SIZE(rnr_channel_db->channel); i++) {
 		channel = &rnr_channel_db->channel[i];
@@ -2034,6 +2276,7 @@ QDF_STATUS scm_rnr_db_flush(struct wlan_objmgr_psoc *psoc)
 	if (!rnr_channel_db)
 		return QDF_STATUS_E_INVAL;
 
+	/* The rnr_channel_db->rnr_db_lock is already taken in the caller API */
 	for (i = 0; i < QDF_ARRAY_SIZE(rnr_channel_db->channel); i++) {
 		channel = &rnr_channel_db->channel[i];
 		cur_node = NULL;
@@ -2096,48 +2339,36 @@ void scm_update_rnr_from_scan_cache(struct wlan_objmgr_pdev *pdev)
 }
 #endif
 
-QDF_STATUS scm_update_scan_mlme_info(struct wlan_objmgr_pdev *pdev,
-	struct scan_cache_entry *entry)
+/**
+ * scm_update_assoc_state_con_for_bss() - Update assoc_state to
+ *                                         SCAN_ENTRY_CON_STATE_ASSOC for
+ *                                         the given BSS
+ * @pdev: pdev object
+ * @bssid: BSSID of the BSS
+ * @ssid: SSID of the BSS
+ * @freq: operating frequency of the BSS
+ *
+ * Helper to mark a specific scan entry as connected by setting its
+ * assoc_state to SCAN_ENTRY_CON_STATE_ASSOC.
+ *
+ * Return: void
+ */
+void scm_update_assoc_state_con_for_bss(struct wlan_objmgr_pdev *pdev,
+					struct qdf_mac_addr *bssid,
+					struct wlan_ssid *ssid,
+					uint32_t freq)
 {
-	uint8_t hash_idx;
-	struct scan_dbs *scan_db;
-	struct scan_cache_node *cur_node;
-	struct scan_cache_node *next_node = NULL;
-	struct wlan_objmgr_psoc *psoc;
+	struct bss_info bss_info;
+	struct mlme_info mlme_info;
 
-	psoc = wlan_pdev_get_psoc(pdev);
-	if (!psoc) {
-		scm_err("psoc is NULL");
-		return QDF_STATUS_E_INVAL;
-	}
-	scan_db = wlan_pdev_get_scan_db(psoc, pdev);
-	if (!scan_db) {
-		scm_err("scan_db is NULL");
-		return QDF_STATUS_E_INVAL;
-	}
-
-	hash_idx = SCAN_GET_HASH(entry->bssid.bytes);
-
-	cur_node = scm_get_next_node(scan_db,
-			&scan_db->scan_hash_tbl[hash_idx], NULL);
-
-	while (cur_node) {
-		if (util_is_scan_entry_match(entry,
-					cur_node->entry)) {
-			/* Acquire db lock to prevent simultaneous update */
-			qdf_spin_lock_bh(&scan_db->scan_db_lock);
-			scm_update_mlme_info(entry, cur_node->entry);
-			qdf_spin_unlock_bh(&scan_db->scan_db_lock);
-			scm_scan_entry_put_ref(scan_db,
-					cur_node, true);
-			return QDF_STATUS_SUCCESS;
-		}
-		next_node = scm_get_next_node(scan_db,
-				&scan_db->scan_hash_tbl[hash_idx], cur_node);
-		cur_node = next_node;
-	}
-
-	return QDF_STATUS_E_INVAL;
+	qdf_mem_zero(&bss_info, sizeof(bss_info));
+	qdf_copy_macaddr(&bss_info.bssid, bssid);
+	bss_info.freq = freq;
+	bss_info.ssid.length = ssid->length;
+	qdf_mem_copy(&bss_info.ssid.ssid, ssid->ssid, ssid->length);
+	mlme_info.assoc_state = SCAN_ENTRY_CON_STATE_ASSOC;
+	/* update the scan entry assoc_state */
+	scm_scan_update_mlme_by_bssinfo(pdev, &bss_info, &mlme_info);
 }
 
 QDF_STATUS scm_scan_update_mlme_by_bssinfo(struct wlan_objmgr_pdev *pdev,
@@ -2149,6 +2380,7 @@ QDF_STATUS scm_scan_update_mlme_by_bssinfo(struct wlan_objmgr_pdev *pdev,
 	struct scan_cache_node *next_node = NULL;
 	struct wlan_objmgr_psoc *psoc;
 	struct scan_cache_entry *entry;
+	uint32_t prev_assoc_state;
 
 	psoc = wlan_pdev_get_psoc(pdev);
 	if (!psoc) {
@@ -2171,12 +2403,15 @@ QDF_STATUS scm_scan_update_mlme_by_bssinfo(struct wlan_objmgr_pdev *pdev,
 			(bss_info->freq == entry->channel.chan_freq)) {
 			/* Acquire db lock to prevent simultaneous update */
 			qdf_spin_lock_bh(&scan_db->scan_db_lock);
+			prev_assoc_state = entry->mlme_info.assoc_state;
 			qdf_mem_copy(&entry->mlme_info, mlme,
 					sizeof(struct mlme_info));
-			scm_debug("BSSID: "QDF_MAC_ADDR_FMT" set assoc_state to %d with age %lu ms",
-				  QDF_MAC_ADDR_REF(entry->bssid.bytes),
-				  mlme->assoc_state,
-				  util_scan_entry_age(entry));
+			if (prev_assoc_state != mlme->assoc_state)
+				scm_debug("BSSID: "QDF_MAC_ADDR_FMT" assoc_state %d -> %d age %lu ms",
+					  QDF_MAC_ADDR_REF(entry->bssid.bytes),
+					  prev_assoc_state,
+					  mlme->assoc_state,
+					  util_scan_entry_age(entry));
 			scm_scan_entry_put_ref(scan_db,
 					cur_node, false);
 			qdf_spin_unlock_bh(&scan_db->scan_db_lock);
@@ -2315,6 +2550,112 @@ done:
 }
 
 #ifdef WLAN_FEATURE_11BE_MLO
+static void scm_set_mld_addr_filter(struct wlan_objmgr_vdev *vdev,
+				    struct scan_filter *filter,
+				    struct qdf_mac_addr *ap_mld_addr)
+{
+	if (mlo_is_mld_sta(vdev) &&
+	    QDF_IS_STATUS_SUCCESS(wlan_vdev_get_bss_peer_mld_mac(
+						vdev, ap_mld_addr))) {
+		filter->match_mld_addr = 1;
+		filter->mld_addr = *ap_mld_addr;
+	}
+}
+#else
+static void scm_set_mld_addr_filter(struct wlan_objmgr_vdev *vdev,
+				    struct scan_filter *filter,
+				    struct qdf_mac_addr *ap_mld_addr)
+{
+}
+#endif
+
+struct scan_cache_entry *
+scm_scan_get_entry_by_bssid_and_security(struct wlan_objmgr_pdev *pdev,
+					 struct qdf_mac_addr *bssid,
+					 uint8_t vdev_id,
+					 qdf_freq_t ch_freq)
+{
+	struct scan_filter *filter;
+	qdf_list_t *list = NULL;
+	struct scan_cache_node *first_node = NULL;
+	qdf_list_node_t *cur_node = NULL;
+	struct scan_cache_entry *scan_entry = NULL;
+	struct wlan_objmgr_vdev *vdev;
+	struct qdf_mac_addr ap_mld_addr = QDF_MAC_ADDR_ZERO_INIT;
+
+	filter = qdf_mem_malloc(sizeof(*filter));
+	if (!filter)
+		return NULL;
+
+	filter->num_of_bssid = 1;
+	qdf_copy_macaddr(&filter->bssid_list[0], bssid);
+
+	vdev = wlan_objmgr_get_vdev_by_id_from_pdev(pdev, vdev_id,
+						    WLAN_SCAN_ID);
+	if (!vdev) {
+		qdf_mem_free(filter);
+		return NULL;
+	}
+
+	if (wlan_vdev_mlme_get_opmode(vdev) == QDF_STA_MODE ||
+	    wlan_vdev_mlme_get_opmode(vdev) == QDF_P2P_CLIENT_MODE) {
+		wlan_vdev_mlme_get_ssid(vdev, filter->ssid_list[0].ssid,
+					&filter->ssid_list[0].length);
+		if (filter->ssid_list[0].length)
+			filter->num_of_ssid = 1;
+		else
+			scm_debug("no ssid configured on vdev %d",
+				  vdev_id);
+	}
+
+	scm_set_mld_addr_filter(vdev, filter, &ap_mld_addr);
+
+	if (ch_freq) {
+		filter->chan_freq_list[0] = ch_freq;
+		filter->num_of_channels = 1;
+	}
+
+	filter->authmodeset =
+		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_AUTH_MODE);
+	filter->ucastcipherset =
+		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_UCAST_CIPHER);
+	filter->key_mgmt =
+		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_KEY_MGMT);
+	filter->mcastcipherset =
+		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_MCAST_CIPHER);
+	filter->mgmtcipherset =
+		wlan_crypto_get_param(vdev, WLAN_CRYPTO_PARAM_MGMT_CIPHER);
+	filter->ignore_pmf_cap = true;
+	filter->mrsno_gen = wlan_vdev_get_rsno_gen_supported(vdev);
+
+	list = scm_get_scan_result(pdev, filter);
+
+	if (!list || (list && !qdf_list_size(list))) {
+		scm_debug("Scan entry for ssid:" QDF_SSID_FMT " bssid:" QDF_MAC_ADDR_FMT " ch_freq %d mld " QDF_MAC_ADDR_FMT " not found",
+			  QDF_SSID_REF(filter->ssid_list[0].length,
+				       filter->ssid_list[0].ssid),
+			  QDF_MAC_ADDR_REF(bssid->bytes),
+			  ch_freq,
+			  QDF_MAC_ADDR_REF(ap_mld_addr.bytes));
+		goto done;
+	}
+
+	qdf_list_peek_front(list, &cur_node);
+	first_node = qdf_container_of(cur_node,	struct scan_cache_node, node);
+	if (first_node && first_node->entry)
+		scan_entry = util_scan_copy_cache_entry(first_node->entry);
+
+done:
+	if (list)
+		scm_purge_scan_results(list);
+	qdf_mem_free(filter);
+
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_SCAN_ID);
+
+	return scan_entry;
+}
+
+#ifdef WLAN_FEATURE_11BE_MLO
 QDF_STATUS scm_get_mld_addr_by_link_addr(struct wlan_objmgr_pdev *pdev,
 					 struct qdf_mac_addr *link_addr,
 					 struct qdf_mac_addr *mld_mac_addr)
@@ -2402,6 +2743,19 @@ bool scm_scan_entries_contain_cmn_akm(struct scan_cache_entry *entry1,
 
 	entry1_sec_info = &entry1->neg_sec_info;
 	entry2_sec_info = &entry2->neg_sec_info;
+
+	/*
+	 * All the partners should use the same generation of
+	 * RSN(O) element.The secure AKM chosen should be same
+	 * across partners.
+	 */
+	if (entry1_sec_info->rsn_gen_selected !=
+	    entry2_sec_info->rsn_gen_selected) {
+		scm_debug("RSN generation mismatch %x %x",
+			  entry1_sec_info->rsn_gen_selected,
+			  entry2_sec_info->rsn_gen_selected);
+		return false;
+	}
 
 	/* Check if MFPC is equal */
 	if ((entry1_sec_info->rsn_caps & WLAN_CRYPTO_RSN_CAP_MFP_ENABLED) ^

@@ -88,6 +88,8 @@ QDF_STATUS convert_wsc_opaque(struct mac_context *, tSirAddie *,
 			      tDot11fIEWscIEOpaque *);
 QDF_STATUS convert_p2p_opaque(struct mac_context *, tSirAddie *,
 			      tDot11fIEP2PIEOpaque *);
+QDF_STATUS convert_p2p2_opaque(struct mac_context *, tSirAddie *,
+			       tDot11fIEP2P2IEOpaque *);
 #ifdef WLAN_FEATURE_WFD
 QDF_STATUS convert_wfd_opaque(struct mac_context *, tSirAddie *,
 			      tDot11fIEWFDIEOpaque *);

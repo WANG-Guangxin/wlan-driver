@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2018, 2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,6 +33,10 @@
 #include <osif_vdev_sync.h>
 #include "wlan_osif_priv.h"
 #include "wlan_lmac_if_def.h"
+#include <wlan_dcs_ucfg_api.h>
+#include "wlan_hdd_dcs.h"
+#include <cfg_mlme_vht_caps.h>
+#include "wlan_ll_sap_api.h"
 
 /**
  * hdd_green_ap_check_enable() - to check whether to enable green ap or not
@@ -101,8 +105,7 @@ int hdd_green_ap_start_state_mc(struct hdd_context *hdd_ctx,
 	bool enable_green_ap = false;
 	uint8_t num_sap_sessions = 0, num_p2p_go_sessions = 0, ret = 0;
 	QDF_STATUS status;
-	bool bval = false;
-	uint8_t ps_enable;
+	uint8_t enable_mimo = WLAN_MIMO_CAP_DISABLE, ps_enable;
 
 	cfg = hdd_ctx->config;
 	if (!cfg) {
@@ -110,15 +113,14 @@ int hdd_green_ap_start_state_mc(struct hdd_context *hdd_ctx,
 		return -EINVAL;
 	}
 
-	status = ucfg_mlme_get_vht_enable2x2(hdd_ctx->psoc, &bval);
+	status = ucfg_mlme_get_vht_mimo_cap(hdd_ctx->psoc, &enable_mimo);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		hdd_err("unable to get vht_enable2x2");
 		return -EINVAL;
 	}
 
-	if (!bval) {
+	if (!enable_mimo)
 		hdd_debug(" 2x2 not enabled");
-	}
 
 	if (QDF_IS_STATUS_ERROR(ucfg_green_ap_get_ps_config(hdd_ctx->pdev,
 							     &ps_enable)))
@@ -199,6 +201,28 @@ wlan_hdd_sap_low_pwr_mode[QCA_WLAN_VENDOR_ATTR_DOZED_AP_MAX + 1] = {
 };
 
 /**
+ * wlan_hdd_enable_disable_dcs_cmd() - Enable/disable dcs based on low power
+ * mode configuration
+ * @psoc: pointer to psoc object
+ * @mac_id: mac_id
+ * @vdev_id: vdev_id
+ * @lp_flags: low power mode flags
+ *
+ * Return: None
+ */
+static void wlan_hdd_enable_disable_dcs_cmd(struct wlan_objmgr_psoc *psoc,
+					    uint32_t mac_id, uint8_t vdev_id,
+					    uint8_t lp_flags)
+{
+	if (lp_flags == QCA_WLAN_DOZED_AP_ENABLE)
+		ucfg_config_dcs_disable(psoc, mac_id, WLAN_HOST_DCS_WLANIM);
+	else
+		ucfg_config_dcs_enable(psoc, mac_id, WLAN_HOST_DCS_WLANIM);
+
+	hdd_send_dcs_cmd(psoc, mac_id, vdev_id);
+}
+
+/**
  * __wlan_hdd_enter_sap_low_pwr_mode() - Green AP low latency power
  * save mode
  * vendor command
@@ -222,6 +246,8 @@ __wlan_hdd_enter_sap_low_pwr_mode(struct wiphy *wiphy,
 	struct hdd_ap_ctx *ap_ctx = WLAN_HDD_GET_AP_CTX_PTR(adapter->deflink);
 	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_DOZED_AP_MAX + 1];
 	struct sk_buff *skb;
+	uint8_t vdev_id;
+	uint8_t mac_id;
 
 	hdd_enter_dev(wdev->netdev);
 
@@ -258,6 +284,22 @@ __wlan_hdd_enter_sap_low_pwr_mode(struct wiphy *wiphy,
 	}
 
 	hdd_debug("Cookie id received : %llu", cookie_id);
+
+	vdev_id = wlan_vdev_get_id(adapter->deflink->vdev);
+	status = policy_mgr_get_mac_id_by_session_id(hdd_ctx->psoc, vdev_id,
+						     &mac_id);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("unable to get mac id");
+		return -EINVAL;
+	}
+
+	wlan_hdd_enable_disable_dcs_cmd(
+				hdd_ctx->psoc,
+				mac_id,
+				vdev_id, lp_flags);
+
+	if (lp_flags == QCA_WLAN_DOZED_AP_ENABLE)
+		wlan_ll_sap_set_cur_freq_unused_cu(hdd_ctx->psoc, vdev_id, 0);
 
 	len = NLMSG_HDRLEN;
 	/*QCA_WLAN_VENDOR_ATTR_DOZED_AP_COOKIE*/
@@ -315,6 +357,11 @@ QDF_STATUS wlan_hdd_send_green_ap_ll_ps_event(
 	uint32_t len;
 	struct vdev_osif_priv *osif_priv;
 	struct sk_buff *skb;
+
+	if (!vdev) {
+		hdd_err("VDEV is NULL");
+		return QDF_STATUS_E_FAILURE;
+	}
 
 	osif_priv = wlan_vdev_get_ospriv(vdev);
 	if (!osif_priv) {

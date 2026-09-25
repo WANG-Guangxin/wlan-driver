@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,6 +26,7 @@
 #define _OS_IF_SON_H_
 
 #include <qdf_types.h>
+#include <qdf_net_if.h>
 #include <wlan_objmgr_vdev_obj.h>
 #include <wlan_objmgr_psoc_obj.h>
 #include <wlan_objmgr_pdev_obj.h>
@@ -70,6 +71,7 @@
  * @os_if_get_peer_capability: Gets peer capability
  * @os_if_get_peer_max_mcs_idx: Gets peer max MCS index
  * @os_if_get_sta_stats: Get sta stats
+ * @os_if_set_def_tidmap_prty: Set default tid map priority
  */
 struct son_callbacks {
 	uint32_t (*os_if_is_acs_in_progress)(struct wlan_objmgr_vdev *vdev);
@@ -140,6 +142,8 @@ struct son_callbacks {
 	int (*os_if_get_sta_stats)(struct wlan_objmgr_vdev *vdev,
 				   uint8_t *mac_addr,
 				   struct ieee80211_nodestats *stats);
+	int (*os_if_set_def_tidmap_prty)(struct wlan_objmgr_vdev *vdev,
+					 uint32_t pri);
 };
 
 /**
@@ -154,6 +158,38 @@ enum os_if_son_vendor_cmd_type {
 	OS_IF_SON_VENDOR_GET_CMD,
 	OS_IF_SON_VENDOR_SET_CMD,
 	OS_IF_SON_VENDOR_MAX_CMD,
+};
+
+#define OSIF_SON_STATUS_EVENT_ID 120
+#define OSIF_SON_STATUS_EVT_GRP_MASK BIT(12)
+#define OSIF_SON_STATUS_EVT_GRP(id) ((id) | OSIF_SON_STATUS_EVT_GRP_MASK)
+#define OSIF_SON_WLAN_MODULE_NAME "cld32"
+#define OSIF_SON_WLAN_SON_NAME "wlanson"
+
+/*
+ * osif_son_status_evt_type - wlan modules status type
+ * @OSIF_SON_STATUS_EVT_UP: Module up event
+ * @OSIF_SON_STATUS_EVT_DOWN: Module down event
+ * @OSIF_SON_STATUS_EVT_REINIT_DONE: Module reinit done event
+ * @OSIF_SON_STATUS_EVT_DUMP_READY: Module dump ready event
+ * @OSIF_SON_STATUS_EVT_TARGET_ASSERT: Target assert event
+ */
+enum osif_son_status_evt_type {
+	OSIF_SON_STATUS_EVT_UP            = OSIF_SON_STATUS_EVT_GRP(0x0),
+	OSIF_SON_STATUS_EVT_DOWN          = OSIF_SON_STATUS_EVT_GRP(0x1),
+	OSIF_SON_STATUS_EVT_REINIT_DONE   = OSIF_SON_STATUS_EVT_GRP(0x2),
+	OSIF_SON_STATUS_EVT_DUMP_READY    = OSIF_SON_STATUS_EVT_GRP(0x3),
+	OSIF_SON_STATUS_EVT_TARGET_ASSERT = OSIF_SON_STATUS_EVT_GRP(0x4),
+};
+
+/*
+ * osif_son_status_evt - wlan modules status event
+ * @id: event id
+ * @event_type: event type
+ */
+struct osif_son_status_evt {
+	uint32_t     id;
+	uint32_t     event_type;
 };
 
 /**
@@ -279,6 +315,23 @@ uint32_t os_if_son_get_bandwidth(struct wlan_objmgr_vdev *vdev);
  */
 uint32_t os_if_son_get_band_info(struct wlan_objmgr_vdev *vdev);
 
+#ifdef WLAN_FEATURE_11BE
+/**
+ * os_if_son_get_chan_list() - get a list of chan information
+ * @vdev: vdev
+ * @ic_chans: chan information array to get
+ * @chan_params: pointer to ieee80211_channel_params to get
+ * @ic_nchans: number of chan information it gets
+ * @flag_160: flag indicating the API to fill the center frequencies of 160MHz.
+ * @flag_6ghz: flag indicating the API to include 6 GHz or not
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int os_if_son_get_chan_list(struct wlan_objmgr_vdev *vdev,
+			    struct ieee80211_ath_channel *ic_chans,
+			    struct ieee80211_channel_params *chan_params,
+			    uint8_t *ic_nchans, bool flag_160, bool flag_6ghz);
+#else
 /**
  * os_if_son_get_chan_list() - get a list of chan information
  * @vdev: vdev
@@ -294,6 +347,7 @@ int os_if_son_get_chan_list(struct wlan_objmgr_vdev *vdev,
 			    struct ieee80211_ath_channel *ic_chans,
 			    struct ieee80211_channel_info *chan_info,
 			    uint8_t *ic_nchans, bool flag_160, bool flag_6ghz);
+#endif
 
 /**
  * os_if_son_get_sta_count() - get connected STA count
@@ -341,6 +395,8 @@ int os_if_son_set_chan(struct wlan_objmgr_vdev *vdev,
  * @vdev: vdev
  * @cac_timeout: cac timeount to set
  *
+ * cac_timeout 0 set CAC ignore, non-zero set normal CAC
+ *
  * Return: 0 if cac time out is set successfully
  */
 int os_if_son_set_cac_timeout(struct wlan_objmgr_vdev *vdev,
@@ -350,6 +406,9 @@ int os_if_son_set_cac_timeout(struct wlan_objmgr_vdev *vdev,
  * os_if_son_get_cac_timeout() - get cac timeout
  * @vdev: vdev
  * @cac_timeout: cac timeout to get
+ *
+ * If CAC is ignored, cac_timeout retrieve 0
+ * If CAC is normally adopted, cac_timeout retrieve non-zero
  *
  * Return 0 if cac time out is get successfully
  */
@@ -548,7 +607,7 @@ uint8_t os_if_son_get_rx_streams(struct wlan_objmgr_vdev *vdev);
 
 /**
  * os_if_son_cfg80211_reply() - replies to cfg80211
- * @sk_buf: sk_buff to uper layer
+ * @sk_buf: sk_buff to upper layer
  *
  * Return: QDF_STATUS_SUCCESS on success
  */
@@ -791,4 +850,60 @@ uint32_t os_if_son_get_peer_max_mcs_idx(struct wlan_objmgr_vdev *vdev,
  */
 int os_if_son_get_sta_stats(struct wlan_objmgr_vdev *vdev, uint8_t *mac_addr,
 			    struct ieee80211_nodestats *stats);
+
+/**
+ * os_if_son_del_ast() - Delete AST
+ * @vdev: vdev object
+ * @wds_macaddr: wds mac address
+ * @peer_macaddr: peer mac address
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int os_if_son_del_ast(struct wlan_objmgr_vdev *vdev,
+		      struct qdf_mac_addr *wds_macaddr,
+		      struct qdf_mac_addr *peer_macaddr);
+
+/**
+ * os_if_son_send_status_nlink_msg() - Send wlan module status message
+ * to userspace
+ * @event_id: event id
+ * @event_type: event type
+ * @module_name: module name
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+QDF_STATUS
+os_if_son_send_status_nlink_msg(uint32_t event_id,
+				enum osif_son_status_evt_type event_type,
+				char *module_name);
+
+/**
+ * wlan_mlme_register_tx_ops() - Register tx ops
+ *
+ * Register tx ops for son driver update
+ *
+ * Return: mlme_external_tx_ops
+ */
+struct mlme_external_tx_ops *wlan_mlme_register_tx_ops(void);
+
+/**
+ * os_if_son_set_def_tidmap_prty() - set default tidmap priority
+ * @vdev: vdev
+ * @pri: tidmap priority
+ *
+ * Return: 0 on success, negative errno on failure
+ */
+int os_if_son_set_def_tidmap_prty(struct wlan_objmgr_vdev *vdev,
+				  uint32_t pri);
+
+/**
+ * os_if_son_netif_release_dev() - Release reference to network device
+ * @nif: network device
+ *
+ * This function releases reference to the network device
+ *
+ * Return: QDF_STATUS_SUCCESS on success
+ */
+QDF_STATUS os_if_son_netif_release_dev(struct qdf_net_if *nif);
+
 #endif

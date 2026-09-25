@@ -27,6 +27,8 @@
 #include "wlan_crypto_global_def.h"
 #include "wlan_crypto_global_api.h"
 #include "wlan_reg_services_api.h"
+#include "wlan_cm_bss_score_param.h"
+#include "wlan_psoc_mlme.h"
 
 /**
  * scm_check_open() - Check if scan entry support open authmode
@@ -293,9 +295,11 @@ static bool scm_check_rsn(struct scan_filter *filter,
 	bool is_adaptive_11r;
 	QDF_STATUS status;
 	struct wlan_crypto_params *ap_crypto;
-	bool match;
+	bool match = false;
+	uint8_t *rsn = NULL;
+	uint8_t mrsn_gen = filter->mrsno_gen;
 
-	if (!util_scan_entry_rsn(db_entry)) {
+	if (!util_scan_entry_rsn_by_gen(db_entry, RSN_LEGACY)) {
 		scm_debug(QDF_MAC_ADDR_FMT" : doesn't have RSN IE",
 			  QDF_MAC_ADDR_REF(db_entry->bssid.bytes));
 		return false;
@@ -304,24 +308,54 @@ static bool scm_check_rsn(struct scan_filter *filter,
 	ap_crypto = qdf_mem_malloc(sizeof(*ap_crypto));
 	if (!ap_crypto)
 		return false;
-	status = wlan_crypto_rsnie_check(ap_crypto,
-					 util_scan_entry_rsn(db_entry));
-	if (QDF_IS_STATUS_ERROR(status)) {
-		scm_err(QDF_MAC_ADDR_FMT": failed to parse RSN IE, status %d",
-			QDF_MAC_ADDR_REF(db_entry->bssid.bytes), status);
-		qdf_mem_free(ap_crypto);
-		return false;
+
+	if (mrsn_gen < RSN_LEGACY || mrsn_gen > RSNO_GEN_MAX) {
+		scm_debug("Invalid mrsn gen %d", mrsn_gen);
+		mrsn_gen = RSN_LEGACY;
 	}
 
-	is_adaptive_11r = db_entry->adaptive_11r_ap &&
-				filter->enable_adaptive_11r;
+	do {
+		qdf_mem_zero(ap_crypto, sizeof(*ap_crypto));
+		rsn = util_scan_entry_rsn_by_gen(db_entry, mrsn_gen);
+		if (!rsn) {
+			mrsn_gen--;
+			continue;
+		}
 
-	/* If adaptive 11r is enabled set the FT AKM for AP */
-	if (is_adaptive_11r)
-		scm_check_and_update_adaptive_11r_key_mgmt_support(ap_crypto);
+		status = wlan_crypto_rsnie_check(ap_crypto, rsn, NULL);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			scm_err(QDF_MAC_ADDR_FMT ": failed to parse RSN IE gen %d, status %d",
+				QDF_MAC_ADDR_REF(db_entry->bssid.bytes),
+				mrsn_gen, status);
+			match = false;
+			mrsn_gen--;
+			continue;
+		}
 
-	match = scm_chk_crypto_params(filter, ap_crypto, is_adaptive_11r,
-				      db_entry, security);
+		is_adaptive_11r = db_entry->adaptive_11r_ap &&
+					filter->enable_adaptive_11r;
+
+		/* If adaptive 11r is enabled set the FT AKM for AP */
+		if (is_adaptive_11r)
+			scm_check_and_update_adaptive_11r_key_mgmt_support(ap_crypto);
+
+		match = scm_chk_crypto_params(filter, ap_crypto,
+					      is_adaptive_11r, db_entry,
+					      security);
+		if (!match) {
+			mrsn_gen--;
+			continue;
+		}
+
+		security->rsn_gen_selected = mrsn_gen;
+		if (mrsn_gen > RSN_LEGACY)
+			scm_debug(QDF_MAC_ADDR_FMT " RSN gen selected %d",
+				  QDF_MAC_ADDR_REF(db_entry->bssid.bytes),
+				  security->rsn_gen_selected);
+
+		/* match is true */
+	} while (!match && mrsn_gen >= RSN_LEGACY);
+
 	qdf_mem_free(ap_crypto);
 
 	return match;
@@ -354,7 +388,8 @@ static bool scm_check_wpa(struct scan_filter *filter,
 		return false;
 
 	status = wlan_crypto_wpaie_check(ap_crypto,
-					 util_scan_entry_wpa(db_entry));
+					 util_scan_entry_wpa(db_entry),
+					 NULL);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		scm_err(QDF_MAC_ADDR_FMT": failed to parse WPA IE, status %d",
 			QDF_MAC_ADDR_REF(db_entry->bssid.bytes), status);
@@ -449,7 +484,8 @@ static bool scm_match_any_security(struct scan_filter *filter,
 
 	if (util_scan_entry_rsn(db_entry)) {
 		status = wlan_crypto_rsnie_check(ap_crypto,
-						 util_scan_entry_rsn(db_entry));
+						 util_scan_entry_rsn(db_entry),
+						 NULL);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			scm_err(QDF_MAC_ADDR_FMT": failed to parse RSN IE, status %d",
 				QDF_MAC_ADDR_REF(db_entry->bssid.bytes), status);
@@ -466,7 +502,8 @@ static bool scm_match_any_security(struct scan_filter *filter,
 
 	if (util_scan_entry_wpa(db_entry)) {
 		status = wlan_crypto_wpaie_check(ap_crypto,
-						 util_scan_entry_wpa(db_entry));
+						 util_scan_entry_wpa(db_entry),
+						 NULL);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			scm_err(QDF_MAC_ADDR_FMT": failed to parse WPA IE, status %d",
 				QDF_MAC_ADDR_REF(db_entry->bssid.bytes), status);
@@ -698,6 +735,46 @@ static bool scm_check_dot11mode(struct scan_cache_entry *db_entry,
 }
 
 #ifdef WLAN_FEATURE_11BE_MLO
+static bool
+scm_check_mlo_cfg_partner_match(struct wlan_objmgr_pdev *pdev,
+				struct partner_link_info *partner_link)
+{
+	struct wlan_objmgr_psoc *psoc;
+	struct qdf_mac_addr bssid_list[WLAN_MAX_NUM_ALLOWED_BSSIDS];
+	bool cfg_link_found = false;
+	uint8_t num_links, idx = 0;
+
+	psoc = wlan_pdev_get_psoc(pdev);
+	num_links = wlan_cm_get_mlo_allowed_bss_links(psoc, bssid_list);
+	if (num_links >= WLAN_MAX_NUM_ALLOWED_BSSIDS) {
+		cfg_link_found = true;
+		scm_debug("Num links %d exceed max allowed links, ignore list",
+			  num_links);
+		return cfg_link_found;
+	}
+
+	if (num_links == 0) {
+		cfg_link_found = true;
+		scm_debug_rl("No configured partner links");
+		return cfg_link_found;
+	}
+
+	cfg_link_found = false;
+	idx = 0;
+
+	while (num_links) {
+		if (qdf_is_macaddr_equal(&bssid_list[idx],
+					 &partner_link->link_addr)) {
+			cfg_link_found = true;
+			break;
+		}
+		num_links--;
+		idx++;
+	}
+
+	return cfg_link_found;
+}
+
 static bool scm_mlo_filter_match(struct wlan_objmgr_pdev *pdev,
 				 struct scan_filter *filter,
 				 struct scan_cache_entry *db_entry)
@@ -734,8 +811,10 @@ static bool scm_mlo_filter_match(struct wlan_objmgr_pdev *pdev,
 
 	if (!db_entry->ie_list.multi_link_bv)
 		return true;
+
+	/* Allow all bands for an invalid band bitmap */
 	if (!filter->band_bitmap)
-		return true;
+		filter->band_bitmap = 0x77;
 
 	/* Apply assoc band filter only for assoc link */
 	band_bitmap = filter->band_bitmap & 0xf;
@@ -748,14 +827,17 @@ static bool scm_mlo_filter_match(struct wlan_objmgr_pdev *pdev,
 			  db_entry->channel.chan_freq, filter->band_bitmap);
 		return false;
 	}
+
 	for (i = 0; i < db_entry->ml_info.num_links; i++) {
 		partner_link = &db_entry->ml_info.link_info[i];
-		band = wlan_reg_freq_to_band(partner_link->freq);
 
-		is_disabled = wlan_reg_is_disable_for_pwrmode(
-				    pdev,
-				    partner_link->freq,
-				    REG_BEST_PWR_MODE);
+		/* Set the link as invalid by default */
+		partner_link->is_valid_link = false;
+
+		is_disabled =
+			wlan_reg_is_disable_for_pwrmode(pdev,
+							partner_link->freq,
+							REG_BEST_PWR_MODE);
 		if (is_disabled) {
 			scm_debug(QDF_MAC_ADDR_FMT ": Partner " QDF_MAC_ADDR_FMT " link id %d freq %d disabled",
 				  QDF_MAC_ADDR_REF(db_entry->bssid.bytes),
@@ -765,6 +847,39 @@ static bool scm_mlo_filter_match(struct wlan_objmgr_pdev *pdev,
 				  partner_link->freq);
 			continue;
 		}
+
+		if (partner_link->link_id == db_entry->ml_info.self_link_id) {
+			scm_debug(QDF_MAC_ADDR_FMT " dup link id %d",
+				  QDF_MAC_ADDR_REF(partner_link->link_addr.bytes),
+				  partner_link->link_id);
+			continue;
+		}
+
+		if (qdf_is_macaddr_equal(&partner_link->link_addr,
+					 &db_entry->bssid)) {
+			scm_debug(QDF_MAC_ADDR_FMT " link id %d dup mac",
+				  QDF_MAC_ADDR_REF(partner_link->link_addr.bytes),
+				  partner_link->link_id);
+			continue;
+		}
+
+		if (db_entry->mbssid_info.profile_num &&
+		    qdf_is_macaddr_equal((struct qdf_mac_addr *)db_entry->mbssid_info.trans_bssid,
+					 &partner_link->link_addr)) {
+			scm_debug(QDF_MAC_ADDR_FMT " link (%d) dup mac with tx mbssid",
+				  QDF_MAC_ADDR_REF(partner_link->link_addr.bytes),
+				  partner_link->freq);
+			continue;
+		}
+
+		if (!scm_check_mlo_cfg_partner_match(pdev, partner_link)) {
+			scm_debug(QDF_MAC_ADDR_FMT " link (%d) not part of configured links",
+				  QDF_MAC_ADDR_REF(partner_link->link_addr.bytes),
+				  partner_link->freq);
+			continue;
+		}
+
+		band = wlan_reg_freq_to_band(partner_link->freq);
 		if (band_bitmap & BIT(band))
 			partner_link->is_valid_link = true;
 	}
@@ -881,6 +996,15 @@ bool scm_filter_match(struct wlan_objmgr_psoc *psoc,
 	bool match = false;
 	struct scan_default_params *def_param;
 	struct wlan_objmgr_pdev *pdev;
+
+	/* skip connected scan entry and return true for all other */
+	if (filter->flush_all_except_conn_entry) {
+		if (db_entry->mlme_info.assoc_state ==
+				SCAN_ENTRY_CON_STATE_ASSOC)
+			return false;
+		else
+			return true;
+	}
 
 	def_param = wlan_scan_psoc_get_def_params(psoc);
 	if (!def_param)
@@ -1065,6 +1189,9 @@ bool scm_filter_match(struct wlan_objmgr_psoc *psoc,
 		return false;
 	}
 	wlan_objmgr_pdev_release_ref(pdev, WLAN_SCAN_ID);
+
+	if (!util_is_local_generated_entry(filter->flush_local_gen, db_entry))
+		return false;
 
 	return true;
 }

@@ -1,7 +1,6 @@
 /*
  * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
- *
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
  * above copyright notice and this permission notice appear in all
@@ -59,6 +58,7 @@ typedef __in6_addr_t in6_addr_t;
 /* Extended Traffic ID  passed to target if the TID is unknown */
 #define QDF_NBUF_TX_EXT_TID_INVALID    0x1f
 
+#define QDF_ETH_HDR_LEN                14
 #define QDF_ETH_TYPE_IPV4              0x0800  /* IPV4 */
 #define QDF_ETH_TYPE_IPV6              0x86dd  /* IPV6 */
 #define QDF_ETH_TYPE_8021Q             0x8100  /* 802.1Q vlan protocol */
@@ -70,12 +70,22 @@ typedef __in6_addr_t in6_addr_t;
 #define QDF_IEEE80211_FC1_FROMDS        0x02
 #define QDF_IEEE80211_FC1_PM            0x10
 
+#define QDF_IEEE80211_QOS_AMSDU		0x80
+#define QDF_IEEE80211_QOS_CTRL_LEN	2
+#define QDF_IEEE80211_QOS_AMSDU_LEN	2
+
+#define QDF_IEEE80211_HTC_CTRL		0x80
+#define QDF_IEEE80211_HTC_CTRL_LEN	4
+#define QDF_IEEE80211_CCMP_PARAM	0x40
+#define QDF_IEEE80211_CCMP_PARAM_LEN	8
+
 #define QDF_IEEE80211_FC0_VERSION_0     0x00
 #define QDF_IEEE80211_FC0_VERSION_MASK  0x03
 #define QDF_IEEE80211_FC0_TYPE_MASK     0x0c
 #define QDF_IEEE80211_FC0_SUBTYPE_MASK  0xf0
 
 #define QDF_IEEE80211_FC0_TYPE_MGT      0x00
+#define QDF_IEEE80211_FC0_SUBTYPE_BEACON 0x80
 
 #define QDF_IEEE80211_FC0_TYPE_DATA     0x08
 #define QDF_IEEE80211_FC0_SUBTYPE_DATA  0x00
@@ -85,6 +95,7 @@ typedef __in6_addr_t in6_addr_t;
 #define QDF_IEEE80211_FC0_SUBTYPE_NODATA   0x40
 
 #define QDF_IEEE80211_FC0_TYPE_CTL      0x04
+#define QDF_IEEE80211_FC0_SUBTYPE_TRIGGER	0x20
 #define QDF_IEEE80211_FC0_SUBTYPE_BEAM_REPORT_POLL 0x40
 #define QDF_IEEE80211_FC0_SUBTYPE_VHT_NDP_AN 0x50
 #define QDF_IEEE80211_FC0_SUBTYPE_CTL_FRAME_EXTN 0x60
@@ -97,6 +108,8 @@ typedef __in6_addr_t in6_addr_t;
 #define QDF_IEEE80211_FC0_SUBTYPE_ACK   0xD0
 #define QDF_IEEE80211_FC0_SUBTYPE_CF_END 0xE0
 #define QDF_IEEE80211_FC0_SUBTYPE_CF_END_CF_ACK 0xF0
+
+#define QDF_IEEE80211_HTC_CTRL_MASK	0x80
 
 #define QDF_NET_IS_MAC_MULTICAST(_a)   (*(_a) & 0x01)
 
@@ -591,6 +604,25 @@ static inline char *qdf_netdev_get_devname(qdf_netdev_t dev)
 {
 	return __qdf_netdev_get_devname(dev);
 }
+
+static inline int qdf_in6_pton(char *str_ptr, uint8_t *addr)
+{
+	return __qdf_in6_pton(str_ptr, addr);
+}
+
+struct qdf_dot11_frame {
+	uint8_t i_fc[2];
+	uint8_t i_dur[2];
+	union {
+		struct {
+			uint8_t i_addr1[QDF_MAC_ADDR_SIZE];
+			uint8_t i_addr2[QDF_MAC_ADDR_SIZE];
+			uint8_t i_addr3[QDF_MAC_ADDR_SIZE];
+		};
+		uint8_t i_addr_all[3 * QDF_MAC_ADDR_SIZE];
+	};
+	uint8_t i_seq[2];
+};
 
 typedef struct {
 	uint8_t i_fc[2];

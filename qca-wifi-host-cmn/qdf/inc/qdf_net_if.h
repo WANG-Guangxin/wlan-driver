@@ -88,6 +88,15 @@ QDF_STATUS
 qdf_net_if_hold_dev(struct qdf_net_if *nif);
 
 /**
+ * qdf_net_if_is_vlan_dev() - Abstraction of is_vlan_dev API
+ * @nif: network device
+ *
+ * Return: true if network device is vlan else false
+ */
+bool
+qdf_net_if_is_vlan_dev(struct qdf_net_if *nif);
+
+/**
  * qdf_napi_enable() - Enable the napi schedule
  * @napi: NAPI context
  *
@@ -170,6 +179,12 @@ static inline QDF_STATUS
 qdf_net_if_hold_dev(struct qdf_net_if *nif)
 {
 	return __qdf_net_if_hold_dev(nif);
+}
+
+static inline bool
+qdf_net_if_is_vlan_dev(struct qdf_net_if *nif)
+{
+	return __qdf_net_if_is_vlan_dev(nif);
 }
 
 /**

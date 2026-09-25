@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -40,6 +40,10 @@
 #include <hif.h>
 #include <wlan_hdd_main.h>
 #include "wlan_hdd_wmm.h"
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0))
+#include <net/gro.h>
+#endif
 
 /**
  * osif_dp_classify_pkt() - classify packet
@@ -122,11 +126,9 @@ bool osif_dp_mark_pkt_type_by_priority(struct sk_buff *skb)
 	uint32_t pkt_type =
 		qdf_nbuf_get_priority_pkt_type(skb);
 
-	if (qdf_unlikely(pkt_type == QDF_NBUF_PRIORITY_PKT_TCP_ACK)) {
-		QDF_NBUF_CB_GET_PACKET_TYPE(skb) =
-					QDF_NBUF_CB_PACKET_TYPE_TCP_ACK;
+	if (qdf_unlikely(pkt_type == QDF_NBUF_PRIORITY_PKT_TCP_ACK))
 		type_marked = true;
-	}
+
 	/* cleanup the packet type in priority */
 	qdf_nbuf_remove_priority_pkt_type(skb);
 
@@ -180,7 +182,7 @@ void osif_dp_mark_pkt_type(struct sk_buff *skb)
 	 * TX Packets in the HI_PRIO queue are assumed to be critical and
 	 * marked accordingly.
 	 */
-	if (skb->queue_mapping == TX_GET_QUEUE_IDX(HDD_LINUX_AC_HI_PRIO, 0))
+	if (skb->queue_mapping == TX_HI_PRIO_QUEUE_IDX)
 		osif_dp_mark_critical_pkt(skb);
 	else
 		osif_dp_mark_non_critical_pkt(skb);
@@ -207,6 +209,26 @@ void osif_dp_mark_pkt_type(struct sk_buff *skb)
 #endif
 #endif
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0))
+static inline void osif_dp_napi_flush(struct napi_struct *napi)
+{
+	if (napi->gro.rx_count) {
+		netif_receive_skb_list(&napi->gro.rx_list);
+		qdf_init_list_head(&napi->gro.rx_list);
+		napi->gro.rx_count = 0;
+	}
+}
+#else
+static inline void osif_dp_napi_flush(struct napi_struct *napi)
+{
+	if (napi->rx_count) {
+		netif_receive_skb_list(&napi->rx_list);
+		qdf_init_list_head(&napi->rx_list);
+		napi->rx_count = 0;
+	}
+}
+#endif /* KERNEL_VERSION(6, 15, 0)*/
+
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
 /**
  * osif_dp_rx_thread_napi_gro_flush() - do gro flush
@@ -227,11 +249,7 @@ void osif_dp_rx_thread_napi_gro_flush(struct napi_struct *napi,
 		if (flush_code != DP_RX_GRO_LOW_TPUT_FLUSH)
 			napi_gro_flush(napi, false);
 
-		if (napi->rx_count) {
-			netif_receive_skb_list(&napi->rx_list);
-			qdf_init_list_head(&napi->rx_list);
-			napi->rx_count = 0;
-		}
+		osif_dp_napi_flush(napi);
 	}
 }
 #else
@@ -562,7 +580,7 @@ bool osif_dp_cfg80211_rx_control_port(qdf_netdev_t dev, u8 *ta_addr,
 				      qdf_nbuf_t nbuf, bool unencrypted)
 {
 	return cfg80211_rx_control_port((struct net_device *)dev,
-					ta_addr, (struct sk_buff *)nbuf,
+					(struct sk_buff *)nbuf,
 					unencrypted);
 }
 #endif

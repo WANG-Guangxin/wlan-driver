@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -30,33 +30,37 @@
  * struct twt_mc_cfg_params - All twt related cfg items
  * @enable_twt: global twt configuration
  * @twt_responder: twt responder enable/disable
+ * @twt_responder_orig: Original twt responder enable/disable
  * @twt_requestor: twt requestor enable/disable
  * @twt_congestion_timeout: congestion timeout value
  * @bcast_requestor_enabled: bcast requestor enable/disable
  * @bcast_responder_enabled: bcast responder enable/disable
  * @enable_twt_24ghz: Enable/disable host TWT when STA is connected in
  * 2.4Ghz
+ * @disable_twt_on_scan: Enable/Disable twt on scan
  * @flex_twt_sched: flex twt scheduling enable/disable
  * @req_flag: requestor flag enable/disable
- * @res_flag: responder flag enable/disable
- * @is_twt_enabled_in_11n: Enable TWT support in 11n mode
  * @rtwt_requestor_enabled: Restricted TWT requestor enable or disable
  * @rtwt_responder_enabled: Restricted TWT responder enable or disable
+ * @twt_req_ht_vht: TWT requestor support in ht/vht mode
+ * @twt_res_ht_vht: TWT responder support in ht/vht mode
  */
 struct twt_mc_cfg_params {
 	bool enable_twt;
-	bool twt_responder;
+	uint8_t twt_responder;
+	uint8_t twt_responder_orig;
 	bool twt_requestor;
 	uint32_t twt_congestion_timeout;
 	bool bcast_requestor_enabled;
 	bool bcast_responder_enabled;
 	bool enable_twt_24ghz;
+	bool disable_twt_on_scan;
 	bool flex_twt_sched;
 	bool req_flag;
-	bool res_flag;
-	bool is_twt_enabled_in_11n;
 	bool rtwt_requestor_enabled;
 	bool rtwt_responder_enabled;
+	bool twt_req_ht_vht;
+	bool twt_res_ht_vht;
 };
 
 #endif /* __WLAN_TWT_EXT_DEFS_H__ */

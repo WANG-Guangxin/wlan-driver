@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -130,7 +130,7 @@ void dp_rtpm_tput_policy_apply(struct wlan_dp_psoc_context *dp_ctx,
  *
  * Returns: Current vote
  */
-int dp_rtpm_tput_policy_get_vote(struct wlan_dp_psoc_context *dp_ctx);
+unsigned long dp_rtpm_tput_policy_get_vote(struct wlan_dp_psoc_context *dp_ctx);
 #else
 static inline
 void dp_rtpm_tput_policy_init(struct wlan_objmgr_psoc *psoc)
@@ -148,10 +148,10 @@ void dp_rtpm_tput_policy_apply(struct wlan_dp_psoc_context *dp_ctx,
 {
 }
 
-static inline int
+static inline unsigned long
 dp_rtpm_tput_policy_get_vote(struct wlan_dp_psoc_context *dp_ctx)
 {
-	return -EINVAL;
+	return 0;
 }
 #endif /* WLAN_FEATURE_DP_BUS_BANDWIDTH && FEATURE_RUNTIME_PM */
 

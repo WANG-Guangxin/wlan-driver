@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -187,18 +187,6 @@ void mlo_roam_copy_partner_info(struct mlo_partner_info *partner_info,
 				uint8_t skip_vdev_id, bool fill_all_links);
 
 /**
- * mlo_roam_init_cu_bpcc() - init cu bpcc per roam sync data
- * @vdev: vdev object
- * @sync_ind: roam sync ind pointer
- *
- * This api will be called to init cu bpcc from connect response.
- *
- * Return: none
- */
-void mlo_roam_init_cu_bpcc(struct wlan_objmgr_vdev *vdev,
-			   struct roam_offload_synch_ind *sync_ind);
-
-/**
  * mlo_roam_update_connected_links - update connected links bitmap after roaming
  *
  * @vdev: vdev pointer
@@ -278,6 +266,7 @@ mlo_get_link_mac_addr_from_reassoc_rsp(struct wlan_objmgr_vdev *vdev,
  *
  * @vdev: vdev pointer
  * @reassoc_rsp: cm vdev reassoc rsp pointer
+ * @auth_status: auth status from roam sync event
  *
  * This api will be called to copy cm vdev reassoc rsp which will
  * be used to later bring up link vdev/s.
@@ -286,7 +275,8 @@ mlo_get_link_mac_addr_from_reassoc_rsp(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS
 mlo_roam_copy_reassoc_rsp(struct wlan_objmgr_vdev *vdev,
-			  struct wlan_cm_connect_resp *reassoc_rsp);
+			  struct wlan_cm_connect_resp *reassoc_rsp,
+			  uint32_t auth_status);
 
 /**
  * mlo_roam_link_connect_notify - Send connect req
@@ -425,6 +415,17 @@ bool
 mlo_check_if_all_vdev_up(struct wlan_objmgr_vdev *vdev);
 
 /**
+ * mlo_check_if_all_peer_authenticated - Check if all peer are authenticated
+ * @vdev: vdev pointer
+ *
+ * This api will check if all the requested peers are authenticated in the MLD.
+ *
+ * Return: bool, true: all link vdevs of mld in authenticated state
+ */
+bool
+mlo_check_if_all_peer_authenticated(struct wlan_objmgr_vdev *vdev);
+
+/**
  * mlo_roam_set_link_id - set link id post roaming
  *
  * @vdev: vdev pointer
@@ -476,6 +477,17 @@ mlo_add_all_link_probe_rsp_to_scan_db(struct wlan_objmgr_psoc *psoc,
  */
 bool
 mlo_is_enable_roaming_on_connected_sta_allowed(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * mlo_mgr_get_link_info_by_self_addr() - get link info by self addr
+ * @vdev: vdev object
+ * @self_addr: self link addr
+ *
+ * Return: mlo link info
+ */
+struct mlo_link_info *
+mlo_mgr_get_link_info_by_self_addr(struct wlan_objmgr_vdev *vdev,
+				   struct qdf_mac_addr *self_addr);
 
 /**
  * mlo_check_is_given_vdevs_on_same_mld() - check if the 2 given vdev's are on
@@ -567,11 +579,6 @@ mlo_roam_copy_partner_info(struct mlo_partner_info *partner_info,
 			   uint8_t skip_vdev_id, bool fill_all_links)
 {}
 
-static inline
-void mlo_roam_init_cu_bpcc(struct wlan_objmgr_vdev *vdev,
-			   struct roam_offload_synch_ind *sync_ind)
-{}
-
 static inline void
 mlo_roam_update_connected_links(struct wlan_objmgr_vdev *vdev,
 				struct wlan_cm_connect_resp *connect_rsp)
@@ -618,6 +625,12 @@ mlo_check_if_all_vdev_up(struct wlan_objmgr_vdev *vdev)
 	return false;
 }
 
+static inline bool
+mlo_check_if_all_peer_authenticated(struct wlan_objmgr_vdev *vdev)
+{
+	return true;
+}
+
 static inline void
 mlo_roam_set_link_id(struct wlan_objmgr_vdev *vdev,
 		     struct roam_offload_synch_ind *sync_ind)
@@ -625,7 +638,8 @@ mlo_roam_set_link_id(struct wlan_objmgr_vdev *vdev,
 
 static inline QDF_STATUS
 mlo_roam_copy_reassoc_rsp(struct wlan_objmgr_vdev *vdev,
-			  struct wlan_cm_connect_resp *reassoc_rsp)
+			  struct wlan_cm_connect_resp *reassoc_rsp,
+			  uint32_t auth_status)
 {
 	return QDF_STATUS_E_NOSUPPORT;
 }
@@ -690,6 +704,13 @@ static inline bool
 mlo_is_enable_roaming_on_connected_sta_allowed(struct wlan_objmgr_vdev *vdev)
 {
 	return true;
+}
+
+static inline struct mlo_link_info *
+mlo_mgr_get_link_info_by_self_addr(struct wlan_objmgr_vdev *vdev,
+				   struct qdf_mac_addr *self_addr)
+{
+	return NULL;
 }
 
 static inline bool

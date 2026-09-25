@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -162,6 +162,8 @@ struct wlan_mlme_tx_ops {
  * @wfa_testcmd: WFA config tx ops to send to FW
  * @disconnect_stats_param: Peer disconnect stats related params for SAP case
  * @scan_requester_id: mlme scan requester id
+ * @miracast_opt_wakelock: wakelock to allow to stop miracast_opt in time
+ * @miracast_opt_timer: timer to stop miracast_opt in time to avoid F/W assert
  */
 struct wlan_mlme_psoc_ext_obj {
 	struct wlan_mlme_cfg cfg;
@@ -172,17 +174,16 @@ struct wlan_mlme_psoc_ext_obj {
 	struct wlan_mlme_wfa_cmd wfa_testcmd;
 	struct peer_disconnect_stats_param disconnect_stats_param;
 	wlan_scan_requester scan_requester_id;
+	qdf_wake_lock_t miracast_opt_wakelock;
+	qdf_timer_t miracast_opt_timer;
 };
 
 /**
  * struct wlan_disconnect_info - WLAN Disconnection Information
- * @self_discon_ies: Disconnect IEs to be sent in deauth/disassoc frames
- *                   originated from driver
  * @peer_discon_ies: Disconnect IEs received in deauth/disassoc frames
  *                       from peer
  */
 struct wlan_disconnect_info {
-	struct element_info self_discon_ies;
 	struct element_info peer_discon_ies;
 };
 
@@ -205,12 +206,9 @@ struct sae_auth_retry {
  * @last_assoc_received_time: last assoc received time
  * @last_disassoc_deauth_received_time: last disassoc/deauth received time
  * @twt_ctx: TWT context
- * @allow_kickout: True if the peer can be kicked out. Peer can't be kicked
+ * @disallow_kickout: False if the peer can be kicked out. Peer can't be kicked
  *                 out if it is being steered
  * @nss: Peer NSS
- * @peer_set_key_wakelock: wakelock to protect peer set key op with firmware
- * @peer_set_key_runtime_wakelock: runtime pm wakelock for set key
- * @is_key_wakelock_set: flag to check if key wakelock is pending to release
  * @assoc_rsp: assoc rsp IE received during connection
  * @peer_ind_bw: peer indication channel bandwidth
  */
@@ -225,12 +223,9 @@ struct peer_mlme_priv_obj {
 	struct twt_context twt_ctx;
 #endif
 #ifdef WLAN_FEATURE_SON
-	bool allow_kickout;
+	bool disallow_kickout;
 #endif
 	uint8_t nss;
-	qdf_wake_lock_t peer_set_key_wakelock;
-	qdf_runtime_lock_t peer_set_key_runtime_wakelock;
-	bool is_key_wakelock_set;
 	struct element_info assoc_rsp;
 	enum phy_ch_width peer_ind_bw;
 };
@@ -251,12 +246,19 @@ enum vdev_assoc_type {
  * struct wlan_mlme_roam_state_info - Structure containing roaming
  * state related details
  * @state: Roaming module state.
- * @mlme_operations_bitmap: Bitmap containing what mlme operations are in
- *  progress where roaming should not be allowed.
+ * @rso_disabled_status_bitmap: Bitmap containing the mlme operations/concurrent
+ *  connections that requested for RSO_STOP as these are not supported when
+ *  roaming is enabled.
+ * @rso_pending_disable_req_bitmap: Bitmap containing the mlme
+ *  operations/concurrent connections that requested for RSO stop. Currently,
+ *  this is set only when RSO is not disabled immediately due to some
+ *  constraints (e.g. STA roaming is in progress) and needs to be disabled
+ *  once the constraints are resolved.
  */
 struct wlan_mlme_roam_state_info {
 	enum roam_offload_state state;
-	uint8_t mlme_operations_bitmap;
+	uint8_t rso_disabled_status_bitmap;
+	uint8_t rso_pending_disable_req_bitmap;
 };
 
 /**
@@ -267,10 +269,12 @@ struct wlan_mlme_roam_state_info {
  *  used by supplicant to do roam invoke after disabling roam scan in firmware,
  *  it is only effective for current connection, it will be cleared during new
  *  connection.
+ * @roam_policy: Current Roam Policy. refer enum wlan_roam_policy
  */
 struct wlan_mlme_roaming_config {
 	uint32_t roam_trigger_bitmap;
 	bool supplicant_disabled_roaming;
+	enum wlan_roam_policy roam_policy;
 };
 
 /**
@@ -413,13 +417,21 @@ struct ft_context {
 /**
  * struct assoc_channel_info - store channel info at the time of association
  * @assoc_ch_width: channel width at the time of initial connection
- * @omn_ie_ch_width: ch width present in operating mode notification IE of bcn
+ * @cur_ch_width: current channel width update in beacon eht_op/he_op/vht_op
+ *  ht_info_IE/omn_ie or after csa
+ * @update_from_ap: before get max bandwidth, user space maybe set bandwidth
+ *  or beacon bw update or csa. we don't know which action occur first,
+ *  when this flag is true, it means bcn update bw in op ie or CSA occur, get
+ *  max bandwidth will from cur_ch_width;
+ *  when this flag is false, it means, no csa or bcn bw update occur and get
+ *  bandwidth from bss_chan->ch_width.
  * @sec_2g_freq: secondary 2 GHz freq
  * @cen320_freq: 320 MHz center freq
  */
 struct assoc_channel_info {
 	enum phy_ch_width assoc_ch_width;
-	enum phy_ch_width omn_ie_ch_width;
+	enum phy_ch_width cur_ch_width;
+	bool update_from_ap;
 	qdf_freq_t sec_2g_freq;
 	qdf_freq_t cen320_freq;
 };
@@ -485,6 +497,78 @@ struct wait_for_key_timer {
 };
 
 /**
+ * struct sap_ch_switch_info - sap channel switch info
+ * @target_chan_freq: target channel frequency
+ * @user_provided_target_chan_freq: user provided target channel frequency
+ * @csa_ie_required: csa ie required
+ * @orig_chan_width: original channel width
+ * @new_chan_width: new channel width
+ * @new_ch_params: new channel params
+ * @tx_leakage_threshold: tx leakage threshold
+ * @sap_ch_switch_beacon_cnt: channel switch beacon count
+ * @sap_ch_switch_mode: sap channel switch mode
+ * @reduced_beacon_interval: reduced beacon interval
+ */
+
+struct sap_ch_switch_info {
+	/*
+	 * New channel frequency to move to when a  Radar is
+	 * detected on current Channel
+	 */
+	uint32_t target_chan_freq;
+	uint32_t user_provided_target_chan_freq;
+
+	/*
+	 * Requests for Channel Switch Announcement IE
+	 * generation and transmission
+	 */
+	uint8_t csa_ie_required;
+	/*
+	 * New channel width and new channel bonding mode
+	 * will only be updated via channel fallback mechanism
+	 */
+	enum phy_ch_width orig_chan_width;
+	enum phy_ch_width new_chan_width;
+	struct ch_params new_ch_params;
+
+	/*
+	 * Flag to indicate if DFS test mode is enabled and
+	 * channel switch is disabled.
+	 */
+	uint16_t tx_leakage_threshold;
+
+	/* beacon count before channel switch */
+	int8_t sap_ch_switch_beacon_cnt;
+	uint8_t sap_ch_switch_mode;
+	uint16_t reduced_beacon_interval;
+};
+
+/**
+ * struct sap_chan_info - sap best channel
+ * @channel_24ghz: 2.4 GHz best channel
+ * @num_chan: number of channels
+ */
+struct sap_chan_info {
+	uint32_t channel_24ghz[MAX_24GHZ_CHANNEL];
+	uint8_t num_chan;
+};
+
+/*
+ * struct sap_man_chan_info - sap mandatory channel info
+ * @sap_man_chan: The user preferred master list on
+ * which SAP can be brought up. This
+ * mandatory channel freq list would be as per
+ * OEMs preference & conforming to the
+ * regulatory/other considerations
+ * @sap_man_chan_len: Length of the SAP mandatory
+ * channel list
+ */
+struct sap_man_chan_info {
+	uint32_t sap_man_chan[NUM_CHANNELS];
+	uint32_t sap_man_chan_len;
+};
+
+/**
  * struct mlme_ap_config - VDEV MLME legacy private SAP
  * related configurations
  * @user_config_sap_ch_freq : Frequency from userspace to start SAP
@@ -493,6 +577,11 @@ struct wait_for_key_timer {
  * @ap_policy: Concurrent ap policy config
  * @oper_ch_width: SAP current operating ch_width
  * @psd_20mhz: PSD power(dBm/MHz) of SAP operating in 20 MHz
+ * @ch_switch_info: channel switch info
+ * @is_owe_conn: is owe connection
+ * @acs_bandmask: Bitmap of the bands on which ACS is performed
+ * @best_chan_info: best 2ghz channel
+ * @man_chan_info: sap mandatory channel info
  */
 struct mlme_ap_config {
 	qdf_freq_t user_config_sap_ch_freq;
@@ -502,6 +591,11 @@ struct mlme_ap_config {
 	enum host_concurrent_ap_policy ap_policy;
 	enum phy_ch_width oper_ch_width;
 	uint8_t psd_20mhz;
+	struct sap_ch_switch_info ch_switch_info;
+	bool is_owe_conn;
+	uint32_t acs_bandmask;
+	struct sap_chan_info best_chan_info;
+	struct sap_man_chan_info man_chan_info;
 };
 
 /**
@@ -802,6 +896,7 @@ struct enhance_roam_info {
  * @cm_roam: Roaming configuration
  * @auth_log: Cached log records for SAE authentication frame
  * related information.
+ * @instance: instance id for each wlan_log_record
  * @roam_info: enhanced roam information include trigger, scan and
  *  frame information.
  * @roam_cache_num: number of roam information cached in driver
@@ -823,6 +918,7 @@ struct enhance_roam_info {
  * @connect_info: mlme connect information
  * @wait_key_timer: wait key timer
  * @eht_config: Eht capability configuration
+ * @ml_reconfig_ie: link reconfig ie raw data
  * @last_delba_sent_time: Last delba sent time to handle back to back delba
  *			  requests from some IOT APs
  * @ba_2k_jump_iot_ap: This is set to true if connected to the ba 2k jump IOT AP
@@ -831,6 +927,7 @@ struct enhance_roam_info {
  * @is_user_std_set: true if user set the @wifi_std
  * @wifi_std: wifi standard version
  * @max_mcs_index: Max supported mcs index of vdev
+ * @mac_4_addr: flag of mac 4 address
  * @vdev_traffic_type: to set if vdev is LOW_LATENCY or HIGH_TPUT
  * @country_ie_for_all_band: take all band channel info in country ie
  * @mlme_ap: SAP related vdev private configurations
@@ -839,7 +936,14 @@ struct enhance_roam_info {
  *				operation on bss color collision detection
  * @bss_color_change_runtime_lock: runtime lock to complete bss color change
  * @disconnect_runtime_lock: runtime lock to complete disconnection
+ * @best_6g_power_type: best 6g power type
+ * @mac_id: vdev mac_id
+ * @ap_nss: AP advertised NSS
  * @keep_alive_period: KEEPALIVE period in seconds
+ * @peer_set_key_wakelock: wakelock to protect peer set key op with firmware
+ * @peer_set_key_rt_wakelock: runtime pm wakelock for set key
+ * @set_key_wakelock_counter: Counter for runtime pm wakelock
+ * @is_acs_sap: Sets to true if this is an ACS SAP
  */
 struct mlme_legacy_priv {
 	bool chan_switch_in_progress;
@@ -862,8 +966,9 @@ struct mlme_legacy_priv {
 	struct wlan_log_record
 	    auth_log[MAX_ROAM_CANDIDATE_AP][WLAN_ROAM_MAX_CACHED_AUTH_FRAMES];
 #elif defined(WLAN_FEATURE_ROAM_OFFLOAD) && defined(CONNECTIVITY_DIAG_EVENT)
-	struct wlan_diag_packet_info
+	struct wlan_diag_packet
 	    auth_log[MAX_ROAM_CANDIDATE_AP][WLAN_ROAM_MAX_CACHED_AUTH_FRAMES];
+	uint8_t instance;
 #endif
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 #ifdef WLAN_FEATURE_ROAM_INFO_STATS
@@ -893,6 +998,9 @@ struct mlme_legacy_priv {
 #ifdef WLAN_FEATURE_11BE
 	tDot11fIEeht_cap eht_config;
 #endif
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+	uint8_t *ml_reconfig_ie;
+#endif
 	qdf_time_t last_delba_sent_time;
 	bool ba_2k_jump_iot_ap;
 	bool is_usr_ps_enabled;
@@ -901,6 +1009,7 @@ struct mlme_legacy_priv {
 	WMI_HOST_WIFI_STANDARD wifi_std;
 #ifdef WLAN_FEATURE_SON
 	uint8_t max_mcs_index;
+	bool mac_4_addr;
 #endif
 	uint8_t vdev_traffic_type;
 	bool country_ie_for_all_band;
@@ -912,7 +1021,13 @@ struct mlme_legacy_priv {
 	qdf_runtime_lock_t bss_color_change_runtime_lock;
 	qdf_runtime_lock_t disconnect_runtime_lock;
 	enum reg_6g_ap_type best_6g_power_type;
+	uint32_t mac_id;
+	uint8_t ap_nss;
 	uint16_t keep_alive_period;
+	qdf_wake_lock_t peer_set_key_wakelock;
+	qdf_runtime_lock_t peer_set_key_rt_wakelock;
+	qdf_atomic_t set_key_wakelock_counter;
+	bool is_acs_sap;
 };
 
 /**
@@ -1073,32 +1188,6 @@ struct sae_auth_retry *mlme_get_sae_auth_retry(struct wlan_objmgr_vdev *vdev);
 void mlme_free_sae_auth_retry(struct wlan_objmgr_vdev *vdev);
 
 /**
- * mlme_set_self_disconnect_ies() - Set diconnect IEs configured from userspace
- * @vdev: vdev pointer
- * @ie: pointer for disconnect IEs
- *
- * Return: None
- */
-void mlme_set_self_disconnect_ies(struct wlan_objmgr_vdev *vdev,
-				  struct element_info *ie);
-
-/**
- * mlme_free_self_disconnect_ies() - Free the self diconnect IEs
- * @vdev: vdev pointer
- *
- * Return: None
- */
-void mlme_free_self_disconnect_ies(struct wlan_objmgr_vdev *vdev);
-
-/**
- * mlme_get_self_disconnect_ies() - Get diconnect IEs from vdev object
- * @vdev: vdev pointer
- *
- * Return: Returns a pointer to the self disconnect IEs present in vdev object
- */
-struct element_info *mlme_get_self_disconnect_ies(struct wlan_objmgr_vdev *vdev);
-
-/**
  * mlme_set_peer_disconnect_ies() - Cache disconnect IEs received from peer
  * @vdev: vdev pointer
  * @ie: pointer for disconnect IEs
@@ -1109,7 +1198,7 @@ void mlme_set_peer_disconnect_ies(struct wlan_objmgr_vdev *vdev,
 				  struct element_info *ie);
 
 /**
- * mlme_free_peer_disconnect_ies() - Free the peer diconnect IEs
+ * mlme_free_peer_disconnect_ies() - Free the peer disconnect IEs
  * @vdev: vdev pointer
  *
  * Return: None
@@ -1175,7 +1264,7 @@ bool mlme_get_reconn_after_assoc_timeout_flag(struct wlan_objmgr_psoc *psoc,
 					      uint8_t vdev_id);
 
 /**
- * mlme_get_peer_disconnect_ies() - Get diconnect IEs from vdev object
+ * mlme_get_peer_disconnect_ies() - Get disconnect IEs from vdev object
  * @vdev: vdev pointer
  *
  * Return: Returns a pointer to the peer disconnect IEs present in vdev object
@@ -1351,6 +1440,18 @@ wlan_get_op_chan_freq_info_vdev_id(struct wlan_objmgr_pdev *pdev,
 				   enum phy_ch_width *ch_width);
 
 /**
+ * wlan_get_chan_by_vdev_id() - get chan info by vdev id
+ * @psoc: Pointer to psoc
+ * @vdev_id: vdev id
+ * @channel: channel info
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_get_chan_by_vdev_id(struct wlan_objmgr_psoc *psoc,
+				    uint8_t vdev_id,
+				    struct wlan_channel *channel);
+
+/**
  * wlan_strip_ie() - strip requested IE from IE buffer
  * @addn_ie: Additional IE buffer
  * @addn_ielen: Length of additional IE
@@ -1362,7 +1463,10 @@ wlan_get_op_chan_freq_info_vdev_id(struct wlan_objmgr_pdev *pdev,
  * @eid_max_len: maximum length of IE @eid
  *
  * This utility function is used to strip of the requested IE if present
- * in IE buffer.
+ * in IE buffer. If the buffer pointed by @extracted is not %NULL and if
+ * any matching IE can't be added to buffer pointed by @extracted due to
+ * lack of enough memory in @extracted buffer, they will still remain in
+ * the original frame pointed by @addn_ie.
  *
  * Return: QDF_STATUS
  */
@@ -1453,6 +1557,27 @@ void mlme_set_roam_trigger_bitmap(struct wlan_objmgr_psoc *psoc,
 				  uint8_t vdev_id, uint32_t val);
 
 /**
+ * mlme_set_roam_policy() - Set Roam Policy
+ * @psoc: pointer to psoc object
+ * @vdev_id: vdev ID
+ * @roam_policy: Roam policy to set. Refer enum wlan_roam_policy
+ *
+ * Return: void
+ */
+void mlme_set_roam_policy(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+			  enum wlan_roam_policy roam_policy);
+
+/**
+ * mlme_get_roam_policy() - Get current roam policy
+ * @psoc: Pointer to psoc pointer
+ * @vdev_id: vdev ID
+ *
+ * Return: Current roam_policy. REfer enum wlan_roam_policy
+ */
+enum wlan_roam_policy mlme_get_roam_policy(struct wlan_objmgr_psoc *psoc,
+					   uint8_t vdev_id);
+
+/**
  * mlme_get_roam_state() - Get roam state from vdev object
  * @psoc: psoc pointer
  * @vdev_id: vdev id
@@ -1474,40 +1599,73 @@ void mlme_set_roam_state(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
 			 enum roam_offload_state val);
 
 /**
- * mlme_get_operations_bitmap() - Get the mlme operations bitmap which
- *  contains the bitmap of mlme operations which have disabled roaming
- *  temporarily
+ * mlme_get_rso_disabled_bitmap() - Get the RSO disabled bitmap
  * @psoc: PSOC pointer
- * @vdev_id: vdev for which the mlme operation bitmap is requested
+ * @vdev_id: vdev for which the RSO disabled bitmap is requested
  *
  * Return: bitmap value
  */
 uint8_t
-mlme_get_operations_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id);
+mlme_get_rso_disabled_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id);
 
 /**
- * mlme_set_operations_bitmap() - Set the mlme operations bitmap which
- *  indicates what mlme operations are in progress
+ * mlme_set_rso_disabled_bitmap() - Set the RSO disabled bitmap
  * @psoc: PSOC pointer
- * @vdev_id: vdev for which the mlme operation bitmap is requested
+ * @vdev_id: vdev for which the RSO disabled bitmap is requested
  * @reqs: RSO stop requestor
  * @clear: clear bit if true else set bit
  *
  * Return: None
  */
 void
-mlme_set_operations_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
-			   enum wlan_cm_rso_control_requestor reqs, bool clear);
+mlme_set_rso_disabled_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+			     enum wlan_cm_rso_control_requestor reqs,
+			     bool clear);
 /**
- * mlme_clear_operations_bitmap() - Clear mlme operations bitmap which
- *  indicates what mlme operations are in progress
+ * mlme_clear_rso_disabled_bitmap() - Clear RSO disabled bitmap
  * @psoc: PSOC pointer
- * @vdev_id: vdev for which the mlme operation bitmap is requested
+ * @vdev_id: vdev for which the RSO disabled bitmap is requested
  *
  * Return: None
  */
 void
-mlme_clear_operations_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id);
+mlme_clear_rso_disabled_bitmap(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id);
+
+/**
+ * mlme_get_rso_pending_disable_req_bitmap() - Get the RSO disable req bitmap
+ * @psoc: PSOC pointer
+ * @vdev_id: vdev for which the RSO disable request bitmap is requested
+ *
+ * Return: bitmap value
+ */
+uint8_t
+mlme_get_rso_pending_disable_req_bitmap(struct wlan_objmgr_psoc *psoc,
+					uint8_t vdev_id);
+
+/**
+ * mlme_set_rso_pending_disable_req_bitmap() - Set the RSO disable req bitmap
+ * @psoc: PSOC pointer
+ * @vdev_id: vdev for which the RSO disable request bitmap is requested
+ * @reqs: RSO stop requestor
+ * @clear: clear bit if true else set bit
+ *
+ * Return: None
+ */
+void
+mlme_set_rso_pending_disable_req_bitmap(struct wlan_objmgr_psoc *psoc,
+					uint8_t vdev_id,
+					enum wlan_cm_rso_control_requestor reqs,
+					bool clear);
+/**
+ * mlme_clear_rso_pending_disable_req_bitmap() - Clear RSO disable req bitmap
+ * @psoc: PSOC pointer
+ * @vdev_id: vdev for which the RSO disable req bitmap is requested
+ *
+ * Return: None
+ */
+void
+mlme_clear_rso_pending_disable_req_bitmap(struct wlan_objmgr_psoc *psoc,
+					  uint8_t vdev_id);
 
 /**
  * mlme_get_cfg_wlm_level() - Get the WLM level value
@@ -1616,7 +1774,7 @@ QDF_STATUS wlan_mlme_get_mac_vdev_id(struct wlan_objmgr_pdev *pdev,
 
 /**
  * wlan_acquire_peer_key_wakelock -api to get key wakelock
- * @pdev: pdev
+ * @vdev: pointer to vdev object
  * @mac_addr: peer mac addr
  *
  * This function acquires wakelock and prevent runtime pm during key
@@ -1624,12 +1782,12 @@ QDF_STATUS wlan_mlme_get_mac_vdev_id(struct wlan_objmgr_pdev *pdev,
  *
  * Return: None
  */
-void wlan_acquire_peer_key_wakelock(struct wlan_objmgr_pdev *pdev,
+void wlan_acquire_peer_key_wakelock(struct wlan_objmgr_vdev *vdev,
 				    uint8_t *mac_addr);
 
 /**
  * wlan_release_peer_key_wakelock -api to release key wakelock
- * @pdev: pdev
+ * @vdev: pointer to vdev object
  * @mac_addr: peer mac addr
  *
  * This function releases wakelock and allow runtime pm after key
@@ -1637,7 +1795,7 @@ void wlan_acquire_peer_key_wakelock(struct wlan_objmgr_pdev *pdev,
  *
  * Return: None
  */
-void wlan_release_peer_key_wakelock(struct wlan_objmgr_pdev *pdev,
+void wlan_release_peer_key_wakelock(struct wlan_objmgr_vdev *vdev,
 				    uint8_t *mac_addr);
 
 /**
@@ -1651,6 +1809,25 @@ qdf_freq_t
 wlan_get_sap_user_config_freq(struct wlan_objmgr_vdev *vdev);
 
 /**
+ * wlan_sap_is_owe_connection_present() - Is owe connection
+ * @vdev: vdev
+ *
+ * Return: true if owe connection present
+ */
+bool wlan_sap_is_owe_connection_present(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * wlan_sap_set_owe_connection_support() - set owe connection present
+ * @vdev: vdev ctx
+ * @is_present: is owe present
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_sap_set_owe_connection_support(
+				struct wlan_objmgr_vdev *vdev,
+				bool is_present);
+
+/**
  * wlan_set_sap_user_config_freq() - Set the user configured frequency
  *
  * @vdev: pointer to vdev
@@ -1661,6 +1838,45 @@ wlan_get_sap_user_config_freq(struct wlan_objmgr_vdev *vdev);
 QDF_STATUS
 wlan_set_sap_user_config_freq(struct wlan_objmgr_vdev *vdev,
 			      qdf_freq_t freq);
+
+/**
+ * wlan_set_sap_best_channel_2ghz() - set sap best channel
+ * @vdev: vdev ctx
+ * @ch_info: channel info
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_set_sap_best_channel_2ghz(struct wlan_objmgr_vdev *vdev,
+					  struct sap_sel_ch_info *ch_info);
+
+/**
+ * wlan_get_sap_best_channel_2ghz() - get sap best channel
+ * @vdev: vdev ctx
+ * @chan_list: channel list
+ * @num_chan: number of channel
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_get_sap_best_channel_2ghz(struct wlan_objmgr_vdev *vdev,
+					  uint32_t **chan_list,
+					  uint8_t *num_chan);
+
+/**
+ * wlan_get_sap_man_chan_info() - get sap mandatory channel info
+ * @vdev: vdev ctx
+ *
+ * Return: sap mandatory channel info
+ */
+struct sap_man_chan_info
+*wlan_get_sap_man_chan_info(struct wlan_objmgr_vdev *vdev);
+/**
+ * wlan_get_sap_ch_sw_info() - get sap channel switch info
+ * @vdev: vdev ctx
+ *
+ * Return: sap new channel switch info
+ */
+struct sap_ch_switch_info
+*wlan_get_sap_ch_sw_info(struct wlan_objmgr_vdev *vdev);
 
 #if defined(WLAN_FEATURE_11BE_MLO)
 /**
@@ -1842,6 +2058,19 @@ wlan_mlme_get_sta_rx_nss(struct wlan_objmgr_psoc *psoc,
 			 struct wlan_objmgr_vdev *vdev,
 			 uint8_t *rx_nss);
 
+/**
+ * wlan_mlme_get_cur_ch_width_update_from_ap() - API to get current channel
+ * width from AP
+ *
+ * @vdev: pointer to vdev
+ * @cur_ch_width : current ch width
+ *
+ * Return: true if there is update else false
+ */
+bool
+wlan_mlme_get_cur_ch_width_update_from_ap(struct wlan_objmgr_vdev *vdev,
+					  enum phy_ch_width *cur_ch_width);
+
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 /**
  * wlan_mlme_defer_pmk_set_in_roaming() - Set the set_key pending status
@@ -2001,6 +2230,25 @@ wlan_mlme_send_csa_event_status_ind_cmd(struct wlan_objmgr_vdev *vdev,
 					uint8_t csa_status);
 
 /**
+ * wlan_mlme_set_vdev_mac_id() - set mac id for the vdev
+ * @pdev: pdev obj
+ * @vdev_id: vdev id
+ * @mac_id: mac id on which vdev is present
+ *
+ *  Return: void
+ */
+void wlan_mlme_set_vdev_mac_id(struct wlan_objmgr_pdev *pdev,
+			       uint8_t vdev_id, uint32_t mac_id);
+
+/**
+ * wlan_mlme_get_vdev_mac_id() - get mac id for the vdev
+ * @vdev: vdev obj
+ *
+ *  Return: mac_id on which vdev is present
+ */
+uint32_t wlan_mlme_get_vdev_mac_id(struct wlan_objmgr_vdev *vdev);
+
+/**
  * wlan_mlme_get_sap_psd_for_20mhz() - Get the PSD power for 20 MHz
  * frequency
  * @vdev: pointer to vdev object
@@ -2033,4 +2281,133 @@ wlan_find_peer_and_get_mac_and_mld_addr(
 				struct wlan_objmgr_psoc *psoc,
 				struct peer_mac_addresses *peer_mac_info);
 
+/**
+ * mlme_set_p2p_device_mac_addr() - set p2p device interface mac
+ * address in sta vdev mlme object
+ * @vdev: pointer to vdev
+ * @mac_addr: p2p device mac addr
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlme_set_p2p_device_mac_addr(struct wlan_objmgr_vdev *vdev,
+			     struct qdf_mac_addr *mac_addr);
+
+/**
+ * mlme_get_p2p_device_mac_addr() - get p2p device interface mac
+ * address from sta vdev mlme object
+ * @vdev: pointer to vdev
+ * @mac_addr: mac addr
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlme_get_p2p_device_mac_addr(struct wlan_objmgr_vdev *vdev,
+			     struct qdf_mac_addr *mac_addr);
+
+/**
+ * mlme_set_p2p_device_seq_num() - set sequence number for p2p device frame
+ * @vdev: pointer to vdev
+ * @seq_num: sequence number to be set
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlme_set_p2p_device_seq_num(struct wlan_objmgr_vdev *vdev, uint16_t seq_num);
+
+/**
+ * mlme_get_p2p_device_seq_num() - get p2p device sequence number
+ * @vdev: pointer to vdev
+ *
+ * Return: sequence number
+ */
+uint16_t mlme_get_p2p_device_seq_num(struct wlan_objmgr_vdev *vdev);
+
+#if defined(FEATURE_WLAN_SUPPORT_P2P_R2) || defined(FEATURE_WLAN_SUPPORT_PCC)
+/**
+ * wlan_get_wfd_mode_from_vdev_id() - Get WFD mode from VDEV ID
+ * @psoc: pointer to PSOC object
+ * @vdev_id: VDEV ID
+ *
+ * Return: WFD mode
+ */
+uint8_t wlan_get_wfd_mode_from_vdev_id(struct wlan_objmgr_psoc *psoc,
+				       uint8_t vdev_id);
+#else
+static inline uint8_t
+wlan_get_wfd_mode_from_vdev_id(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id)
+{
+	return 0xFF;
+}
+#endif /* FEATURE_WLAN_SUPPORT_P2P_R2 || FEATURE_WLAN_SUPPORT_PCC*/
+
+/**
+ * wlan_is_scc_tpc_power_supp_enabled() - Is FW SCC TPC support enabled
+ * @vdev: VDEV pointer
+ *
+ * Return: true if SCC TPC is supported else false
+ */
+bool
+wlan_is_scc_tpc_power_supp_enabled(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * mlme_clear_peer_private_object_data(): clear the data in MLME peer
+ * private object data
+ * @peer: peer object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlme_clear_peer_private_object_data(struct wlan_objmgr_peer *peer);
+
+#ifdef CONFIG_BAND_6GHZ
+/**
+ * mlme_get_c2c_support () - Get C2C support info
+ * @psoc: psoc ctx
+ * @value: c2c support flag pointer
+ *
+ * Return: QDF STATUS
+ */
+QDF_STATUS
+mlme_get_c2c_support(struct wlan_objmgr_psoc *psoc, bool *value);
+#else
+static inline QDF_STATUS
+mlme_get_c2c_support(struct wlan_objmgr_psoc *psoc, bool *value)
+{
+	*value = false;
+	return QDF_STATUS_E_NOSUPPORT;
+}
+#endif
+
+/*
+ * wlan_sap_get_acs_band_mask() - Get the reg band bitmap of the ACS channels
+ * @vdev: pointer to vdev object
+ *
+ * Return: REG BAND bitmap
+ */
+uint32_t wlan_sap_get_acs_band_mask(struct wlan_objmgr_vdev *vdev);
+
+/*
+ * wlan_sap_set_acs_band_mask()- Set the band bitmap of the ACS channels list
+ * @vdev: pointer to vdev object
+ * @bitmap: bitmap of the acs list
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS wlan_sap_set_acs_band_mask(struct wlan_objmgr_vdev *vdev,
+				      uint32_t bitmap);
+
+#if (defined(CONNECTIVITY_DIAG_EVENT) && \
+	defined(WLAN_FEATURE_ROAM_OFFLOAD))
+/**
+ * mlme_reset_log_instance_id() - Clear log instance id
+ * @vdev: vdev pointer
+ *
+ * Return: None
+ */
+void mlme_reset_log_instance_id(struct wlan_objmgr_vdev *vdev);
+#else
+static inline void mlme_reset_log_instance_id(struct wlan_objmgr_vdev *vdev)
+{}
+#endif
 #endif

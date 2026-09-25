@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -114,7 +114,6 @@ cdp_update_mon_mac_filter(ol_txrx_soc_handle soc,
 {
 	if (!soc || !soc->ops) {
 		dp_cdp_debug("Invalid Instance:");
-		QDF_BUG(0);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -1302,6 +1301,7 @@ static inline void cdp_set_delta_tsf(ol_txrx_soc_handle soc, uint8_t vdev_id,
 	soc->ops->ctrl_ops->txrx_set_delta_tsf(soc, vdev_id, delta_tsf);
 }
 #endif
+
 #ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
 /**
  * cdp_set_tsf_ul_delay_report() - Enable or disable reporting uplink delay
@@ -1357,7 +1357,79 @@ static inline QDF_STATUS cdp_get_uplink_delay(ol_txrx_soc_handle soc,
 
 	return soc->ops->ctrl_ops->txrx_get_uplink_delay(soc, vdev_id, val);
 }
+
+static inline QDF_STATUS
+cdp_enable_ul_delay(struct cdp_soc_t *soc, uint8_t vdev_id, bool enable)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid SOC instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_enable_ul_delay)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_enable_ul_delay(soc, vdev_id, enable);
+}
 #endif /* WLAN_FEATURE_TSF_UPLINK_DELAY */
+
+#ifdef WLAN_FEATURE_UL_JITTER
+/**
+ * cdp_get_uplink_jitter() - Get uplink delay jitter
+ * @soc: SOC TXRX handle
+ * @vdev_id: vdev id
+ * @val: pointer to save uplink jitter value
+ *
+ * Return: QDF_STATUS
+ */
+static inline QDF_STATUS cdp_get_uplink_jitter(ol_txrx_soc_handle soc,
+					       uint32_t vdev_id, uint32_t *val)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid SOC instance");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!val) {
+		dp_cdp_err("Invalid params val");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->avg_ul_delay_jitter_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->avg_ul_delay_jitter_stats(soc, vdev_id, val);
+}
+
+/**
+ * cdp_get_txrx_nss(): function to collect txrx nss
+ * @soc: soc handle
+ * @vdev_id: virtual device ID
+ * @req: nss stats array
+ *
+ * return: status
+ */
+static inline
+int cdp_get_txrx_nss(ol_txrx_soc_handle soc, uint8_t vdev_id, int **req)
+{
+	if (!soc || !soc->ops || !soc->ops->ctrl_ops || !req) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_ASSERT(0);
+		return 0;
+	}
+
+	if (soc->ops->ctrl_ops->txrx_nss_request)
+		return soc->ops->ctrl_ops->txrx_nss_request(soc, vdev_id,
+							    req);
+
+	return 0;
+}
+
+#endif /* WLAN_FEATURE_UL_JITTER */
 
 #ifdef QCA_UNDECODED_METADATA_SUPPORT
 /**
@@ -1477,4 +1549,146 @@ QDF_STATUS cdp_txrx_fisa_config(struct cdp_soc_t *soc, uint8_t pdev_id,
 						    cfg);
 }
 #endif
+
+/**
+ * cdp_get_pdev_mlo_timestamp_offset() - get MLO timestamp offset for the pdev
+ * @soc: pointer to the soc
+ * @pdev_id: id of physical device object
+ *
+ * Return: the MLO timestamp offset for the pdev
+ */
+static inline uint64_t
+cdp_get_pdev_mlo_timestamp_offset(ol_txrx_soc_handle soc, uint8_t pdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_get_pdev_mlo_timestamp_offset)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_get_pdev_mlo_timestamp_offset
+			(soc, pdev_id);
+}
+
+/**
+ * cdp_set_req_buff_descs - set required RX descriptors for connection
+ * @soc: DP soc reference
+ * @req_rx_buff_descs: required rx descriptors
+ * @pdev_id: pdev id
+ *
+ * Return: QDF_STATUS
+ */
+static inline QDF_STATUS
+cdp_set_req_buff_descs(struct cdp_soc_t *soc,
+		       uint64_t req_rx_buff_descs,
+		       uint32_t pdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_set_req_buff_descs)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_set_req_buff_descs(soc,
+						req_rx_buff_descs, pdev_id);
+}
+
+/**
+ * cdp_get_num_buff_descs_info - Get Buffer descriptors info
+ * @soc: DP soc reference
+ * @req_rx_buff_descs: required rx descriptors
+ * @in_use_rx_buff_descs: rx descriptors in use
+ * @pdev_id: pdev id
+ *
+ * Return: QDF_STATUS
+ */
+static inline QDF_STATUS
+cdp_get_num_buff_descs_info(struct cdp_soc_t *soc,
+			    uint64_t *req_rx_buff_descs,
+			    uint64_t *in_use_rx_buff_descs,
+			    uint32_t pdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_get_num_buff_descs_info)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_get_num_buff_descs_info(soc,
+						req_rx_buff_descs,
+						in_use_rx_buff_descs, pdev_id);
+}
+
+/**
+ * cdp_buffers_replenish_on_demand - Replenish Rx buffers on demand
+ * @soc: DP soc reference
+ * @num_buffers: Number of Rx buffers to replenish
+ * @pdev_id: pdev id
+ *
+ * Return: QDF_STATUS
+ */
+static inline uint32_t
+cdp_buffers_replenish_on_demand(struct cdp_soc_t *soc,
+				uint32_t num_buffers,
+				uint32_t pdev_id)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_debug("Invalid Instance:");
+		QDF_BUG(0);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_buffers_replenish_on_demand)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_buffers_replenish_on_demand(soc,
+						num_buffers, pdev_id);
+}
+
+static inline QDF_STATUS
+cdp_qos_latency_stats_request(struct cdp_soc_t *soc, uint8_t vdev_id,
+			      struct cdp_qos_latency_stats *request)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid Instance:");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_qos_latency_stats_request)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_qos_latency_stats_request(soc, vdev_id,
+								  request);
+}
+
+static inline QDF_STATUS
+cdp_qos_latency_get_stats(struct cdp_soc_t *soc, uint8_t vdev_id,
+			  struct cdp_qos_latency_stats_req *stats)
+{
+	if (!soc || !soc->ops) {
+		dp_cdp_err("Invalid Instance:");
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	if (!soc->ops->ctrl_ops ||
+	    !soc->ops->ctrl_ops->txrx_qos_latency_get_stats)
+		return QDF_STATUS_E_FAILURE;
+
+	return soc->ops->ctrl_ops->txrx_qos_latency_get_stats(soc, vdev_id,
+							      stats);
+}
 #endif /* _CDP_TXRX_CTRL_H_ */

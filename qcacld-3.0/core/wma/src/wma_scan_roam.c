@@ -1,6 +1,6 @@
  /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -183,10 +183,11 @@ QDF_STATUS wma_update_channel_list(WMA_HANDLE handle,
 		wma_handle->saved_chan.ch_freq_list[i] =
 					chan_list->chanParam[i].freq;
 
-		if (chan_list->chanParam[i].dfsSet) {
-			chan_p->is_chan_passive = 1;
+		if (chan_list->chanParam[i].dfsSet)
 			chan_p->dfs_set = 1;
-		}
+
+		if (chan_list->chanParam[i].is_passive)
+			chan_p->is_chan_passive = 1;
 
 		if (chan_list->chanParam[i].nan_disabled)
 			chan_p->nan_disabled = 1;
@@ -225,7 +226,7 @@ QDF_STATUS wma_update_channel_list(WMA_HANDLE handle,
 		/*TODO: Set WMI_SET_CHANNEL_ANTENNA_MAX */
 		/*TODO: WMI_SET_CHANNEL_REG_CLASSID */
 		chan_p->maxregpower = chan_list->chanParam[i].pwr;
-
+		qdf_mem_zero(&ch_params, sizeof(ch_params));
 		wma_update_ch_list_11be_params(&ch_params);
 
 		wlan_reg_set_channel_params_for_pwrmode(wma_handle->pdev,
@@ -238,6 +239,8 @@ QDF_STATUS wma_update_channel_list(WMA_HANDLE handle,
 		chan_p++;
 	}
 
+	scan_ch_param->is_c2c_supp = wlan_reg_does_country_supp_c2c(
+							wma_handle->pdev);
 	qdf_status = wmi_unified_scan_chan_list_cmd_send(wma_handle->wmi_handle,
 				scan_ch_param);
 
@@ -297,6 +300,7 @@ cm_handle_auth_offload(struct auth_offload_event *auth_event)
 	wlan_cm_set_sae_auth_ta(mac_ctx->pdev,
 				auth_event->vdev_id,
 				auth_event->ta);
+	wlan_set_log_instance_id(mac_ctx->pdev, auth_event->vdev_id);
 
 	wlan_cm_store_mlo_roam_peer_address(mac_ctx->pdev, auth_event);
 
@@ -754,12 +758,12 @@ wma_roam_update_vdev(tp_wma_handle wma,
 
 	is_assoc_peer = wlan_vdev_mlme_get_is_mlo_vdev(wma->psoc, vdev_id);
 	if (is_multi_link_roam(roam_synch_ind_ptr)) {
-		status = wma_create_peer(wma, mac_addr.bytes,
+		status = wma_create_peer(wma, mac_addr.bytes, NULL,
 					 WMI_PEER_TYPE_DEFAULT, vdev_id,
 					 roam_synch_ind_ptr->bssid.bytes,
 					 is_assoc_peer);
 	} else {
-		status = wma_create_peer(wma, mac_addr.bytes,
+		status = wma_create_peer(wma, mac_addr.bytes, NULL,
 					 WMI_PEER_TYPE_DEFAULT, vdev_id, NULL,
 					 is_assoc_peer);
 	}
@@ -975,9 +979,10 @@ QDF_STATUS wma_pre_chan_switch_setup(uint8_t vdev_id)
 	struct wma_txrx_node *intr;
 	uint16_t beacon_interval_ori;
 	bool restart;
-	uint16_t reduced_beacon_interval;
+	uint16_t reduced_beacon_interval = 0;
 	struct vdev_mlme_obj *mlme_obj;
 	struct wlan_objmgr_vdev *vdev;
+	struct sap_ch_switch_info *ch_switch_info;
 
 	if (!wma) {
 		pe_err("wma is NULL");
@@ -999,9 +1004,15 @@ QDF_STATUS wma_pre_chan_switch_setup(uint8_t vdev_id)
 		wma_get_channel_switch_in_progress(intr);
 	if (restart && intr->beacon_filter_enabled)
 		wma_remove_beacon_filter(wma, &intr->beacon_filter);
-
-	reduced_beacon_interval =
-		wma->mac_context->sap.SapDfsInfo.reduced_beacon_interval;
+	if (wma_is_vdev_in_ap_mode(wma, vdev_id)) {
+		ch_switch_info = wlan_get_sap_ch_sw_info(vdev);
+		if (!ch_switch_info) {
+			pe_err("Invalid channel info");
+			return QDF_STATUS_E_FAILURE;
+		}
+		reduced_beacon_interval =
+		ch_switch_info->reduced_beacon_interval;
+	}
 	if (wma_is_vdev_in_ap_mode(wma, vdev_id) && reduced_beacon_interval) {
 
 
@@ -1058,13 +1069,11 @@ QDF_STATUS wma_post_chan_switch_setup(uint8_t vdev_id)
 	 */
 	if (intr->type == WMI_VDEV_TYPE_MONITOR) {
 		des_chan = intr->vdev->vdev_mlme.des_chan;
-		val.cdp_pdev_param_monitor_chan = des_chan->ch_ieee;
-		cdp_txrx_set_pdev_param(soc,
-					wlan_objmgr_pdev_get_pdev_id(wma->pdev),
+		val.cdp_vdev_param_monitor_chan = des_chan->ch_ieee;
+		cdp_txrx_set_vdev_param(soc, vdev_id,
 					CDP_MONITOR_CHANNEL, val);
-		val.cdp_pdev_param_mon_freq = des_chan->ch_freq;
-		cdp_txrx_set_pdev_param(soc,
-					wlan_objmgr_pdev_get_pdev_id(wma->pdev),
+		val.cdp_vdev_param_mon_freq = des_chan->ch_freq;
+		cdp_txrx_set_vdev_param(soc, vdev_id,
 					CDP_MONITOR_FREQUENCY, val);
 	}
 	return QDF_STATUS_SUCCESS;
@@ -1666,7 +1675,7 @@ int wma_extscan_hotlist_match_event_handler(void *handle,
 		return -EINVAL;
 	}
 	if (numap > param_buf->num_hotlist_match) {
-		wma_err("Invalid no of total enteries %d", numap);
+		wma_err("Invalid no of total entries %d", numap);
 		return -EINVAL;
 	}
 	if (numap > WMA_EXTSCAN_MAX_HOTLIST_ENTRIES) {
@@ -2706,13 +2715,6 @@ static void wma_invalid_roam_reason_handler(tp_wma_handle wma_handle,
 	qdf_mem_free(roam_synch_data);
 }
 
-void wma_handle_roam_sync_timeout(tp_wma_handle wma_handle,
-				  struct roam_sync_timeout_timer_info *info)
-{
-	wma_invalid_roam_reason_handler(wma_handle, info->vdev_id,
-					CM_ROAM_NOTIF_ROAM_ABORT);
-}
-
 void cm_invalid_roam_reason_handler(uint32_t vdev_id, enum cm_roam_notif notif,
 				    uint32_t reason)
 {
@@ -2830,6 +2832,12 @@ wma_update_pdev_hw_mode_trans_ind(tp_wma_handle wma,
 				  struct cm_hw_mode_trans_ind *trans_ind)
 {
 	uint32_t i;
+
+	if (!trans_ind ||
+	    trans_ind->num_vdev_mac_entries > MAX_VDEV_SUPPORTED) {
+		wma_err("Inval trans_ind param");
+		return;
+	}
 
 	/* Store the vdev-mac map in WMA and send to policy manager */
 	for (i = 0; i < trans_ind->num_vdev_mac_entries; i++)
@@ -3196,12 +3204,28 @@ update_deflink:
 }
 
 QDF_STATUS
+cm_roam_delete_session_for_sl_to_ml_failure(uint8_t vdev_id)
+{
+	struct mac_context *mac_ctx = cds_get_context(QDF_MODULE_ID_PE);
+	struct pe_session *pe_session;
+
+	if (!mac_ctx)
+		return QDF_STATUS_E_INVAL;
+
+	pe_session = pe_find_session_by_vdev_id(mac_ctx, vdev_id);
+	if (pe_session)
+		pe_delete_session(mac_ctx, pe_session);
+
+	return QDF_STATUS_SUCCESS;
+}
+
+QDF_STATUS
 cm_roam_pe_sync_callback(struct roam_offload_synch_ind *sync_ind,
-			 uint8_t vdev_id, uint16_t ie_len)
+			 uint8_t vdev_id, uint16_t ie_len,
+			 bool *new_link_session)
 {
 	tp_wma_handle wma = cds_get_context(QDF_MODULE_ID_WMA);
 	struct pe_session *pe_session;
-	bool new_link_session = false;
 	QDF_STATUS status;
 
 	if (!wma)
@@ -3209,7 +3233,6 @@ cm_roam_pe_sync_callback(struct roam_offload_synch_ind *sync_ind,
 
 	pe_session = pe_find_session_by_vdev_id(wma->mac_context, vdev_id);
 	if (!pe_session) {
-		new_link_session = true;
 		/* Legacy to MLO roaming: create new pe session */
 		status = lim_create_and_fill_link_session(wma->mac_context,
 							  vdev_id,
@@ -3220,18 +3243,14 @@ cm_roam_pe_sync_callback(struct roam_offload_synch_ind *sync_ind,
 				vdev_id);
 			return status;
 		}
+		if (new_link_session)
+			*new_link_session = true;
 	}
+
 	status = wma->pe_roam_synch_cb(wma->mac_context,
 				vdev_id, sync_ind, ie_len,
 				SIR_ROAM_SYNCH_PROPAGATION);
 
-	/* delete newly added pe session in case of failure */
-	if (new_link_session && QDF_IS_STATUS_ERROR(status)) {
-		pe_session = pe_find_session_by_vdev_id(wma->mac_context,
-							vdev_id);
-		if (pe_session)
-			pe_delete_session(wma->mac_context, pe_session);
-	}
 	return status;
 }
 

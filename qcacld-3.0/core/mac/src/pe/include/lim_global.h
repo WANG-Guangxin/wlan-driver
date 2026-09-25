@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -62,7 +62,8 @@ typedef enum eLimSystemRole {
 	eLIM_P2P_DEVICE_ROLE,
 	eLIM_P2P_DEVICE_GO,
 	eLIM_P2P_DEVICE_CLIENT,
-	eLIM_NDI_ROLE
+	eLIM_NDI_ROLE,
+	eLIM_PASSTHRU_ROLE
 } tLimSystemRole;
 
 /*
@@ -223,6 +224,10 @@ typedef struct tLimPreAuthNode {
 #ifdef WLAN_FEATURE_11BE_MLO
 	tSirMacAddr peer_mld;
 #endif
+	/* This structure is to maintain the peer specific fils information
+	 * like anonce, snonce , tk etc.
+	 */
+	struct pe_fils_session *fils_info;
 } tLimPreAuthNode, *tpLimPreAuthNode;
 
 /* Pre-authentication table definition */
@@ -366,6 +371,11 @@ typedef struct sLimChannelSwitchInfo {
 	int8_t switchCount;
 	uint32_t switchTimeoutValue;
 	uint8_t switchMode;
+
+	uint8_t legacy_sec_ch_offset;
+	uint8_t legacy_ccfs0;
+	uint8_t legacy_ccfs1;
+	enum phy_ch_width legacy_ch_width;
 } tLimChannelSwitchInfo, *tpLimChannelSwitchInfo;
 
 typedef struct sLimOperatingModeInfo {

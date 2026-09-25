@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -42,6 +42,7 @@ struct ml_rv_info;
 #define WLAN_VDEV_MLME_TYPE_NAN 0x5
 #define WLAN_VDEV_MLME_TYPE_OCB 0x6
 #define WLAN_VDEV_MLME_TYPE_NDI 0x7
+#define WLAN_VDEV_MLME_TYPE_PASSTHRU 0x9
 
 /* values for vdev_subtype */
 #define WLAN_VDEV_MLME_SUBTYPE_UNKNOWN   0x0
@@ -98,10 +99,12 @@ struct vdev_mlme_proto_ap {
  * struct vdev_mlme_proto_sta - sta specific mlme protocol
  * @assoc_id: association id of station
  * @uapsd_cfg: uapsd configuration
+ * @sta_in_20mhz: STA is 20 MHz only or not
  */
 struct vdev_mlme_proto_sta {
 	uint16_t assoc_id;
 	uint16_t uapsd_cfg;
+	bool sta_in_20mhz;
 };
 
 /**
@@ -458,11 +461,37 @@ struct vdev_mlme_mgmt_ap {
 };
 
 /**
+ * enum vdev_mlme_bss_param_flags - flag bits for vdev_mlme_bss_params::flags
+ * @VDEV_MLME_BSS_PARAM_CTS_PROT: CTS protection enabled (ERP use_protection)
+ * @VDEV_MLME_BSS_PARAM_SHORT_PREAMBLE: short preamble enabled (cap info bit)
+ * @VDEV_MLME_BSS_PARAM_SHORT_SLOT_TIME: short slot time enabled (cap info bit)
+ */
+enum vdev_mlme_bss_param_flags {
+	VDEV_MLME_BSS_PARAM_CTS_PROT        = BIT(0),
+	VDEV_MLME_BSS_PARAM_SHORT_PREAMBLE  = BIT(1),
+	VDEV_MLME_BSS_PARAM_SHORT_SLOT_TIME = BIT(2),
+};
+
+/**
+ * struct vdev_mlme_bss_params - BSS parameters learnt from beacon/assoc resp
+ * @flags: bitmask of enum vdev_mlme_bss_param_flags
+ * @dtim_period: DTIM period advertised by the BSS
+ * @beacon_interval: beacon interval of the BSS
+ */
+struct vdev_mlme_bss_params {
+	uint8_t flags;
+	uint8_t dtim_period;
+	uint16_t beacon_interval;
+};
+
+/**
  * struct vdev_mlme_mgmt_sta - sta specific vdev mlme mgmt cfg
  * @he_mcs_12_13_map: map to indicate mcs12/13 caps of peer&dut
+ * @bss_params: BSS parameters learnt from beacon/assoc response
  */
 struct vdev_mlme_mgmt_sta {
 	uint16_t he_mcs_12_13_map;
+	struct vdev_mlme_bss_params bss_params;
 };
 
 /**
@@ -727,6 +756,12 @@ enum vdev_start_resp_type {
  * @mlme_vdev_reconfig_notify_standby: callback to notify to process standby
  *                                      link removal
  * @mlme_vdev_notify_mlo_sync_wait_entry:
+ * @mlme_vdev_notify_link_update_event: callback for t2lm link enable/
+ *                                           disable event
+ * @mlme_vdev_init_down:                callback to process event down in init
+ *                                      state
+ *@mlme_vdev_link_reconfig_remove:      callback to send link removal in up
+ *                                      remove state
  */
 struct vdev_mlme_ops {
 	QDF_STATUS (*mlme_vdev_validate_basic_params)(
@@ -816,6 +851,23 @@ struct vdev_mlme_ops {
 				struct ml_rv_info *reconfig_info);
 	QDF_STATUS (*mlme_vdev_notify_mlo_sync_wait_entry)(
 				struct vdev_mlme_obj *vdev_mlme);
+	QDF_STATUS (*mlme_vdev_notify_link_update_event)(
+				struct wlan_objmgr_vdev *vdev,
+				void *t2lm);
+	void (*mlme_vdev_init_down)(struct vdev_mlme_obj *vdev_mlme);
+	QDF_STATUS (*mlme_vdev_link_reconfig_remove)(
+				struct vdev_mlme_obj *vdev_mlme,
+				uint16_t event_data_len, void *event_data);
+};
+
+/**
+ * struct p2p_device_mode_data - p2p device mode data
+ * @p2p_dev_addr: p2p device mac address
+ * @seq_num: sequence number used for p2p device frames when it's using STA vdev
+ */
+struct p2p_device_mode_data {
+	struct qdf_mac_addr p2p_dev_addr;
+	uint16_t seq_num;
 };
 
 /**
@@ -832,6 +884,7 @@ struct vdev_mlme_ops {
  * @reg_tpc_obj:          Regulatory transmit power info
  * @ml_reconfig_timer: VDEV ml reconfig timer
  * @ml_reconfig_started:  Flag to indicate reconfig status for vdev
+ * @p2p_dev_data: STA vdev support for p2p device
  */
 struct vdev_mlme_obj {
 	struct vdev_mlme_proto proto;
@@ -850,6 +903,9 @@ struct vdev_mlme_obj {
 	struct reg_tpc_power_info reg_tpc_obj;
 	qdf_timer_t ml_reconfig_timer;
 	bool ml_reconfig_started;
+#ifdef CONVERGED_P2P_ENABLE
+	struct p2p_device_mode_data p2p_dev_data;
+#endif
 };
 
 /**
@@ -884,6 +940,47 @@ static inline QDF_STATUS wlan_vdev_mlme_set_ssid(
 		return QDF_STATUS_E_FAILURE;
 	}
 	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * wlan_vdev_mlme_set_sta_in_20mhz() - Set whether STA is allowed on
+ * 20 MHz only or not
+ * @psoc: pointer to psoc object
+ * @value: value to set STA is allowed on 20 MHz only or not
+ * Return: QDF Status
+ */
+static inline QDF_STATUS
+wlan_vdev_mlme_set_sta_in_20mhz(struct wlan_objmgr_vdev *vdev,
+					      bool value)
+{
+	struct vdev_mlme_obj *vdev_mlme;
+
+	vdev_mlme = wlan_vdev_mlme_get_cmpt_obj(vdev);
+	if (!vdev_mlme)
+		return QDF_STATUS_E_FAILURE;
+
+	vdev_mlme->proto.sta.sta_in_20mhz = value;
+
+	return QDF_STATUS_SUCCESS;
+}
+
+/**
+ * wlan_vdev_mlme_get_sta_in_20mhz() - Check if the STA is allowed on 20 MHz
+ * only or not
+ * @psoc: pointer to psoc object
+ *
+ * Return: bool to check if STA is allowed on 20 MHz only or not
+ */
+static inline bool
+wlan_vdev_mlme_get_sta_in_20mhz(struct wlan_objmgr_vdev *vdev)
+{
+	struct vdev_mlme_obj *vdev_mlme;
+
+	vdev_mlme = wlan_vdev_mlme_get_cmpt_obj(vdev);
+	if (!vdev_mlme)
+		return false;
+
+	return vdev_mlme->proto.sta.sta_in_20mhz;
 }
 
 /**
@@ -1935,4 +2032,26 @@ QDF_STATUS vdev_mgr_cdp_vdev_attach(struct vdev_mlme_obj *mlme_obj);
  */
 QDF_STATUS vdev_mgr_cdp_vdev_detach(struct vdev_mlme_obj *mlme_obj);
 #endif
+
+/**
+ * wlan_vdev_mlme_get_bss_params() - get BSS parameters for a STA vdev
+ * @vdev: VDEV object
+ * @bss_params: output; caller-allocated struct to receive a copy of the
+ *              BSS parameters cached from the beacon/assoc response
+ *
+ * Return: QDF_STATUS_SUCCESS on success, QDF_STATUS_E_FAILURE otherwise
+ */
+static inline QDF_STATUS
+wlan_vdev_mlme_get_bss_params(struct wlan_objmgr_vdev *vdev,
+			      struct vdev_mlme_bss_params *bss_params)
+{
+	struct vdev_mlme_obj *vdev_mlme;
+
+	vdev_mlme = wlan_vdev_mlme_get_cmpt_obj(vdev);
+	if (!vdev_mlme)
+		return QDF_STATUS_E_FAILURE;
+
+	*bss_params = vdev_mlme->mgmt.sta.bss_params;
+	return QDF_STATUS_SUCCESS;
+}
 #endif

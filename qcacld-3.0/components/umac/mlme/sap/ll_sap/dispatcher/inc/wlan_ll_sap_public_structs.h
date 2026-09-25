@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -28,6 +28,8 @@
 /* Indicates MAX bearer switch requesters at a time */
 #define MAX_BEARER_SWITCH_REQUESTERS 5
 #define BS_REQ_ID_INVALID 0xFFFFFFFF
+#define LL_SAP_INVALID_COOKIE 0xFFFF
+
 typedef uint32_t wlan_bs_req_id;
 
 /**
@@ -61,13 +63,41 @@ enum bearer_switch_status {
  * @BEARER_SWITCH_REQ_CONNECT: Bearer switch requester is connect
  * @BEARER_SWITCH_REQ_CSA: Bearer switch requester is CSA
  * @BEARER_SWITCH_REQ_FW: Bearer switch requester is FW
+ * @BEARER_SWITCH_REQ_P2P_GO: Bearer switch requester is P2P_GO
+ * @BEARER_SWITCH_REQ_ACS: Bearer switch requester is ACS
+ * @BEARER_SWITCH_REQ_STOP_AP: Bearer switch requester is STOP_AP
  * @BEARER_SWITCH_REQ_MAX: Indicates MAX bearer switch requester
  */
 enum bearer_switch_req_source {
 	BEARER_SWITCH_REQ_CONNECT,
 	BEARER_SWITCH_REQ_CSA,
 	BEARER_SWITCH_REQ_FW,
+	BEARER_SWITCH_REQ_P2P_GO,
+	BEARER_SWITCH_REQ_ACS,
+	BEARER_SWITCH_REQ_STOP_AP,
 	BEARER_SWITCH_REQ_MAX,
+};
+
+/**
+ * enum high_ap_availability_operation: High AP Availability operation type
+ * @HIGH_AP_AVAILABILITY_OPERATION_REQUEST: High AP availability operation req
+ * @HIGH_AP_AVAILABILITY_OPERATION_CANCEL: High AP availability operation cancel
+ * @HIGH_AP_AVAILABILITY_OPERATION_STARTED: High AP availability operation
+ * started
+ * @HIGH_AP_AVAILABILITY_OPERATION_COMPLETED: High AP availability operation
+ * completed
+ * @HIGH_AP_AVAILABILITY_OPERATION_CANCELLED: High AP availability operation
+ * cancelled
+ * @HiGH_AP_AVAILABILITY_OPERATION_INVALID: Invalid high AP availability
+ * operation
+ */
+enum high_ap_availability_operation {
+	HIGH_AP_AVAILABILITY_OPERATION_REQUEST = 0,
+	HIGH_AP_AVAILABILITY_OPERATION_CANCEL = 1,
+	HIGH_AP_AVAILABILITY_OPERATION_STARTED = 2,
+	HIGH_AP_AVAILABILITY_OPERATION_COMPLETED = 3,
+	HIGH_AP_AVAILABILITY_OPERATION_CANCELLED = 4,
+	HiGH_AP_AVAILABILITY_OPERATION_INVALID,
 };
 
 /**
@@ -107,6 +137,16 @@ struct wlan_ll_lt_sap_freq_list {
 	qdf_freq_t best_freq;
 	qdf_freq_t prev_freq;
 	uint32_t weight_best_freq;
+};
+
+/**
+ * struct ll_sap_csa_tsf_rsp - LL_SAP csa tsf response
+ * @psoc: psoc object
+ * @twt_params: TWT params
+ */
+struct ll_sap_csa_tsf_rsp {
+	struct wlan_objmgr_psoc *psoc;
+	struct twt_session_stats_info twt_params;
 };
 
 /**
@@ -155,16 +195,73 @@ struct wlan_bearer_switch_request {
 };
 
 /**
+ * struct ll_sap_oob_connect_request - ll_sap OOB connect request
+ * @vdev_id: Vdev id on which OOB connect request is received
+ * @connect_req_type: Connect request type
+ * @vdev_available_duration: Vdev available duratin, for which vdev, identified
+ * with vdev id will remain on its current channel
+ * @operation: high ap availability operation type
+ */
+struct ll_sap_oob_connect_request {
+	uint8_t vdev_id;
+	enum high_ap_availability_operation connect_req_type;
+	uint32_t vdev_available_duration;
+	enum high_ap_availability_operation operation;
+};
+
+/**
+ * struct ll_sap_oob_connect_response_event - ll_sap OOB connect response
+ * @vdev_id: Vdev id on which OOB connect response is received
+ * @connect_resp_type: Connect response type
+ */
+struct ll_sap_oob_connect_response_event {
+	uint8_t vdev_id;
+	enum high_ap_availability_operation connect_resp_type;
+};
+
+/**
+ * enum ll_sap_get_target_tsf: Get target_tsf for LL_SAP in different scenario
+ * @TARGET_TSF_ECSA_ACTION_FRAME: Get target_tsf when ECSA action frame has to
+ * be sent
+ * @TARGET_TSF_VDEV_RESTART: Get target_tsf when vdev_restart command has to be
+ * sent to firmware
+ * @TARGET_TSF_GATT_MSG: Indicate target_tsf to userspace
+ */
+enum ll_sap_get_target_tsf {
+	TARGET_TSF_ECSA_ACTION_FRAME = 0,
+	TARGET_TSF_VDEV_RESTART = 1,
+	TARGET_TSF_GATT_MSG = 2,
+};
+
+/**
+ * enum ll_sap_csa_source: LL_SAP CSA source
+ * @LL_SAP_CSA_CONCURENCY: LL_SAP CSA due to concurrency
+ * @LL_SAP_CSA_DCS: LL_SAP CSA due to DCS triggred
+ */
+enum ll_sap_csa_source {
+	LL_SAP_CSA_CONCURENCY = 0,
+	LL_SAP_CSA_DCS = 1,
+};
+
+/**
  * struct wlan_ll_sap_tx_ops - defines southbound tx callbacks for
  * LL_SAP (low latency sap) component
  * @send_audio_transport_switch_resp: function pointer to indicate audio
  * transport switch response to FW
+ * @send_oob_connect_request: OOB connect request to FW
+ * @get_tsf_stats_for_csa: Get tsf stats for csa
  */
 struct wlan_ll_sap_tx_ops {
 	QDF_STATUS (*send_audio_transport_switch_resp)(
 					struct wlan_objmgr_psoc *psoc,
 					enum bearer_switch_req_type req_type,
 					enum bearer_switch_status status);
+	QDF_STATUS (*send_oob_connect_request)(
+					struct wlan_objmgr_psoc *psoc,
+					struct ll_sap_oob_connect_request *req);
+	QDF_STATUS (*get_tsf_stats_for_csa)(
+					struct wlan_objmgr_psoc *psoc,
+					uint8_t vdev_id);
 };
 
 /**
@@ -172,21 +269,32 @@ struct wlan_ll_sap_tx_ops {
  * LL_SAP (low latency SAP) component
  * @audio_transport_switch_req: function pointer to indicate audio
  * transport switch request from FW
+ * @oob_connect_response: Response of the out of bound connect request
  */
 struct wlan_ll_sap_rx_ops {
 	QDF_STATUS (*audio_transport_switch_req)(
 					struct wlan_objmgr_psoc *psoc,
 					enum bearer_switch_req_type req_type);
+	QDF_STATUS (*oob_connect_response)(
+				struct wlan_objmgr_psoc *psoc,
+				struct ll_sap_oob_connect_response_event rsp);
 };
 
 /**
  * struct ll_sap_ops - ll_sap osif callbacks
  * @ll_sap_send_audio_transport_switch_req_cb: Send audio transport request to
  * userspace
+ * @ll_sap_send_high_ap_availability_resp_cb: Send high ap availability response
+ * to userspace
  */
 struct ll_sap_ops {
 		void (*ll_sap_send_audio_transport_switch_req_cb)(
 					struct wlan_objmgr_vdev *vdev,
-					enum bearer_switch_req_type req_type);
+					enum bearer_switch_req_type req_type,
+					enum bearer_switch_req_source source);
+		void (*ll_sap_send_high_ap_availability_resp_cb)(
+				struct wlan_objmgr_vdev *vdev,
+				enum high_ap_availability_operation operation,
+				uint16_t cookie);
 };
 #endif /* _WLAN_LL_SAP_PUBLIC_STRUCTS_H_ */

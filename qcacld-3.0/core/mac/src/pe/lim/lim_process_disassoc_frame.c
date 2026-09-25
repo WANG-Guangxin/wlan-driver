@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -44,6 +44,7 @@
 #include "sch_api.h"
 #include "wlan_dlm_api.h"
 #include "wlan_connectivity_logging.h"
+#include <lim_mlo.h>
 
 /**
  * lim_process_disassoc_frame
@@ -99,6 +100,9 @@ lim_process_disassoc_frame(struct mac_context *mac, uint8_t *pRxPacketInfo,
 		pe_err("rx frame doesn't have valid a1 address, drop it");
 		return;
 	}
+
+	if (LIM_IS_AP_ROLE(pe_session) && lim_mismatch_bssid_da(pHdr))
+		return;
 
 	if (LIM_IS_STA_ROLE(pe_session) &&
 	    wlan_drop_mgmt_frame_on_link_removal(pe_session->vdev)) {
@@ -323,7 +327,8 @@ lim_process_disassoc_frame(struct mac_context *mac, uint8_t *pRxPacketInfo,
 		ap_info.original_timeout = ap_info.retry_delay;
 		ap_info.received_time = qdf_mc_timer_get_system_time();
 
-		lim_add_bssid_to_reject_list(mac->pdev, &ap_info);
+		lim_add_bssid_to_reject_list(mac->pdev,
+					     pe_session->vdev_id, &ap_info);
 	}
 	lim_extract_ies_from_deauth_disassoc(pe_session, (uint8_t *)pHdr,
 					WMA_GET_RX_MPDU_LEN(pRxPacketInfo));
@@ -334,6 +339,7 @@ lim_process_disassoc_frame(struct mac_context *mac, uint8_t *pRxPacketInfo,
 
 	lim_perform_disassoc(mac, frame_rssi, reasonCode,
 			     pe_session, pHdr->sa);
+	lim_update_disconnect_vdev_id(mac, pe_session->vdev_id);
 
 	if (mac->mlme_cfg->gen.fatal_event_trigger &&
 	    (reasonCode != REASON_UNSPEC_FAILURE &&
@@ -369,7 +375,8 @@ void lim_disassoc_tdls_peers(struct mac_context *mac_ctx,
 	     (sta_ds->mlmStaContext.mlmState ==
 	      eLIM_MLM_IDLE_STATE)) &&
 	    (IS_CURRENT_BSSID(mac_ctx, addr, pe_session)))
-		lim_delete_tdls_peers(mac_ctx, pe_session);
+		lim_delete_tdls_peers(mac_ctx, pe_session,
+				      TDLS_PEER_DEL_REASON_NONE);
 }
 #endif
 
@@ -426,6 +433,7 @@ void lim_perform_disassoc(struct mac_context *mac_ctx, int32_t frame_rssi,
 		return;
 	}
 
+	lim_mlo_sta_notify_peer_disconn(pe_session);
 	lim_update_lost_link_info(mac_ctx, pe_session, frame_rssi);
 	lim_post_sme_message(mac_ctx, LIM_MLM_DISASSOC_IND,
 			(uint32_t *) &mlmDisassocInd);

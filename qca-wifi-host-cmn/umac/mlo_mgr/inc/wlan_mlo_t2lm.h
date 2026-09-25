@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -23,12 +23,14 @@
 
 #include <wlan_cmn_ieee80211.h>
 #include <wlan_mlo_mgr_public_structs.h>
+#include <qdf_hrtimer.h>
+#include <wlan_mlo_t2lm.h>
 #ifdef WMI_AP_SUPPORT
 #include <wlan_cmn.h>
 #endif
 
 struct mlo_vdev_host_tid_to_link_map_resp;
-struct wlan_mlo_dev_context;
+struct wlan_mlo_peer_context;
 
 /* Max T2LM TIDS count */
 #define T2LM_MAX_NUM_TIDS 8
@@ -193,6 +195,335 @@ struct wlan_t2lm_info {
 };
 
 /**
+ * struct ttlm_req_params - TTLM req params
+ * @ml_peer: MLO Peer context
+ * @t2lm_info: Provides the TID to LINK mapping information
+ */
+struct ttlm_req_params {
+	struct wlan_mlo_peer_context *ml_peer;
+	struct wlan_t2lm_info t2lm_info[WLAN_T2LM_MAX_DIRECTION];
+};
+
+/**
+ * enum wlan_ttlm_sm_state - TTLM states
+ * @WLAN_TTLM_S_INIT: Default state, IDLE state
+ * @WLAN_TTLM_S_INPROGRESS: State when TTLM is in progress
+ * @WLAN_TTLM_S_NEGOTIATED: State when TTLM negotiate
+ * @WLAN_TTLM_S_MAX: Max state
+ * @WLAN_TTLM_SS_STA_INPROGRESS: STA side TTLM is in progress
+ * @WLAN_TTLM_SS_AP_ACTION_INPROGRESS: AP side Action req is in progress
+ * @WLAN_TTLM_SS_AP_BEACON_INPROGRESS: AP side Beacon is in progress
+ * @WLAN_TTLM_SS_AP_BTM_INPROGRESS: AP side BTM is in progress
+ * @WLAN_TTLM_SS_TEARDOWN_INPROGRESS: Teardown is in progress
+ * @WLAN_TTLM_SS_LINK_RECFG_UPDATE_MAPPING_INPROGRESS: Update TTLM mapping
+ * due to Link Reconfiguration request
+ * @WLAN_TTLM_SS_MAX: Max substate
+ */
+enum wlan_ttlm_sm_state {
+	WLAN_TTLM_S_INIT = 0,
+	WLAN_TTLM_S_INPROGRESS = 1,
+	WLAN_TTLM_S_NEGOTIATED = 2,
+	WLAN_TTLM_S_MAX = 3,
+	WLAN_TTLM_SS_STA_INPROGRESS = 4,
+	WLAN_TTLM_SS_AP_ACTION_INPROGRESS = 5,
+	WLAN_TTLM_SS_AP_BEACON_INPROGRESS = 6,
+	WLAN_TTLM_SS_AP_BTM_INPROGRESS = 7,
+	WLAN_TTLM_SS_TEARDOWN_INPROGRESS = 8,
+	WLAN_TTLM_SS_LINK_RECFG_UPDATE_MAPPING_INPROGRESS = 9,
+	WLAN_TTLM_SS_MAX,
+};
+
+/**
+ * enum wlan_ttlm_sm_evt - TTLM related events
+ * Note: make sure to update ttlm_sm_event_names on updating this enum
+ * @WLAN_TTLM_SM_EV_TX_ACTION_REQ: TTLM Action request from STA
+ * @WLAN_TTLM_SM_EV_TX_ACTION_REQ_START: TTLM Action request initiated
+ * @WLAN_TTLM_SM_EV_TX_ACTION_REQ_ACTIVE: TTLM Action req from STA is active
+ * @WLAN_TTLM_SM_EV_TX_ACTION_RSP: TTLM Action response from STA
+ * @WLAN_TTLM_SM_EV_RX_ACTION_REQ: TTLM Action request from AP
+ * @WLAN_TTLM_SM_EV_RX_ACTION_RSP: TTLM Action response from AP
+ * @WLAN_TTLM_SM_EV_BEACON: TTLM  Beacon
+ * @WLAN_TTLM_SM_EV_BTM_LINK_DISABLE: BTM req from AP
+ * @WLAN_TTLM_SM_EV_TX_TEARDOWN: TTLM Teardown from STA
+ * @WLAN_TTLM_SM_EV_RX_TEARDOWN: TTLM Teardown from AP
+ * @WLAN_TTLM_SM_EV_TIMEOUT: TTLM Timeout happen
+ * @WLAN_TTLM_SM_EV_TTLM_REQ_TIMEOUT: TTLM req timer timeout happen
+ * @WLAN_TTLM_SM_EV_LINK_RECFG_DEL_UPDATE_MAPPING: TTLM update mapping due to
+ * Link reconfig delete link request
+ * @WLAN_TTLM_SM_EV_LINK_RECFG_ADD_UPDATE_MAPPING: TTLM update mapping due to
+ * Link reconfig add link request
+ * @WLAN_TTLM_SM_EV_MAX: Max event
+ */
+enum wlan_ttlm_sm_evt {
+	WLAN_TTLM_SM_EV_TX_ACTION_REQ = 0,
+	WLAN_TTLM_SM_EV_TX_ACTION_REQ_START = 1,
+	WLAN_TTLM_SM_EV_TX_ACTION_REQ_ACTIVE = 2,
+	WLAN_TTLM_SM_EV_TX_ACTION_RSP = 3,
+	WLAN_TTLM_SM_EV_RX_ACTION_REQ = 4,
+	WLAN_TTLM_SM_EV_RX_ACTION_RSP = 5,
+	WLAN_TTLM_SM_EV_BEACON = 6,
+	WLAN_TTLM_SM_EV_BTM_LINK_DISABLE = 7,
+	WLAN_TTLM_SM_EV_TX_TEARDOWN = 8,
+	WLAN_TTLM_SM_EV_RX_TEARDOWN = 9,
+	WLAN_TTLM_SM_EV_TIMEOUT = 10,
+	WLAN_TTLM_SM_EV_TTLM_REQ_TIMEOUT = 11,
+	WLAN_TTLM_SM_EV_LINK_RECFG_DEL_UPDATE_MAPPING = 12,
+	WLAN_TTLM_SM_EV_LINK_RECFG_ADD_UPDATE_MAPPING = 13,
+	WLAN_TTLM_SM_EV_MAX,
+};
+
+#ifdef WLAN_FEATURE_11BE_MLO_TTLM
+struct ttlm_comp_priv;
+/**
+ * ttlm_get_state() - get TTLM state
+ * @ml_peer: MLO Peer context
+ *
+ * API to get TTLM state
+ *
+ * Return: State of TTLM
+ */
+enum wlan_ttlm_sm_state ttlm_get_state(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_get_sub_state() - get TTLM substate
+ * @ml_peer: MLO peer context
+ *
+ * API to get TTLM substate
+ *
+ * Return: Substate of TTLM
+ */
+enum wlan_ttlm_sm_state ttlm_get_sub_state(
+			struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_set_state() - set TTLM state
+ * @ml_peer: ML peer context
+ * @state: TTLM state
+ *
+ * API to set TTLM state
+ *
+ * Return: void
+ */
+void ttlm_set_state(struct wlan_mlo_peer_context *ml_peer,
+		    enum wlan_ttlm_sm_state state);
+
+/**
+ * ttlm_set_substate() - set TTLM sub state
+ * @ml_peer: ML peer context
+ * @substate: TTLM sub state
+ *
+ * API to set TTLM sub state
+ *
+ * Return: void
+ */
+void ttlm_set_substate(struct wlan_mlo_peer_context *ml_peer,
+		       enum wlan_ttlm_sm_state substate);
+
+/**
+ * ttlm_sm_state_update() - set TTLM state and sub state
+ * @ml_peer: ML peer context
+ * @state: TTLM state
+ * @substate: TTLM sub state
+ *
+ * API to invoke util APIs to set TTLM state and sub state
+ *
+ * Return: void
+ */
+void ttlm_sm_state_update(struct wlan_mlo_peer_context *ml_peer,
+			  enum wlan_ttlm_sm_state state,
+			  enum wlan_ttlm_sm_state substate);
+
+/**
+ * ttlm_lock_create() - Create ttlm sm lock
+ * @ml_peer: ML peer context
+ *
+ * Return: void
+ */
+void ttlm_lock_create(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_timer_init() - Initialize TTLM request timers
+ * @ml_peer: ML peer
+ *
+ * Return: void
+ */
+void ttlm_timer_init(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_timer_deinit() - Deinitialize TTLM request timer
+ * @ml_peer: ML peer
+ *
+ * Return: void
+ */
+void ttlm_timer_deinit(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_req_timeout_cb() - Callback which will be invoked on TTLM req timeout
+ * @user_data: ML peer context
+ *
+ * API to handle the timeout for the TTLM request
+ *
+ * Return: None
+ */
+void ttlm_req_timeout_cb(void *user_data);
+
+/**
+ * ttlm_lock_destroy() - Destroy the TTLM sm lock
+ * @ml_peer: ML peer context
+ *
+ * Return: void
+ */
+void ttlm_lock_destroy(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_lock_acquire() - Acquire the TTLM SM lock
+ * @ml_peer: MLO Peer context
+ *
+ * Return: void
+ */
+void ttlm_lock_acquire(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_lock_release() - Release the TTLM SM lock
+ * @ml_peer: MLO peer context
+ *
+ * Return: void
+ */
+void ttlm_lock_release(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_sm_transition_to() - Invoke state transition
+ * @ml_peer: MLO peer context
+ * @state: new TTLM state
+ *
+ * API to invoke SM API to move to new state
+ *
+ * Return: void
+ */
+void ttlm_sm_transition_to(struct wlan_mlo_peer_context *ml_peer,
+			   enum wlan_ttlm_sm_state state);
+
+/**
+ * ttlm_sm_deliver_event_sync() - Delivers event to TTLM SM while holding lock
+ * @ml_peer: MLO peer context
+ * @event: TTLM event
+ * @data_len: data size
+ * @data: event data
+ *
+ * API to dispatch event to TTLM SM without lock, in case lock is already held.
+ *
+ * Context: Can be called from any context, This should be called in case
+ * SM lock is already taken. If lock is not taken use ttlm_sm_deliver_event API
+ * instead.
+ *
+ * Return: SUCCESS: on handling event
+ *         FAILURE: If event not handled
+ */
+QDF_STATUS ttlm_sm_deliver_event_sync(struct wlan_mlo_peer_context *ml_peer,
+				      enum wlan_ttlm_sm_evt event,
+				      uint16_t data_len, void *data);
+
+/**
+ * ttlm_sm_deliver_event() - Delivers event to TTLM SM
+ * @ml_peer: MLO Peer context
+ * @event: TTLM event
+ * @data_len: data size
+ * @data: event data
+ *
+ * API to dispatch event to TTLM SM with lock. To be used while posting
+ * events from API called from public API. i.e. indication/response/request
+ * from any other module or NB/SB req/resp.
+ *
+ * Context: Can be called from any context, This should be called in case
+ * SM lock is not taken, the API will take the lock before posting to SM.
+ * If lock is already taken use ttlm_sm_deliver_event_sync API instead.
+ *
+ * Return: SUCCESS: on handling event
+ *         FAILURE: If event not handled
+ */
+QDF_STATUS ttlm_sm_deliver_event(struct wlan_mlo_peer_context *ml_peer,
+				 enum wlan_ttlm_sm_evt event,
+				 uint16_t data_len, void *data);
+
+/**
+ * ttlm_sm_create() - Invoke SM creation for TTLM
+ * @ml_peer:  MLO peer context
+ *
+ * Return: SUCCESS on successful creation
+ *         FAILURE, if creation fails
+ */
+QDF_STATUS ttlm_sm_create(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * ttlm_sm_destroy() - Invoke SM deletion for TTLM
+ * @ml_peer: MLO peer context
+ *
+ * Return: SUCCESS on successful deletion
+ *	   FAILURE, if deletion fails
+ */
+QDF_STATUS ttlm_sm_destroy(struct wlan_mlo_peer_context *ml_peer);
+
+/**
+ * typedef get_ttlm_send_ind_cb() - API to handle TTLM send indication callback
+ * @priv: pointer to private ttlm structure
+ * @cookie: cookie for request context
+ */
+typedef void (*get_ttlm_send_ind_cb)(struct ttlm_comp_priv *priv, void *cookie);
+#else
+static inline
+enum wlan_ttlm_sm_state ttlm_get_state(struct wlan_mlo_peer_context *ml_peer)
+{
+	return WLAN_TTLM_S_MAX;
+}
+
+static inline
+enum wlan_ttlm_sm_state ttlm_get_sub_state(
+				struct wlan_mlo_peer_context *ml_peer)
+{
+	return WLAN_TTLM_SS_MAX;
+}
+
+static inline
+void ttlm_set_state(struct wlan_mlo_peer_context *ml_peer,
+		    enum wlan_ttlm_sm_state state)
+{
+}
+
+static inline
+void ttlm_set_substate(struct wlan_mlo_peer_context *ml_peer,
+		       enum wlan_ttlm_sm_state substate)
+{
+}
+
+static inline
+void ttlm_sm_state_update(struct wlan_mlo_peer_context *ml_peer,
+			  enum wlan_ttlm_sm_state state,
+			  enum wlan_ttlm_sm_state substate)
+{
+}
+
+static inline
+QDF_STATUS ttlm_sm_deliver_event(struct wlan_mlo_peer_context *ml_peer,
+				 enum wlan_ttlm_sm_evt event,
+				 uint16_t data_len, void *data)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS ttlm_sm_create(struct wlan_mlo_peer_context *ml_peer)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
+QDF_STATUS ttlm_sm_destroy(struct wlan_mlo_peer_context *ml_peer)
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
+
+/**
  * enum wlan_t2lm_category - T2LM category
  *
  * @WLAN_T2LM_CATEGORY_NONE: none
@@ -318,12 +649,16 @@ struct wlan_t2lm_onging_negotiation_info {
  * @t2lm_negotiated_info: Previous successful T2LM negotiation is saved here.
  * @ongoing_tid_to_link_mapping: This has the ongoing TID-to-link mapping info
  *                               transmitted by this peer to the connected peer.
+ * @is_fw_btm_ind: FW has sent BTM indication for load balance.
+ * @is_standby_link_enabled: If standby link enabled and vdev repurpose will start.
  */
 struct wlan_mlo_peer_t2lm_policy {
 	uint8_t self_gen_dialog_token;
 	enum wlan_t2lm_enable t2lm_enable_val;
 	struct wlan_prev_t2lm_negotiated_info t2lm_negotiated_info;
 	struct wlan_t2lm_onging_negotiation_info ongoing_tid_to_link_mapping;
+	bool is_fw_btm_ind;
+	bool is_standby_link_enabled;
 };
 
 /**
@@ -352,9 +687,10 @@ struct wlan_mlo_t2lm_ie {
  * @timer_started: T2LM timer started or not
  * @timer_out_time: T2LM timer target out time
  * @t2lm_dev_lock: lock to access struct
+ * @t2lm_ctx: Pointer to T2LM context
  */
 struct wlan_t2lm_timer {
-	qdf_timer_t t2lm_timer;
+	qdf_hrtimer_data_t t2lm_timer;
 	uint32_t timer_interval;
 	uint32_t timer_out_time;
 	bool timer_started;
@@ -363,6 +699,7 @@ struct wlan_t2lm_timer {
 #else
 	qdf_mutex_t t2lm_dev_lock;
 #endif
+	struct wlan_t2lm_context *t2lm_ctx;
 };
 
 struct wlan_mlo_dev_context;
@@ -400,6 +737,7 @@ typedef QDF_STATUS (*wlan_mlo_t2lm_link_update_handler)(
  * @link_update_callback_index: Link update callback index. This callback is
  *                              invoked as part of mapping switch time and
  *                              expected duration expiry.
+ * @mlo_dev_ctx: Pointer to mlo_dev context
  */
 struct wlan_t2lm_context {
 	struct wlan_mlo_t2lm_ie established_t2lm;
@@ -419,6 +757,7 @@ struct wlan_t2lm_context {
 	uint64_t mst_end_tsf;
 #endif
 	int link_update_callback_index;
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
 };
 
 #ifdef WLAN_FEATURE_11BE
@@ -440,6 +779,9 @@ struct wlan_t2lm_context {
 
 #define t2lm_rl_debug(format, args...) \
 	QDF_TRACE_DEBUG_RL(QDF_MODULE_ID_T2LM, format, ## args)
+
+#define t2lm_nofl_debug(format, args...) \
+	QDF_TRACE_WARN_NO_FL(QDF_MODULE_ID_T2LM, format, ## args)
 
 #define WLAN_T2LM_MAX_NUM_LINKS 16
 
@@ -696,12 +1038,12 @@ wlan_mlo_t2lm_timer_stop(struct wlan_objmgr_vdev *vdev);
 
 /**
  * wlan_mlo_t2lm_timer_expiry_handler() - API to handle t2lm timer expiry
- * @vdev: Pointer to vdev structure
+ * @arg: Pointer to hrtimer data
  *
- * Return: none
+ * Return: QDF hrtimer restart status
  */
-void
-wlan_mlo_t2lm_timer_expiry_handler(void *vdev);
+enum qdf_hrtimer_restart_status
+wlan_mlo_t2lm_timer_expiry_handler(qdf_hrtimer_data_t *arg);
 
 /**
  * wlan_handle_t2lm_timer() - API to handle TID-to-link mapping timer
@@ -778,6 +1120,15 @@ QDF_STATUS wlan_get_t2lm_mapping_status(struct wlan_objmgr_vdev *vdev,
 QDF_STATUS
 wlan_send_peer_level_tid_to_link_mapping(struct wlan_objmgr_vdev *vdev,
 					 struct wlan_objmgr_peer *peer);
+
+/**
+ * wlan_t2lm_timer_stop() - API to stop the T2LM timer
+ * @t2lm_timer: Pointer to T2LM timer structure
+ *
+ * Return: None
+ */
+void wlan_t2lm_timer_stop(struct wlan_t2lm_timer *t2lm_timer);
+
 #else
 static inline QDF_STATUS wlan_mlo_parse_t2lm_ie(
 	struct wlan_t2lm_onging_negotiation_info *t2lm, uint8_t *ie,
@@ -859,8 +1210,8 @@ wlan_mlo_t2lm_timer_stop(struct wlan_objmgr_vdev *vdev)
 	return QDF_STATUS_E_NOSUPPORT;
 }
 
-static inline void
-wlan_mlo_t2lm_timer_expiry_handler(void *vdev)
+static inline
+void wlan_t2lm_timer_stop(struct wlan_t2lm_timer *t2lm_timer)
 {}
 
 static inline QDF_STATUS
@@ -944,6 +1295,22 @@ wlan_clear_peer_level_tid_to_link_mapping(struct wlan_objmgr_vdev *vdev);
 QDF_STATUS
 wlan_mlo_link_disable_request_handler(struct wlan_objmgr_psoc *psoc,
 				      void *evt_params);
+
+/**
+ * wlan_mlo_send_ttlm_complete() - API to send TTLM complete
+ * command to FW.
+ *
+ * @vdev: Pointer to vdev
+ * @ml_peer: ML peer context pointer
+ * @success: boolean status
+ *
+ * Return QDF_STATUS
+ */
+void
+wlan_mlo_send_ttlm_complete(struct wlan_objmgr_vdev *vdev,
+			    struct wlan_mlo_peer_context *ml_peer,
+			    bool success);
+
 #else
 static inline void
 wlan_clear_peer_level_tid_to_link_mapping(struct wlan_objmgr_vdev *vdev)
@@ -955,6 +1322,13 @@ wlan_mlo_link_disable_request_handler(struct wlan_objmgr_psoc *psoc,
 				      void *evt_params)
 {
 	return QDF_STATUS_E_NOSUPPORT;
+}
+
+static inline void
+wlan_mlo_send_ttlm_complete(struct wlan_objmgr_vdev *vdev,
+			    struct wlan_mlo_peer_context *ml_peer,
+			    bool success)
+{
 }
 #endif
 #endif /* _WLAN_MLO_T2LM_H_ */

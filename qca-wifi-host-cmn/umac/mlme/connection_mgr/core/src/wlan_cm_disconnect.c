@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015,2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -25,14 +25,14 @@
 #include "wlan_utility.h"
 #include "wlan_scan_api.h"
 #include "wlan_crypto_global_api.h"
-#ifdef CONN_MGR_ADV_FEATURE
 #include "wlan_dlm_api.h"
-#endif
 #include <wlan_mlo_mgr_sta.h>
 #ifdef WLAN_FEATURE_11BE_MLO
 #include <wlan_mlo_mgr_peer.h>
 #endif
 #include <wlan_mlo_mgr_link_switch.h>
+#include <wlan_mlo_link_recfg.h>
+#include "wlan_mlo_mgr_roam.h"
 
 void cm_send_disconnect_resp(struct cnx_mgr *cm_ctx, wlan_cm_id cm_id)
 {
@@ -329,6 +329,9 @@ QDF_STATUS cm_disconnect_start(struct cnx_mgr *cm_ctx,
 		return QDF_STATUS_E_INVAL;
 	}
 
+	mlo_link_recfg_abort_if_in_progress(cm_ctx->vdev,
+					    is_link_switch_discon);
+
 	if (wlan_vdev_mlme_is_mlo_vdev(cm_ctx->vdev) && !is_link_switch_discon)
 		mlo_internal_disconnect_links(cm_ctx->vdev);
 
@@ -426,7 +429,9 @@ QDF_STATUS cm_disconnect_active(struct cnx_mgr *cm_ctx, wlan_cm_id *cm_id)
 	}
 
 	if (wlan_vdev_mlme_get_opmode(cm_ctx->vdev) == QDF_STA_MODE &&
-	    cm_req->discon_req.req.source != CM_MLO_ROAM_INTERNAL_DISCONNECT)
+	    cm_req->discon_req.req.source != CM_MLO_ROAM_INTERNAL_DISCONNECT &&
+	    !(cm_req->discon_req.req.source == CM_MLO_LINK_SWITCH_DISCONNECT &&
+	      mlo_is_link_recfg_in_progress(cm_ctx->vdev)))
 		status = mlme_cm_rso_stop_req(cm_ctx->vdev);
 
 	if (status != QDF_STATUS_E_NOSUPPORT)
@@ -457,6 +462,11 @@ cm_disconnect_continue_after_rso_stop(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	struct qdf_mac_addr bssid = QDF_MAC_ADDR_ZERO_INIT;
 	struct cnx_mgr *cm_ctx = cm_get_cm_ctx(vdev);
+
+	if (wlan_vdev_mlme_get_opmode(vdev) == QDF_STA_MODE &&
+	    req->req.source != CM_MLO_ROAM_INTERNAL_DISCONNECT &&
+	    req->req.source != CM_MLO_LINK_SWITCH_DISCONNECT)
+		cm_delete_crypto_keys_for_all_links(vdev);
 
 	if (!cm_ctx)
 		return QDF_STATUS_E_INVAL;
@@ -518,7 +528,6 @@ cm_handle_rso_stop_rsp(struct wlan_objmgr_vdev *vdev,
 				   sizeof(*req), req);
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 static void
 cm_inform_dlm_disconnect_complete(struct wlan_objmgr_vdev *vdev,
 				  struct wlan_cm_discon_rsp *resp)
@@ -536,13 +545,6 @@ cm_inform_dlm_disconnect_complete(struct wlan_objmgr_vdev *vdev,
 	wlan_dlm_update_bssid_connect_params(pdev, resp->req.req.bssid,
 					     DLM_AP_DISCONNECTED);
 }
-
-#else
-static inline void
-cm_inform_dlm_disconnect_complete(struct wlan_objmgr_vdev *vdev,
-				  struct wlan_cm_discon_rsp *resp)
-{}
-#endif
 
 #ifdef WLAN_FEATURE_11BE_MLO
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
@@ -616,6 +618,16 @@ QDF_STATUS cm_disconnect_complete(struct cnx_mgr *cm_ctx,
 	if (resp->req.cm_id == cm_ctx->active_cm_id && !is_link_switch_cmd)
 		cm_flush_pending_request(cm_ctx, DISCONNECT_REQ_PREFIX, false);
 
+	if (cm_ctx->disconnect_count == 1 && !is_link_switch_cmd) {
+		/*
+		 * Clear MLO cap only when it is the last disconnect req
+		 * For 1x/owe roaming, link vdev mlo flags are not cleared
+		 * as connect req is queued on link vdev after this.
+		 */
+		if (!wlan_cm_check_mlo_roam_auth_status(cm_ctx->vdev))
+			cm_clear_vdev_mlo_cap(cm_ctx->vdev, resp);
+	}
+
 	cm_remove_cmd(cm_ctx, &resp->req.cm_id);
 	mlme_debug(CM_PREFIX_FMT "disconnect count %d connect count %d",
 		   CM_PREFIX_REF(wlan_vdev_get_id(cm_ctx->vdev),
@@ -628,16 +640,8 @@ QDF_STATUS cm_disconnect_complete(struct cnx_mgr *cm_ctx,
 	}
 
 	/* Set the disconnect wait event once all disconnect are completed */
-	if (!cm_ctx->disconnect_count && !is_link_switch_cmd) {
-		/*
-		 * Clear MLO cap only when it is the last disconnect req
-		 * For 1x/owe roaming, link vdev mlo flags are not cleared
-		 * as connect req is queued on link vdev after this.
-		 */
-		if (!wlan_cm_check_mlo_roam_auth_status(cm_ctx->vdev))
-			cm_clear_vdev_mlo_cap(cm_ctx->vdev, resp);
+	if (!cm_ctx->disconnect_count && !is_link_switch_cmd)
 		qdf_event_set(&cm_ctx->disconnect_complete);
-	}
 
 	if (is_link_switch_cmd) {
 		cm_reset_active_cm_id(cm_ctx->vdev, resp->req.cm_id);

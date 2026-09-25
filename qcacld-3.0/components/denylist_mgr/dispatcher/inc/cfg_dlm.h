@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,7 +35,7 @@
  *
  * This ini is used to specify the time after which the BSSID which is in the
  * avoid list should be moved to monitor list, assuming that the AP or the
- * gateway with which the data stall happenend might have recovered, and now
+ * gateway with which the data stall happened might have recovered, and now
  * the STA can give another chance to connect to the AP.
  *
  * Supported Feature: Data Stall Recovery
@@ -61,7 +61,7 @@
  *
  * This ini is used to specify the threshld after which the BSSID which is in
  * the avoid list should be moved to deny list, assuming that the AP or the
- * gateway with which the data stall happenend has no recovered, and now
+ * gateway with which the data stall happened has no recovered, and now
  * the STA got the NUD failure again with the BSSID
  *
  * Supported Feature: Data Stall Recovery
@@ -88,7 +88,7 @@
  *
  * This ini is used to specify the time after which the BSSID which is in the
  * deny list should be moved to monitor list, assuming that the AP or the
- * gateway with which the data stall happenend might have recovered, and now
+ * gateway with which the data stall happened might have recovered, and now
  * the STA can give another chance to connect to the AP.
  *
  * Supported Feature: Data Stall Recovery
@@ -160,12 +160,74 @@
 			CFG_VALUE_OR_DEFAULT, \
 			"Configure delta RSSI")
 
+#ifdef WLAN_FEATURE_11BE_MLO
+/*
+ * <ini>
+ * max_11be_con_failure_allowed - maximum 11BE connection failure allowed per
+ * MLO AP.If number of 11BE failure for a MLO AP reaches to the max allowed 11BE
+ * failures then new 11BE connection is not be allowed and 11AX is tried
+ * for that candidate based on score.
+ * @Min: 0
+ * @Max: 10
+ * @Default: 7
+ *
+ * This ini is used to specify the max 11BE failure allowed per MLO AP.
+ *
+ * Supported Feature: STA connection
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_MAX_11BE_CON_FAIL_ALLOWED_PER_AP CFG_INI_INT( \
+			"max_11be_con_failure_allowed", \
+			0, \
+			10, \
+			7,  \
+			CFG_VALUE_OR_DEFAULT, \
+			"configure 11BE connection failure allowed")
+
+#define CFG_DENYLIST_MGR_11BE_CON_FAIL_ALLOWED_PER_AP \
+	CFG(CFG_MAX_11BE_CON_FAIL_ALLOWED_PER_AP)
+#else
+#define CFG_DENYLIST_MGR_11BE_CON_FAIL_ALLOWED_PER_AP
+#endif
+
+/*
+ * <ini>
+ * monitor_con_stability_post_connection_time - time to monitor connection
+ * stability post connection. If unwanted disconnections happen then the AP
+ * is added to avoid list and connection will not be tried with that AP until
+ * the timer expires or this AP is the only AP in the vicinity.
+ * @Min: 10 Seconds
+ * @Max: 60 Seconds
+ * @Default: 20 Seconds
+ *
+ * This ini is used to specify the time for which connection monitor is required
+ * post successful connection.
+ *
+ * Supported Feature: STA connection
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_MONITOR_CON_STABILITY_POST_CONNECTION_TIME CFG_INI_UINT( \
+			"monitor_con_stability_post_connection_time", \
+			10, \
+			60, \
+			20,  \
+			CFG_VALUE_OR_DEFAULT, \
+			"post connection stability monitor time")
+
 #define CFG_DENYLIST_MGR_ALL \
 	CFG(CFG_AVOID_LIST_EXPIRY_TIME) \
 	CFG(CFG_BAD_BSSID_COUNTER_THRESHOLD) \
 	CFG(CFG_DENY_LIST_EXPIRY_TIME) \
 	CFG(CFG_BAD_BSSID_RESET_TIME) \
-	CFG(CFG_DENYLIST_RSSI_THRESHOLD)
+	CFG(CFG_DENYLIST_RSSI_THRESHOLD) \
+	CFG_DENYLIST_MGR_11BE_CON_FAIL_ALLOWED_PER_AP \
+	CFG(CFG_MONITOR_CON_STABILITY_POST_CONNECTION_TIME)
 
 #else
 

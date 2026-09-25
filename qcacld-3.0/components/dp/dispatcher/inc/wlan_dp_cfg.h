@@ -757,7 +757,7 @@
  * Ref - Kernel/Documentation/networking/scaling.txt
  * RPS CPU map for a particular RX queue, selects CPU(s) for bottom half
  * processing of RX packets. For example, for a system with 4 CPUs,
- * 0xe: Use CPU1 - CPU3 and donot use CPU0.
+ * 0xe: Use CPU1 - CPU3 and do not use CPU0.
  * 0x0: RPS is disabled, packets are processed on the interrupting CPU.
 .*
  * WLAN driver registers NUM_TX_QUEUES queues for tx and rx each during
@@ -944,7 +944,7 @@
  *
  * This ini item configures the amount of time, in milliseconds, that the driver
  * should prevent system power collapse after receiving an RX unicast packet.
- * A conigured value of 0 disables the RX Wakelock feature completely.
+ * A configured value of 0 disables the RX Wakelock feature completely.
  *
  * Related: None.
  *
@@ -1300,6 +1300,43 @@
 #define CFG_DP_FISA
 #endif
 
+#ifdef WLAN_HAPS_ENABLE
+#define WLAN_CFG_HAPS_CONFIG         (0)
+#define WLAN_CFG_HAPS_CONFIG_MIN     (0)
+#define WLAN_CFG_HAPS_CONFIG_MAX     (0xFFFFFFFF)
+
+/*
+ * <ini>
+ * dp_haps_config - Power save configuration for HAPS
+ *
+ * @min: 0x0
+ * @max: 0xffffffff
+ * @default: 0x0
+ *
+ * |31                         2|        1          |     0      |
+ * +----------------------------+-------------------+------------+
+ * |           RSVD             |       sync        |    E/D     |
+ * +----------------------------+-------------------+------------+
+ *
+ * bit 0    : Enable/Disable haps feature
+ * bit 1    : Sync and update qtime cnss timestamp
+ * bit 2-31 : Reserved for future usage
+ *
+ * </ini>
+ */
+#define CFG_HAPS_CONFIG \
+	CFG_INI_UINT("dp_haps_config", \
+		     WLAN_CFG_HAPS_CONFIG_MIN, \
+		     WLAN_CFG_HAPS_CONFIG_MAX, \
+		     WLAN_CFG_HAPS_CONFIG, \
+		     CFG_VALUE_OR_DEFAULT, \
+		     "HAPS flags for power save")
+
+#define CFG_DP_HAPS CFG(CFG_HAPS_CONFIG)
+#else
+#define CFG_DP_HAPS
+#endif
+
 /*TODO Flow control part to be moved to DP later*/
 
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
@@ -1348,6 +1385,259 @@
 #define CFG_DP_HL_BUNDLE
 #endif
 
+#ifdef FEATURE_DIRECT_LINK
+/*
+ * <ini>
+ * dp_direct_link_enable - Control direct link datapath
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable Direct Link datapath feature
+ *
+ * Supported Feature: Direct Link
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_DIRECT_LINK_ENABLE \
+	CFG_INI_BOOL("dp_direct_link_enable", false, \
+		     "Enable/Disable Direct Link datapath")
+
+#define CFG_DP_DIRECT_LINK \
+	CFG(CFG_DP_DIRECT_LINK_ENABLE)
+#else
+#define CFG_DP_DIRECT_LINK
+#endif
+
+#ifdef WLAN_DP_LOAD_BALANCE_SUPPORT
+/*
+ * <ini>
+ * dp_enable_load_balance - Control load balance feature support
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable/disable load balance datapath feature
+ *
+ * Supported Feature: All modes
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_ENABLE_LOAD_BALANCE \
+	CFG_INI_BOOL("dp_enable_load_balance", false, \
+		     "Enable/Disable load balance support")
+
+#define CFG_DP_LOAD_BALANCE \
+	CFG(CFG_DP_ENABLE_LOAD_BALANCE)
+#else
+#define CFG_DP_LOAD_BALANCE
+#endif
+
+#ifdef WLAN_DP_FLOW_BALANCE_SUPPORT
+/*
+ * <ini>
+ * dp_enable_flow_balance - Control flow balance feature support
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable/disable flow balance datapath feature
+ *
+ * Supported Feature: STA and SAP
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_ENABLE_FLOW_BALANCE \
+	CFG_INI_BOOL("dp_enable_flow_balance", false, \
+		     "Enable/Disable flow balance support")
+
+#define CFG_DP_FLOW_BALANCE \
+	CFG(CFG_DP_ENABLE_FLOW_BALANCE)
+#else
+#define CFG_DP_FLOW_BALANCE
+#endif
+
+/*
+ * <ini>
+ * dp_wlm_rx_aggr_control - WLM Rx aggregation Control
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable DP WLM Rx aggregation Control feature
+ *
+ * Supported Feature: All modes
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DP_WLM_RX_AGGR_CTRL \
+	CFG_INI_BOOL("dp_wlm_rx_aggr_control", false, \
+		     "Enable/Disable WLM Rx aggregation Control")
+
+#ifdef WLAN_DP_FEATURE_STC
+/*
+ * <ini>
+ * dp_stc_enable - Control STC feature enablement
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable DP STC
+ *
+ * Supported Feature: STA (pre 802.11BE)
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_STC_ENABLE \
+	CFG_INI_BOOL("dp_stc_enable", false, \
+		     "Enable/Disable DP Smart Traffic Classifier")
+
+/*
+ * <ini>
+ * dp_stc_rtpm_control - control RTPM when stc detects bursty traffic
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable STC module to control RTPM suspend when
+ * bursty traffic types are detected.
+ *
+ * Supported Feature: STA (pre 802.11BE)
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_STC_RTPM_CONTROL \
+	CFG_INI_BOOL("dp_stc_rtpm_control", true, \
+		     "Enable/Disable RTPM control by STC module")
+
+#define CFG_DP_STC \
+	CFG(CFG_DP_STC_ENABLE) \
+	CFG(CFG_DP_STC_RTPM_CONTROL)
+#else
+#define CFG_DP_STC
+#endif
+
+#ifdef WLAN_DP_DYNAMIC_RESOURCE_MGMT
+/*
+ * <ini>
+ * dp_dynamic_resource_mgmt - Control DP dynamic resource management
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable DP dynamic resource management feature
+ *
+ * Supported mode: All modes
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_DYNAMIC_RESOURCE_MGMT_ENABLE \
+	CFG_INI_BOOL("dp_dynamic_resource_mgmt", false, \
+		     "Enable/Disable DP dynamic resource management")
+
+#define CFG_DP_DYNAMIC_RESOURCE_MGMT \
+	CFG(CFG_DP_DYNAMIC_RESOURCE_MGMT_ENABLE)
+
+#else
+#define CFG_DP_DYNAMIC_RESOURCE_MGMT
+#endif
+
+#define WLAN_CFG_DP_IRQ_AFFINITY_MASK 0
+#define WLAN_CFG_DP_IRQ_AFFINITY_MASK_MIN 0
+#define WLAN_CFG_DP_IRQ_AFFINITY_MASK_MAX 0x3FF
+
+/*
+ * <ini>
+ * dp_irq_affinity_ctrl - Affinity control for Datapath interrupts
+ * @Min: 0
+ * @Max: 0x3FF
+ * @Default: 0
+ *
+ * This ini is used to control Datapath interrupt affinity.
+ * The value 0 is used to disable the cusotm control of DP interrupts.
+ * The value 0-0x3FF are used to indicate a CPU bitmask used to affine the DP
+ * interrupts when system-wide throughput crosses a certain threshold.
+ *
+ * Supported modes: All modes
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DP_IRQ_AFFINITY_MASK \
+	CFG_INI_UINT("dp_irq_affinity_mask", \
+		     WLAN_CFG_DP_IRQ_AFFINITY_MASK_MIN, \
+		     WLAN_CFG_DP_IRQ_AFFINITY_MASK_MAX, \
+		     WLAN_CFG_DP_IRQ_AFFINITY_MASK, \
+		     CFG_VALUE_OR_DEFAULT, \
+		     "DP interrupt affinity control")
+
+#define WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK 0
+#define WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK_MIN 0
+#define WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK_MAX 0x3FF
+
+/*
+ * <ini>
+ * dp_rx_thread_affinity_ctrl - Affinity control for Datapath rx threads
+ * @Min: 0
+ * @Max: 0x3FF
+ * @Default: 0
+ *
+ * This ini is used to control Datapath rx threads affinity.
+ * The value 0 is used to disable the custom control of DP rx threads.
+ * The value 0-0x3FF are used to indicate a CPU bitmask used to affine the DP
+ * rx threads when system-wide throughput crosses a certain threshold.
+ *
+ * Supported modes: All modes
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DP_RX_THREAD_AFFINITY_MASK \
+	CFG_INI_UINT("dp_rx_thread_affinity_mask", \
+		     WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK_MIN, \
+		     WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK_MAX, \
+		     WLAN_CFG_DP_RX_THREAD_AFFINITY_MASK, \
+		     CFG_VALUE_OR_DEFAULT, \
+		     "DP rx thread affinity control")
+
+/*
+ * <ini>
+ * dp_ipa_debug_enable - support IPA debugging
+ * @Min: 0
+ * @Max: 16
+ * @Default: 0
+ *
+ * This ini is used to enable ipa debugging
+ *
+ * Supported Feature: IPA
+ *
+ * Usage: Internal
+ *
+ * </ini>
+ */
+#define CFG_DP_IPA_DEBUG_ENABLE \
+	CFG_INI_UINT("dp_ipa_debug_enable", \
+		     0, \
+		     16, \
+		     0, \
+		     CFG_VALUE_OR_DEFAULT, "IPA debug support")
+
 #define CFG_DP_ALL \
 	CFG(CFG_DP_RX_THREAD_CPU_MASK) \
 	CFG(CFG_DP_RX_THREAD_UL_CPU_MASK) \
@@ -1367,12 +1657,22 @@
 	CFG(CFG_DP_ICMP_REQ_TO_FW_MARK_INTERVAL) \
 	CFG(CFG_ENABLE_DIRECT_LINK_UT_CMD) \
 	CFG(CFG_DP_APPLY_MEM_PROFILE) \
+	CFG(CFG_DP_WLM_RX_AGGR_CTRL) \
 	CFG_DP_ENABLE_FASTPATH_ALL \
 	CFG_DP_BUS_BANDWIDTH \
 	CFG_DP_DRIVER_TCP_DELACK \
 	CFG_DP_ENABLE_NUD_TRACKING_ALL \
 	CFG_DP_CONFIG_DP_TRACE_ALL \
 	CFG_DP_HL_BUNDLE \
-	CFG_DP_FISA
+	CFG_DP_FISA \
+	CFG_DP_DIRECT_LINK \
+	CFG_DP_LOAD_BALANCE \
+	CFG_DP_FLOW_BALANCE \
+	CFG_DP_STC \
+	CFG_DP_DYNAMIC_RESOURCE_MGMT \
+	CFG(CFG_DP_IPA_DEBUG_ENABLE) \
+	CFG(CFG_DP_IRQ_AFFINITY_MASK) \
+	CFG(CFG_DP_RX_THREAD_AFFINITY_MASK) \
+	CFG_DP_HAPS
 
 #endif /* WLAN_DP_CFG_H__ */

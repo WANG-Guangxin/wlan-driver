@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,8 +26,58 @@
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
 #include "wlan_cm_roam_api.h"
 #include <wlan_mlo_mgr_roam.h>
+#include "wlan_dlm_api.h"
+#include "wlan_dp_ucfg_api.h"
+#include <wlan_mlo_link_recfg.h>
 #endif
 #include "host_diag_core_event.h"
+#include <wlan_t2lm_api.h>
+
+static QDF_STATUS
+mlo_mgr_update_link_rej_mac_addr_resp(struct wlan_objmgr_vdev *vdev,
+				      struct wlan_mlo_link_reject_req *link_rej_info)
+{
+	struct mlo_mgr_context *g_mlo_ctx = wlan_objmgr_get_mlo_ctx();
+	QDF_STATUS status = QDF_STATUS_E_INVAL;
+
+	if (!g_mlo_ctx) {
+		mlo_err("global mlo ctx NULL");
+		return status;
+	}
+
+	status = g_mlo_ctx->osif_ops->mlo_mgr_osif_link_rej_update_mac_addr(
+							link_rej_info->rej_ieee_link_id,
+							link_rej_info->acc_ieee_link_id,
+							link_rej_info->vdev_id);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		mlo_debug("VDEV %d OSIF MAC addr update failed %d",
+			  link_rej_info->vdev_id, status);
+		return status;
+	}
+
+	return QDF_STATUS_SUCCESS;
+}
+
+void mlo_mgr_update_link_status_code(struct wlan_objmgr_vdev *vdev,
+				     uint8_t link_id,
+				     enum wlan_status_code status_code)
+{
+	struct mlo_link_info *link_info;
+
+	if (!vdev || !vdev->mlo_dev_ctx)
+		return;
+
+	link_info = mlo_mgr_get_ap_link_by_link_id(vdev->mlo_dev_ctx, link_id);
+	if (!link_info) {
+		mlo_err("Link info not found for link id %d", link_id);
+		return;
+	}
+
+	link_info->link_status_code = status_code;
+	mlo_debug("Update status code info for link_id: %d, vdev_id:%d, link_status_code: %d",
+		  link_info->link_id, link_info->vdev_id,
+		  link_info->link_status_code);
+}
 
 void mlo_mgr_update_link_info_mac_addr(struct wlan_objmgr_vdev *vdev,
 				       struct wlan_mlo_link_mac_update *ml_mac_update)
@@ -63,17 +113,33 @@ void mlo_mgr_update_ap_link_info(struct wlan_objmgr_vdev *vdev, uint8_t link_id,
 {
 	struct mlo_link_info *link_info;
 	uint8_t link_info_iter;
+	bool link_exist = false;
 
 	if (!vdev || !vdev->mlo_dev_ctx || !ap_link_addr)
 		return;
 
+	/* Check if link already exists */
 	link_info = &vdev->mlo_dev_ctx->link_ctx->links_info[0];
 	for (link_info_iter = 0; link_info_iter < WLAN_MAX_ML_BSS_LINKS;
 	     link_info_iter++) {
-		if (qdf_is_macaddr_zero(&link_info->ap_link_addr))
+		if (qdf_is_macaddr_equal(&link_info->ap_link_addr,
+					 (struct qdf_mac_addr *)ap_link_addr)) {
+			link_exist = true;
 			break;
-
+		}
 		link_info++;
+	}
+
+	/* Find first free link index if link does not exists */
+	if (!link_exist) {
+		link_info = &vdev->mlo_dev_ctx->link_ctx->links_info[0];
+		for (link_info_iter = 0; link_info_iter < WLAN_MAX_ML_BSS_LINKS;
+		     link_info_iter++) {
+			if (qdf_is_macaddr_zero(&link_info->ap_link_addr))
+				break;
+
+			link_info++;
+		}
 	}
 
 	if (link_info_iter == WLAN_MAX_ML_BSS_LINKS)
@@ -82,45 +148,60 @@ void mlo_mgr_update_ap_link_info(struct wlan_objmgr_vdev *vdev, uint8_t link_id,
 	qdf_mem_copy(&link_info->ap_link_addr, ap_link_addr, QDF_MAC_ADDR_SIZE);
 
 	qdf_mem_copy(link_info->link_chan_info, &channel, sizeof(channel));
+	link_info->chan_freq = channel.ch_freq;
 	link_info->link_status_flags = 0;
 	link_info->link_id = link_id;
-	link_info->is_link_active = false;
 
-	mlo_debug("Update AP Link info for link_id: %d, vdev_id:%d, link_addr:" QDF_MAC_ADDR_FMT,
-		  link_info->link_id, link_info->vdev_id,
+	mlo_debug("Update AP Link info for link_id: %d, freq: %d vdev_id:%d, link_addr:" QDF_MAC_ADDR_FMT,
+		  link_info->link_id, link_info->link_chan_info->ch_freq,
+		  link_info->vdev_id,
 		  QDF_MAC_ADDR_REF(link_info->ap_link_addr.bytes));
 }
 
-void mlo_mgr_clear_ap_link_info(struct wlan_objmgr_vdev *vdev,
-				uint8_t *ap_link_addr)
+struct mlo_link_info *
+mlo_mgr_get_ap_link_info(struct wlan_objmgr_vdev *vdev,
+			 struct qdf_mac_addr *ap_link_addr)
 {
 	struct mlo_link_info *link_info;
 	uint8_t link_info_iter;
 
-	if (!vdev || !vdev->mlo_dev_ctx || !ap_link_addr)
-		return;
+	if (!vdev || !vdev->mlo_dev_ctx || !ap_link_addr ||
+	    qdf_is_macaddr_zero(ap_link_addr))
+		return NULL;
 
 	link_info = &vdev->mlo_dev_ctx->link_ctx->links_info[0];
 	for (link_info_iter = 0; link_info_iter < WLAN_MAX_ML_BSS_LINKS;
 	     link_info_iter++) {
 		if (qdf_is_macaddr_equal(&link_info->ap_link_addr,
-					 (struct qdf_mac_addr *)ap_link_addr)) {
-			mlo_debug("Clear AP link info for link_id: %d, vdev_id:%d, link_addr:" QDF_MAC_ADDR_FMT,
-				  link_info->link_id, link_info->vdev_id,
-				  QDF_MAC_ADDR_REF(link_info->ap_link_addr.bytes));
-
-			qdf_mem_zero(&link_info->ap_link_addr,
-				     QDF_MAC_ADDR_SIZE);
-			qdf_mem_zero(link_info->link_chan_info,
-				     sizeof(*link_info->link_chan_info));
-			link_info->link_id = WLAN_INVALID_LINK_ID;
-			link_info->link_status_flags = 0;
-
-			return;
-		}
-
+					 ap_link_addr))
+			return link_info;
 		link_info++;
 	}
+
+	return NULL;
+}
+
+void mlo_mgr_clear_ap_link_info(struct wlan_objmgr_vdev *vdev,
+				struct qdf_mac_addr *ap_link_addr)
+{
+	struct mlo_link_info *link_info;
+
+	link_info = mlo_mgr_get_ap_link_info(vdev, ap_link_addr);
+	if (!link_info)
+		return;
+
+	mlo_debug("Clear AP link info for link_id: %d, vdev_id:%d, link_addr:" QDF_MAC_ADDR_FMT,
+		  link_info->link_id, link_info->vdev_id,
+		  QDF_MAC_ADDR_REF(link_info->ap_link_addr.bytes));
+
+	mlo_free_cache_link_assoc_rsp(vdev, link_info->link_id);
+
+	qdf_zero_macaddr(&link_info->ap_link_addr);
+	qdf_mem_zero(link_info->link_chan_info,
+		     sizeof(*link_info->link_chan_info));
+	link_info->chan_freq = 0;
+	link_info->link_id = WLAN_INVALID_LINK_ID;
+	link_info->link_status_flags = 0;
 }
 
 void mlo_mgr_update_ap_channel_info(struct wlan_objmgr_vdev *vdev, uint8_t link_id,
@@ -142,11 +223,12 @@ void mlo_mgr_update_ap_channel_info(struct wlan_objmgr_vdev *vdev, uint8_t link_
 	mlo_debug("update AP channel info link_id: %d, vdev_id:%d, link_addr:" QDF_MAC_ADDR_FMT,
 		  link_info->link_id, link_info->vdev_id,
 		  QDF_MAC_ADDR_REF(link_info->ap_link_addr.bytes));
-	mlo_debug("ch_freq: %d, freq1: %d, freq2: %d, phy_mode: %d",
+	mlo_debug("ch_freq: %d, freq1: %d, freq2: %d, phy_mode: %d, c_width:%d",
 		  link_info->link_chan_info->ch_freq,
 		  link_info->link_chan_info->ch_cfreq1,
 		  link_info->link_chan_info->ch_cfreq2,
-		  link_info->link_chan_info->ch_phymode);
+		  link_info->link_chan_info->ch_phymode,
+		  link_info->link_chan_info->ch_width);
 }
 
 void mlo_mgr_update_link_info_reset(struct wlan_objmgr_psoc *psoc,
@@ -208,9 +290,13 @@ void mlo_mgr_reset_ap_link_info(struct wlan_objmgr_vdev *vdev)
 		qdf_mem_zero(link_info->link_chan_info,
 			     sizeof(*link_info->link_chan_info));
 		link_info->link_id = WLAN_INVALID_LINK_ID;
+		link_info->bpcc = 0;
 		link_info->link_status_flags = 0;
+		link_info->is_link_active = false;
 		link_info++;
 	}
+
+	mlo_reset_cache_link_assoc_rsp(vdev->mlo_dev_ctx);
 }
 
 struct mlo_link_info
@@ -261,6 +347,309 @@ void mlo_mgr_free_link_info_wmi_chan(struct wlan_mlo_dev_context *ml_dev)
 }
 
 #ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
+bool
+mlo_mgr_update_link_state_delete_flag(
+			struct wlan_mlo_dev_context *mlo_dev_ctx,
+			uint8_t link_id,
+			bool set)
+{
+	struct mlo_link_info *link_info;
+
+	link_info = mlo_mgr_get_ap_link_by_link_id(mlo_dev_ctx,
+						   link_id);
+	if (!link_info) {
+		mlo_debug("no found link info for id %d for %s",
+			  link_id, set ? "delete" : "clear");
+		return false;
+	}
+
+	if (set) {
+		qdf_atomic_set_bit(LS_F_AP_REMOVAL_BIT,
+				   &link_info->link_status_flags);
+	} else {
+		qdf_atomic_clear_bit(LS_F_AP_REMOVAL_BIT,
+				     &link_info->link_status_flags);
+	}
+	mlo_debug("link %d updated link state 0x%x for %s",
+		  link_id, (uint32_t)link_info->link_status_flags,
+		  set ? "delete" : "clear");
+
+	return true;
+}
+
+bool mlo_mgr_is_link_add_link_switch(struct wlan_objmgr_vdev *vdev)
+{
+	struct wlan_mlo_dev_context *mlo_dev_ctx = vdev->mlo_dev_ctx;
+	struct wlan_mlo_link_switch_req *req;
+
+	if (!mlo_dev_ctx || !mlo_dev_ctx->link_ctx ||
+	    !wlan_vdev_mlme_is_mlo_link_switch_in_progress(vdev))
+		return false;
+
+	req = &mlo_dev_ctx->link_ctx->last_req;
+
+	return req->reason == MLO_LINK_SWITCH_REASON_HOST_ADD_LINK;
+}
+
+static void
+mlo_mgr_update_link_vdev_id(struct wlan_objmgr_vdev *vdev, uint8_t accepted_link_id,
+			    uint8_t rejected_link_id)
+{
+	struct mlo_link_info *accepted_link_info;
+	struct mlo_link_info *rejected_link_info;
+	uint8_t vdev_id;
+
+	if (!vdev || !vdev->mlo_dev_ctx)
+		return;
+
+	accepted_link_info = mlo_mgr_get_ap_link_by_link_id(vdev->mlo_dev_ctx,
+							    accepted_link_id);
+	if (!accepted_link_info)
+		return;
+
+	rejected_link_info = mlo_mgr_get_ap_link_by_link_id(vdev->mlo_dev_ctx,
+							    rejected_link_id);
+	if (!rejected_link_info)
+		return;
+
+	mlo_debug("Accepted vdev id %d rejected vdev id %d ",
+		  accepted_link_info->vdev_id, rejected_link_info->vdev_id);
+
+	if (accepted_link_info->vdev_id == WLAN_INVALID_VDEV_ID &&
+	    rejected_link_info->vdev_id != WLAN_INVALID_VDEV_ID) {
+		vdev_id = accepted_link_info->vdev_id;
+		accepted_link_info->vdev_id = rejected_link_info->vdev_id;
+		rejected_link_info->vdev_id = vdev_id;
+		rejected_link_info->link_id = WLAN_INVALID_LINK_ID;
+	}
+
+	mlo_debug("Updated accepted vdev id %d rejected vdev id %d ",
+		  accepted_link_info->vdev_id, rejected_link_info->vdev_id);
+}
+
+/**
+ * mlo_mgr_clear_rejected_partner_info- Clear rejected partner information
+ *
+ * @vdev: vdev pointer
+ * @ml_partner_info: ML partner info.
+ * @rejected_ap_link_addr: Rejected AP link address
+ *
+ * Return: none
+ */
+static void
+mlo_mgr_clear_rejected_partner_info(struct wlan_objmgr_vdev *vdev,
+				    struct mlo_partner_info *ml_partner_info,
+				    uint8_t *rejected_ap_link_addr)
+{
+	struct mlo_link_info *link_info;
+	struct mlo_partner_info *partner_info;
+	uint8_t i, rejected_link_count = 0;
+
+	if (!vdev || !vdev->mlo_dev_ctx || !vdev->mlo_dev_ctx->sta_ctx || !rejected_ap_link_addr)
+		return;
+
+	partner_info = &vdev->mlo_dev_ctx->sta_ctx->ml_partner_info;
+	for (i = 0; i < partner_info->num_partner_links; i++) {
+		link_info = &partner_info->partner_link_info[i];
+		if (!link_info) {
+			mlo_err("link_info null");
+			continue;
+		}
+
+		if (qdf_is_macaddr_equal((struct qdf_mac_addr *)rejected_ap_link_addr,
+					 &link_info->link_addr)) {
+			mlo_debug("Clear AP partner for link_id: %d, link_addr:" QDF_MAC_ADDR_FMT,
+				  link_info->link_id,
+				  QDF_MAC_ADDR_REF(link_info->link_addr.bytes));
+
+			mlo_mgr_clear_ap_link_info(vdev,
+						   &link_info->link_addr);
+			qdf_zero_macaddr(&link_info->link_addr);
+			link_info->link_id = WLAN_INVALID_LINK_ID;
+			link_info->link_status_flags = 0;
+			rejected_link_count++;
+		}
+	}
+
+	ml_partner_info->num_partner_links -= rejected_link_count;
+	mlo_debug("Updated ml partner links %d", ml_partner_info->num_partner_links);
+}
+
+/**
+ * mlo_mgr_get_rejected_links_info- Get rejected links information
+ *
+ * @vdev: vdev pointer
+ * @ml_partner_info: ML partner link information.
+ * @rej_links: Rejected links info
+ *
+ * Return: none
+ */
+static void
+mlo_mgr_get_rejected_links_info(struct wlan_objmgr_vdev *vdev,
+				struct mlo_partner_info *ml_partner_info,
+				struct wlan_rejected_links_info *rej_links)
+{
+	uint8_t i, link_cnt;
+	struct mlo_link_info *link_info;
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
+
+	if (!vdev || !vdev->mlo_dev_ctx || !ml_partner_info || !rej_links) {
+		mlo_err("vdev is null");
+		return;
+	}
+
+	if (!ml_partner_info->num_partner_links)
+		return;
+
+	mlo_dev_ctx = vdev->mlo_dev_ctx;
+	for (i = 0, link_cnt = 0; i < ml_partner_info->num_partner_links &&
+	     link_cnt < ml_partner_info->num_partner_links;
+	     i++) {
+		link_info = mlo_mgr_get_ap_link_by_link_id(mlo_dev_ctx,
+							   ml_partner_info->partner_link_info[i].link_id);
+		if (!link_info || !link_info->link_status_code)
+			continue;
+
+		rej_links->num_rej_link_cnt++;
+		rej_links->rejected_link_ids[link_cnt] = link_info->link_id;
+		link_cnt++;
+	}
+}
+
+void
+mlo_mgr_check_if_all_partner_links_rejected(struct wlan_objmgr_vdev *vdev,
+					    struct wlan_cm_connect_resp *resp)
+{
+	uint8_t link_idx, rejected_link_cnt = 0;
+	struct mlo_partner_info *ml_parnter_info;
+	struct mlo_link_info *link_info;
+
+	if (!vdev || !resp)
+		return;
+
+	if (QDF_IS_STATUS_ERROR(resp->connect_status))
+		return;
+
+	ml_parnter_info = &resp->ml_parnter_info;
+	for (link_idx = 0; link_idx < ml_parnter_info->num_partner_links; link_idx++) {
+		link_info = &ml_parnter_info->partner_link_info[link_idx];
+
+		if (link_info->link_status_code)
+			rejected_link_cnt++;
+	}
+
+	if (rejected_link_cnt == ml_parnter_info->num_partner_links)
+		mlo_mgr_find_and_clear_rejected_links(vdev, MAX_MLO_LINK_ID, ml_parnter_info);
+}
+
+void
+mlo_mgr_find_and_clear_rejected_links(struct wlan_objmgr_vdev *vdev,
+				      uint8_t partner_link_id,
+				      struct mlo_partner_info *ml_partner_info)
+{
+	struct wlan_rejected_links_info rej_links = {0};
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
+	uint8_t i;
+	struct mlo_link_info *link_info;
+
+	if (!vdev) {
+		mlo_err("Vdev is null");
+		return;
+	}
+
+	mlo_dev_ctx = vdev->mlo_dev_ctx;
+	if (!mlo_dev_ctx) {
+		mlo_err("ml dev ctx is null");
+		return;
+	}
+
+	mlo_mgr_get_rejected_links_info(vdev,
+					ml_partner_info,
+					&rej_links);
+
+	if (!rej_links.num_rej_link_cnt)
+		return;
+
+	mlo_debug("Rejected link cnt %d", rej_links.num_rej_link_cnt);
+	for (i = 0; i < rej_links.num_rej_link_cnt; i++) {
+		link_info = mlo_mgr_get_ap_link_by_link_id(mlo_dev_ctx,
+							   rej_links.rejected_link_ids[i]);
+		if (!link_info)
+			continue;
+
+		mlo_mgr_link_rejection_handler(vdev, link_info,
+					       NULL, false);
+	}
+	ml_partner_info->num_partner_links -= rej_links.num_rej_link_cnt;
+	mlo_debug("Updated Partner link num %d",
+		  ml_partner_info->num_partner_links);
+}
+
+void
+mlo_mgr_link_rejection_handler(struct wlan_objmgr_vdev *vdev,
+			       struct mlo_link_info *rejected_link_info,
+			       struct mlo_link_info *accepted_link_info,
+			       bool is_non_standby_link)
+{
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
+	struct reject_ap_info ap_info;
+	struct wlan_objmgr_pdev *pdev;
+	struct wlan_mlo_link_reject_req *link_rej_req;
+	QDF_STATUS status;
+	struct mlo_partner_info *ml_partner_info;
+
+	if (!vdev || !rejected_link_info)
+		return;
+
+	mlo_dev_ctx = vdev->mlo_dev_ctx;
+	if (!mlo_dev_ctx || !mlo_dev_ctx->sta_ctx)
+		return;
+
+	if (is_non_standby_link && accepted_link_info) {
+		link_rej_req = &mlo_dev_ctx->link_ctx->link_rej_req;
+		link_rej_req->rej_ieee_link_id = rejected_link_info->link_id;
+		link_rej_req->rej_ap_link_addr = rejected_link_info->ap_link_addr;
+		link_rej_req->acc_ieee_link_id = accepted_link_info->link_id;
+		link_rej_req->acc_ap_link_addr = accepted_link_info->ap_link_addr;
+		link_rej_req->link_reject_update_in_progress = true;
+		link_rej_req->vdev_id = wlan_vdev_get_id(vdev);
+		wlan_vdev_mlme_set_mlo_link_rejection_in_progress(vdev);
+		wlan_vdev_mlme_send_set_mac_addr(accepted_link_info->link_addr,
+						 mlo_dev_ctx->mld_addr, vdev);
+		if (accepted_link_info->vdev_id == WLAN_INVALID_VDEV_ID &&
+		    rejected_link_info->vdev_id != WLAN_INVALID_VDEV_ID)
+			mlo_mgr_update_link_vdev_id(vdev,
+						    accepted_link_info->link_id,
+						    rejected_link_info->link_id);
+
+		wlan_vdev_mlme_set_macaddr(vdev, accepted_link_info->link_addr.bytes);
+		wlan_vdev_mlme_set_linkaddr(vdev, accepted_link_info->link_addr.bytes);
+		status = ucfg_dp_update_link_mac_addr(vdev,
+						      &accepted_link_info->link_addr,
+						      true);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			mlo_err("DP link MAC update failed");
+			return;
+		}
+	} else {
+		pdev = wlan_vdev_get_pdev(vdev);
+		ml_partner_info = &vdev->mlo_dev_ctx->sta_ctx->ml_partner_info;
+		qdf_mem_zero(&ap_info, sizeof(struct reject_ap_info));
+		ap_info.bssid = rejected_link_info->ap_link_addr;
+		ap_info.reject_ap_type = DRIVER_AVOID_TYPE;
+		ap_info.reject_reason = REASON_LINK_REJECTED;
+		ap_info.source = ADDED_BY_DRIVER;
+		wlan_update_mlo_reject_ap_info(pdev,
+					       wlan_vdev_get_id(vdev),
+					       &ap_info);
+		wlan_dlm_add_bssid_to_reject_list(pdev,
+						  &ap_info);
+		mlo_mgr_clear_rejected_partner_info(vdev,
+						    ml_partner_info,
+						    rejected_link_info->ap_link_addr.bytes);
+	}
+}
+
 struct mlo_link_info
 *mlo_mgr_get_ap_link_by_link_id(struct wlan_mlo_dev_context *mlo_dev_ctx,
 				int link_id)
@@ -268,7 +657,7 @@ struct mlo_link_info
 	struct mlo_link_info *link_info;
 	uint8_t link_info_iter;
 
-	if (!mlo_dev_ctx || link_id < 0 || link_id > 15)
+	if (!mlo_dev_ctx || link_id < 0 || link_id >= MAX_MLO_LINK_ID)
 		return NULL;
 
 	link_info = &mlo_dev_ctx->link_ctx->links_info[0];
@@ -282,6 +671,71 @@ struct mlo_link_info
 	return NULL;
 }
 
+bool mlo_mgr_if_freq_n_inactive_links_freq_same(struct wlan_objmgr_vdev *vdev,
+						uint32_t freq)
+{
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
+	struct mlo_link_info *link_info;
+	uint8_t link_info_iter;
+	struct wlan_t2lm_info t2lm[WLAN_T2LM_MAX_DIRECTION] = {0};
+	uint16_t tid_mapped_link_id = 0, tid_mapped = 0;
+	QDF_STATUS status;
+
+	if (!wlan_vdev_mlme_is_mlo_vdev(vdev))
+		return false;
+
+	mlo_dev_ctx = vdev->mlo_dev_ctx;
+	if (!mlo_dev_ctx)
+		return false;
+
+	status = wlan_get_t2lm_mapping_status(vdev, t2lm);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		mlo_info("Unable to get t2lm_mapping");
+		return false;
+	}
+
+	status = t2lm_find_tid_mapped_link_id(t2lm, &tid_mapped);
+	if (QDF_IS_STATUS_ERROR(status))
+		return false;
+
+	tid_mapped_link_id = t2lm_get_tids_mapped_link_id(tid_mapped);
+
+	link_info = &mlo_dev_ctx->link_ctx->links_info[0];
+	for (link_info_iter = 0; link_info_iter < WLAN_MAX_ML_BSS_LINKS;
+	     link_info_iter++) {
+		if (link_info->is_link_active ||
+		    qdf_is_macaddr_zero(&link_info->ap_link_addr)) {
+			link_info++;
+			continue;
+		}
+
+		/* Don't add freq in PCL if link is disable via TID mapping.
+		 * default_link_mapping means all TID maps to all link id
+		 * tid_mapped_link_id means this particular link id is active
+		 * due to tid mapping
+		 */
+		if (!t2lm[0].default_link_mapping &&
+		    link_info->link_id != tid_mapped_link_id) {
+			if (link_info->link_chan_info->ch_freq == freq)
+				mlo_debug("Skip link_id %d chan_freq %d as tid is mapped to %d",
+					  link_info->link_id,
+					  link_info->link_chan_info->ch_freq,
+					  tid_mapped_link_id);
+
+			link_info++;
+			continue;
+		}
+
+		if (link_info->link_chan_info->ch_freq &&
+		    (link_info->link_chan_info->ch_freq == freq))
+			return true;
+
+		link_info++;
+	}
+
+	return false;
+}
+
 bool mlo_mgr_update_csa_link_info(struct wlan_objmgr_pdev *pdev,
 				  struct wlan_mlo_dev_context *mlo_dev_ctx,
 				  struct csa_offload_params *csa_param,
@@ -289,7 +743,7 @@ bool mlo_mgr_update_csa_link_info(struct wlan_objmgr_pdev *pdev,
 {
 	struct mlo_link_info *link_info;
 	uint16_t bw_val;
-	uint32_t ch_cfreq1, ch_cfreq2;
+	struct ch_params ch_params = {0};
 
 	if (!mlo_dev_ctx) {
 		mlo_err("invalid mlo dev ctx");
@@ -306,28 +760,26 @@ bool mlo_mgr_update_csa_link_info(struct wlan_objmgr_pdev *pdev,
 
 	link_info->link_chan_info->ch_freq = csa_param->csa_chan_freq;
 
-	if (wlan_reg_is_6ghz_chan_freq(csa_param->csa_chan_freq)) {
-		ch_cfreq1 = wlan_reg_compute_6g_center_freq_from_cfi(
-					csa_param->new_ch_freq_seg1);
-		ch_cfreq2 = wlan_reg_compute_6g_center_freq_from_cfi(
-					csa_param->new_ch_freq_seg2);
-	} else {
-		ch_cfreq1 = wlan_reg_legacy_chan_to_freq(pdev,
-					csa_param->new_ch_freq_seg1);
-		ch_cfreq2 = wlan_reg_legacy_chan_to_freq(pdev,
-					csa_param->new_ch_freq_seg2);
-	}
+	ch_params.ch_width = csa_param->new_ch_width;
+	wlan_reg_set_channel_params_for_pwrmode(pdev,
+						csa_param->csa_chan_freq,
+						0, &ch_params,
+						REG_CURRENT_PWR_MODE);
 
-	link_info->link_chan_info->ch_cfreq1 = ch_cfreq1;
-	link_info->link_chan_info->ch_cfreq2 = ch_cfreq2;
+	link_info->link_chan_info->ch_cfreq1 = ch_params.mhz_freq_seg0;
+	link_info->link_chan_info->ch_cfreq2 = ch_params.mhz_freq_seg1;
 
 	link_info->link_chan_info->ch_phymode = wlan_eht_chan_phy_mode(
 					csa_param->csa_chan_freq,
 					bw_val, csa_param->new_ch_width);
+	link_info->link_chan_info->ch_width = csa_param->new_ch_width;
 
 	mlo_debug("CSA: freq: %d, cfreq1: %d, cfreq2: %d, bw: %d, phymode:%d",
-		  link_info->link_chan_info->ch_freq, ch_cfreq1, ch_cfreq2,
-		  bw_val, link_info->link_chan_info->ch_phymode);
+		  link_info->link_chan_info->ch_freq,
+		  link_info->link_chan_info->ch_cfreq1,
+		  link_info->link_chan_info->ch_cfreq2,
+		  link_info->link_chan_info->ch_width,
+		  link_info->link_chan_info->ch_phymode);
 
 	return true;
 done:
@@ -360,6 +812,14 @@ mlo_mgr_link_switch_get_assoc_vdev(struct wlan_objmgr_vdev *vdev)
 	return assoc_vdev;
 }
 
+uint8_t mlo_mgr_get_link_switch_last_link_id(struct wlan_objmgr_vdev *vdev)
+{
+	if (vdev && wlan_vdev_mlme_is_mlo_link_switch_in_progress(vdev))
+		return vdev->mlo_dev_ctx->link_ctx->last_req.curr_ieee_link_id;
+
+	return WLAN_INVALID_LINK_ID;
+}
+
 bool mlo_mgr_is_link_switch_in_progress(struct wlan_objmgr_vdev *vdev)
 {
 	enum mlo_link_switch_req_state state;
@@ -369,6 +829,38 @@ bool mlo_mgr_is_link_switch_in_progress(struct wlan_objmgr_vdev *vdev)
 
 	state = mlo_mgr_link_switch_get_curr_state(vdev->mlo_dev_ctx);
 	return (state > MLO_LINK_SWITCH_STATE_INIT);
+}
+
+static void
+mlo_mgr_vdev_iterate_handler(struct wlan_objmgr_psoc *psoc,
+			     void *obj, void *args)
+{
+	struct wlan_objmgr_vdev *vdev = (struct wlan_objmgr_vdev *)obj;
+	uint32_t *context = (uint32_t *)args;
+
+	if (*context)
+		return;
+
+	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_STA_MODE)
+		return;
+
+	if (!wlan_vdev_mlme_is_mlo_vdev(vdev))
+		return;
+
+	if (mlo_mgr_is_link_switch_in_progress(vdev))
+		*context = true;
+}
+
+bool
+mlo_mgr_is_link_switch_in_progress_by_psoc(struct wlan_objmgr_psoc *psoc)
+{
+	uint32_t context = 0;
+
+	wlan_objmgr_iterate_obj_list(psoc, WLAN_VDEV_OP,
+				     mlo_mgr_vdev_iterate_handler,
+				     &context, true, WLAN_MLO_MGR_ID);
+
+	return !!context;
 }
 
 bool mlo_mgr_is_link_switch_on_assoc_vdev(struct wlan_objmgr_vdev *vdev)
@@ -419,6 +911,7 @@ mlo_mgr_link_switch_trans_next_state(struct wlan_mlo_dev_context *mlo_dev_ctx)
 		mlo_debug("State transition not allowed");
 		break;
 	default:
+		next_state = cur_state;
 		QDF_ASSERT(0);
 		break;
 	}
@@ -642,14 +1135,73 @@ mlo_mgr_osif_update_connect_info(struct wlan_objmgr_vdev *vdev, int32_t link_id)
 	if (!link_info)
 		return;
 
-	mlo_debug("VDEV ID %d, Link ID %d, STA MAC " QDF_MAC_ADDR_FMT ", BSSID " QDF_MAC_ADDR_FMT,
-		  link_info->vdev_id, link_id,
+	mlo_debug("Vdev %d: link id %d freq %d self MAC " QDF_MAC_ADDR_FMT " BSSID " QDF_MAC_ADDR_FMT,
+		  link_info->vdev_id, link_id, link_info->chan_freq,
 		  QDF_MAC_ADDR_REF(link_info->link_addr.bytes),
 		  QDF_MAC_ADDR_REF(link_info->ap_link_addr.bytes));
 	osif_bss_update_cb = g_mlo_ctx->osif_ops->mlo_mgr_osif_update_bss_info;
 
 	osif_bss_update_cb(&link_info->link_addr, &link_info->ap_link_addr,
 			   link_id);
+}
+
+static QDF_STATUS
+mlo_mgr_link_switch_decide_mac_addr_change(
+			struct wlan_objmgr_vdev *vdev,
+			struct wlan_mlo_link_switch_req *req,
+			struct mlo_link_info *new_link_info)
+{
+	struct wlan_mlo_dev_context *mlo_dev_ctx = vdev->mlo_dev_ctx;
+	uint8_t *vdev_mac_addr;
+	uint8_t *vdev_link_addr;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	struct qdf_mac_addr mac_addr, mld_addr;
+
+	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_ADD_LINK) {
+		vdev_mac_addr = wlan_vdev_mlme_get_macaddr(vdev);
+		if (!qdf_is_macaddr_equal(&new_link_info->link_addr,
+					  (struct qdf_mac_addr *)vdev_mac_addr)) {
+			mlo_err("vdev MAC address " QDF_MAC_ADDR_FMT " not equal link info self " QDF_MAC_ADDR_FMT "",
+				QDF_MAC_ADDR_REF(vdev_mac_addr),
+				QDF_MAC_ADDR_REF(new_link_info->link_addr.bytes));
+			status = QDF_STATUS_E_INVAL;
+		}
+		vdev_link_addr = wlan_vdev_mlme_get_linkaddr(vdev);
+		if (!qdf_is_macaddr_equal(&new_link_info->link_addr,
+					  (struct qdf_mac_addr *)vdev_link_addr)) {
+			mlo_err("vdev link address " QDF_MAC_ADDR_FMT " not equal link info self " QDF_MAC_ADDR_FMT "",
+				QDF_MAC_ADDR_REF(vdev_mac_addr),
+				QDF_MAC_ADDR_REF(new_link_info->link_addr.bytes));
+			status = QDF_STATUS_E_INVAL;
+		}
+		if (QDF_IS_STATUS_ERROR(status)) {
+			mlo_err("validate vdev mac addr failed status %d", status);
+			goto err;
+		}
+		/* new self link address is same as vdev self mac,
+		 * skip set mac address step.
+		 */
+		status = mlo_mgr_link_switch_trans_next_state(mlo_dev_ctx);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			mlo_err("trans_next_state failed status %d", status);
+			goto err;
+		}
+
+		status = mlo_mgr_link_switch_start_connect(vdev);
+		if (QDF_IS_STATUS_SUCCESS(status))
+			return status;
+		goto err;
+	}
+
+	qdf_copy_macaddr(&mld_addr, &mlo_dev_ctx->mld_addr);
+	qdf_copy_macaddr(&mac_addr, &new_link_info->link_addr);
+	status = wlan_vdev_mlme_send_set_mac_addr(mac_addr, mld_addr, vdev);
+	if (QDF_IS_STATUS_SUCCESS(status))
+		return status;
+err:
+	mlo_mgr_remove_link_switch_cmd(vdev);
+
+	return status;
 }
 
 QDF_STATUS mlo_mgr_link_switch_disconnect_done(struct wlan_objmgr_vdev *vdev,
@@ -659,7 +1211,6 @@ QDF_STATUS mlo_mgr_link_switch_disconnect_done(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status;
 	enum mlo_link_switch_req_state cur_state;
 	struct mlo_link_info *new_link_info;
-	struct qdf_mac_addr mac_addr, mld_addr;
 	struct wlan_mlo_dev_context *mlo_dev_ctx = vdev->mlo_dev_ctx;
 	struct wlan_mlo_link_switch_req *req = &mlo_dev_ctx->link_ctx->last_req;
 
@@ -689,22 +1240,60 @@ QDF_STATUS mlo_mgr_link_switch_disconnect_done(struct wlan_objmgr_vdev *vdev,
 		return QDF_STATUS_E_INVAL;
 	}
 
-	qdf_copy_macaddr(&mld_addr, &mlo_dev_ctx->mld_addr);
-	qdf_copy_macaddr(&mac_addr, &new_link_info->link_addr);
-
 	status = mlo_mgr_link_switch_trans_next_state(mlo_dev_ctx);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		mlo_mgr_remove_link_switch_cmd(vdev);
 		return status;
 	}
 
-	status = wlan_vdev_mlme_send_set_mac_addr(mac_addr, mld_addr, vdev);
-	if (QDF_IS_STATUS_ERROR(status)) {
-		mlo_debug("VDEV %d set MAC addr FW request failed",
-			  req->vdev_id);
-		mlo_mgr_remove_link_switch_cmd(vdev);
+	return mlo_mgr_link_switch_decide_mac_addr_change(vdev, req,
+							  new_link_info);
+}
+
+void
+mlo_mgr_link_switch_connect_done_notify(struct wlan_objmgr_vdev *vdev,
+					struct wlan_cm_connect_resp *resp)
+{
+	if (wlan_cm_is_link_switch_connect_resp(resp)) {
+		wlan_cm_reset_active_cm_id(vdev, resp->cm_id);
+		mlo_mgr_link_switch_connect_done(vdev,
+						 resp->connect_status);
+	} else if (wlan_cm_is_link_add_connect_resp(resp)) {
+		wlan_cm_reset_active_cm_id(vdev, resp->cm_id);
+		mlo_link_recfg_add_connect_done_indication(
+				vdev,
+				resp->connect_status);
+	}
+}
+
+QDF_STATUS mlo_mgr_link_reject_set_mac_addr_resp(struct wlan_objmgr_vdev *vdev,
+						 uint8_t resp_status)
+{
+	QDF_STATUS status = QDF_STATUS_E_INVAL;
+	struct wlan_mlo_link_reject_req *link_rej_req;
+	struct mlo_mgr_context *g_mlo_ctx = wlan_objmgr_get_mlo_ctx();
+
+	if (resp_status) {
+		mlo_err("VDEV %d set MAC address response %d",
+			wlan_vdev_get_id(vdev), resp_status);
+		goto out;
 	}
 
+	if (!g_mlo_ctx) {
+		mlo_err("global mlo ctx NULL");
+		goto out;
+	}
+
+	mlo_debug("Dynamic vdev resp received");
+	link_rej_req = &vdev->mlo_dev_ctx->link_ctx->link_rej_req;
+	if (link_rej_req->link_reject_update_in_progress) {
+		mlo_debug("Dynamic vdev update done for link reject");
+		status = mlo_mgr_update_link_rej_mac_addr_resp(vdev,
+							       link_rej_req);
+		link_rej_req->link_reject_update_in_progress = false;
+	}
+out:
+	wlan_vdev_mlme_clear_mlo_link_rejection_in_progress(vdev);
 	return status;
 }
 
@@ -880,6 +1469,8 @@ void mlo_mgr_link_switch_connect_done(struct wlan_objmgr_vdev *vdev,
 				      QDF_STATUS status)
 {
 	struct wlan_mlo_link_switch_req *req;
+	struct wlan_objmgr_vdev *assoc_vdev;
+	bool is_link_recfg_in_progress = mlo_is_link_recfg_in_progress(vdev);
 
 	req = &vdev->mlo_dev_ctx->link_ctx->last_req;
 	if (QDF_IS_STATUS_SUCCESS(status)) {
@@ -891,9 +1482,17 @@ void mlo_mgr_link_switch_connect_done(struct wlan_objmgr_vdev *vdev,
 
 	mlo_mgr_remove_link_switch_cmd(vdev);
 
-	if (QDF_IS_STATUS_ERROR(status))
-		mlo_mgr_restore_rso_upon_link_switch_failure(
-				wlan_mlo_get_assoc_link_vdev(vdev));
+	/* Roam is not disabled for link recfg, no need restore roam */
+	if (!is_link_recfg_in_progress &&
+	    QDF_IS_STATUS_ERROR(status)) {
+		assoc_vdev = wlan_mlo_get_assoc_link_vdev(vdev);
+		if (!assoc_vdev) {
+			mlo_err("VDEV(%d) assoc vdev not found", req->vdev_id);
+			return;
+		}
+
+		mlo_mgr_restore_rso_upon_link_switch_failure(assoc_vdev);
+	}
 }
 
 static enum wlan_mlo_link_switch_notify_reason
@@ -970,6 +1569,27 @@ mlo_mgr_start_link_switch(struct wlan_objmgr_vdev *vdev,
 	return status;
 }
 
+void mlo_link_recfg_link_switch_timeout(
+		struct wlan_objmgr_psoc *psoc,
+		struct wlan_mlo_dev_context *mlo_dev_ctx)
+{
+	struct wlan_objmgr_vdev *vdev;
+	struct wlan_mlo_link_switch_req *req;
+	enum qdf_hang_reason reason = QDF_VDEV_ACTIVE_SER_LINK_SWITCH_TIMEOUT;
+
+	req = &mlo_dev_ctx->link_ctx->last_req;
+	mlo_err("Link switch active cmd timeout");
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, req->vdev_id,
+						    WLAN_MLO_MGR_ID);
+	if (!vdev) {
+		mlo_err("Invalid link switch VDEV %d", req->vdev_id);
+		return;
+	}
+
+	wlan_cm_trigger_panic_on_cmd_timeout(vdev, reason);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLO_MGR_ID);
+}
+
 static QDF_STATUS
 mlo_mgr_ser_link_switch_cb(struct wlan_serialization_command *cmd,
 			   enum wlan_serialization_cb_reason cb_reason)
@@ -1017,10 +1637,11 @@ mlo_mgr_ser_link_switch_cb(struct wlan_serialization_command *cmd,
 
 void mlo_mgr_remove_link_switch_cmd(struct wlan_objmgr_vdev *vdev)
 {
-	struct wlan_serialization_queued_cmd_info cmd_info;
+	struct wlan_serialization_queued_cmd_info cmd_info = {0};
 	enum mlo_link_switch_req_state cur_state;
 	uint8_t vdev_id = wlan_vdev_get_id(vdev);
 	struct wlan_mlo_link_switch_req *req;
+	bool is_link_recfg_in_prog = mlo_is_link_recfg_in_progress(vdev);
 
 	cur_state = mlo_mgr_link_switch_get_curr_state(vdev->mlo_dev_ctx);
 	if (cur_state == MLO_LINK_SWITCH_STATE_IDLE)
@@ -1043,8 +1664,10 @@ void mlo_mgr_remove_link_switch_cmd(struct wlan_objmgr_vdev *vdev)
 
 	mlo_mgr_link_switch_complete(vdev);
 
-	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_FORCE) {
-		mlo_debug("Link switch not serialized");
+	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_FORCE ||
+	    is_link_recfg_in_prog) {
+		mlo_debug("Link switch not serialized reason %d link_recfg_in_prog %d",
+			  req->reason, is_link_recfg_in_prog);
 		return;
 	}
 
@@ -1054,6 +1677,7 @@ void mlo_mgr_remove_link_switch_cmd(struct wlan_objmgr_vdev *vdev)
 	cmd_info.cmd_type = WLAN_SER_CMD_MLO_VDEV_LINK_SWITCH;
 	cmd_info.vdev = vdev;
 	cmd_info.queue_type = WLAN_SERIALIZATION_ACTIVE_QUEUE;
+	cmd_info.requestor = WLAN_UMAC_COMP_MLO_MGR;
 
 	wlan_serialization_remove_cmd(&cmd_info);
 }
@@ -1068,6 +1692,7 @@ QDF_STATUS mlo_mgr_ser_link_switch_cmd(struct wlan_objmgr_vdev *vdev,
 	struct wlan_serialization_command cmd = {0};
 	uint8_t vdev_id = wlan_vdev_get_id(vdev);
 	struct mlo_link_switch_context *link_ctx;
+	bool is_link_recfg_in_prog;
 
 	if (!vdev->mlo_dev_ctx) {
 		mlo_err("ML dev ctx NULL, reject link switch");
@@ -1087,8 +1712,11 @@ QDF_STATUS mlo_mgr_ser_link_switch_cmd(struct wlan_objmgr_vdev *vdev,
 	cmd.vdev = vdev;
 	cmd.is_blocking = true;
 
-	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_FORCE) {
-		mlo_debug("Do not serialize link switch");
+	is_link_recfg_in_prog = mlo_is_link_recfg_in_progress(vdev);
+	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_FORCE ||
+	    is_link_recfg_in_prog) {
+		mlo_debug("Do not serialize link switch for reason %d link_recfg_in_prog %d",
+			  req->reason, is_link_recfg_in_prog);
 		status = mlo_mgr_start_link_switch(vdev, &cmd);
 		if (QDF_IS_STATUS_ERROR(status)) {
 			mlo_mgr_link_switch_trans_abort_state(vdev->mlo_dev_ctx);
@@ -1145,6 +1773,66 @@ QDF_STATUS mlo_mgr_link_switch_notify(struct wlan_objmgr_vdev *vdev,
 	return ret_status;
 }
 
+static QDF_STATUS
+mlo_mgr_host_link_switch_validate_request(struct wlan_objmgr_vdev *vdev,
+					  struct wlan_mlo_link_switch_req *req)
+{
+	uint8_t vdev_id = wlan_vdev_get_id(vdev);
+	struct mlo_link_info *new_link_info;
+
+	if (req->curr_ieee_link_id >= WLAN_INVALID_LINK_ID ||
+	    req->new_ieee_link_id >= WLAN_INVALID_LINK_ID) {
+		mlo_err("Invalid link params, curr link id %d, new link id %d",
+			req->curr_ieee_link_id, req->new_ieee_link_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (wlan_vdev_get_id(vdev) != req->vdev_id) {
+		mlo_err("Invalid vdev params, curr id %d, req id %d",
+			wlan_vdev_get_id(vdev), req->vdev_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	new_link_info = mlo_mgr_get_ap_link_by_link_id(vdev->mlo_dev_ctx,
+						       req->new_ieee_link_id);
+	if (!new_link_info) {
+		mlo_err("New link id %d not part of association",
+			req->new_ieee_link_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (new_link_info->vdev_id != WLAN_INVALID_VDEV_ID &&
+	    new_link_info->vdev_id != req->vdev_id) {
+		mlo_err("requested link already active on other vdev:%d",
+			new_link_info->vdev_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (!mlo_is_mld_sta(vdev)) {
+		mlo_err("Link switch req not valid for VDEV %d", vdev_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (!wlan_cm_is_vdev_connected(vdev)) {
+		mlo_err("VDEV %d not in connected state", vdev_id);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (mlo_mgr_is_link_switch_in_progress(vdev)) {
+		mlo_err("Link switch already in progress");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	if (new_link_info->link_chan_info->ch_freq != req->new_primary_freq) {
+		mlo_err("Host freq(%d) FW req freq(%d)",
+			new_link_info->link_chan_info->ch_freq,
+			req->new_primary_freq);
+		return QDF_STATUS_E_INVAL;
+	}
+
+	return QDF_STATUS_SUCCESS;
+}
+
 QDF_STATUS
 mlo_mgr_link_switch_validate_request(struct wlan_objmgr_vdev *vdev,
 				     struct wlan_mlo_link_switch_req *req)
@@ -1152,6 +1840,16 @@ mlo_mgr_link_switch_validate_request(struct wlan_objmgr_vdev *vdev,
 	QDF_STATUS status = QDF_STATUS_E_INVAL;
 	uint8_t vdev_id = wlan_vdev_get_id(vdev);
 	struct mlo_link_info *new_link_info;
+	bool notify_link_recfg = false;
+
+	if (req->reason == MLO_LINK_SWITCH_REASON_HOST_ADD_LINK) {
+		status = mlo_mgr_host_link_switch_validate_request(vdev, req);
+		if (QDF_IS_STATUS_ERROR(status)) {
+			mlo_err("link switch status %d for add link", status);
+			return status;
+		}
+		goto validated;
+	}
 
 	if (req->curr_ieee_link_id >= WLAN_INVALID_LINK_ID ||
 	    req->new_ieee_link_id >= WLAN_INVALID_LINK_ID) {
@@ -1201,15 +1899,33 @@ mlo_mgr_link_switch_validate_request(struct wlan_objmgr_vdev *vdev,
 			req->new_primary_freq);
 		return status;
 	}
+validated:
+	/* If link recfg in progress, link switch is only allowed for host
+	 * force reason code.
+	 */
+	if (mlo_is_link_recfg_in_progress(vdev)) {
+		if (req->reason == MLO_LINK_SWITCH_REASON_HOST_FORCE ||
+		    req->reason ==
+		    MLO_LINK_SWITCH_REASON_HOST_FORCE_FOLLOWUP ||
+		    req->reason == MLO_LINK_SWITCH_REASON_HOST_ADD_LINK) {
+			/* notify link recfg link switch start */
+			notify_link_recfg = true;
+		} else {
+			mlo_debug("unexpected link switch fw reason %d in link recfg prog",
+				  req->reason);
+			return QDF_STATUS_E_INVAL;
+		}
+	}
 
 	/* Notify callers on the new link switch request before serializing */
 	status = mlo_mgr_link_switch_notify(vdev, req);
-	if (QDF_IS_STATUS_ERROR(status)) {
+	if (QDF_IS_STATUS_ERROR(status))
 		mlo_err("Link switch rejected in pre-serialize notify");
-		return status;
-	}
 
-	return QDF_STATUS_SUCCESS;
+	if (notify_link_recfg)
+		mlo_link_recfg_linksw_start_indication(vdev, status);
+
+	return status;
 }
 
 QDF_STATUS mlo_mgr_link_switch_request_params(struct wlan_objmgr_psoc *psoc,
@@ -1260,21 +1976,111 @@ QDF_STATUS mlo_mgr_link_switch_request_params(struct wlan_objmgr_psoc *psoc,
 	return status;
 }
 
+#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
+/**
+ * mlo_mgr_update_policy_mgr_disabled_links_info() - Update the policy manager
+ * with the info on inactive links and move the inactive links to disabled table
+ * @psoc: Pointer to PSOC object
+ * @vdev_id: Vdev id
+ * @link_id: link id
+ * @is_link_active: If link is active or inactive
+ *
+ * Return: None
+ */
+static void
+mlo_mgr_update_policy_mgr_disabled_links_info(struct wlan_objmgr_psoc *psoc,
+					      uint8_t vdev_id, uint8_t link_id,
+					      bool is_link_active)
+{
+	if (policy_mgr_is_hw_dbs_capable(psoc))
+		return;
+
+	/* Dont update the policy manager for standby link */
+	if (link_id == WLAN_INVALID_LINK_ID)
+		return;
+
+	if (is_link_active) {
+		policy_mgr_move_vdev_from_disabled_to_connection_tbl(psoc,
+								     vdev_id);
+		return;
+	}
+
+	policy_mgr_move_vdev_from_connection_to_disabled_tbl(psoc, vdev_id);
+}
+#else
+static inline void
+mlo_mgr_update_policy_mgr_disabled_links_info(struct wlan_objmgr_psoc *psoc,
+					      uint8_t vdev_id, uint8_t link_id,
+					      bool is_link_active)
+{}
+#endif
+
 #define IS_LINK_SET(link_bitmap, link_id) ((link_bitmap) & (BIT(link_id)))
 
-static void mlo_mgr_update_link_state(struct wlan_mlo_dev_context *mld_ctx,
+#define WLAN_MLO_SINGLE_LINK 1
+static void mlo_mgr_update_link_state(struct wlan_objmgr_psoc *psoc,
+				      struct wlan_mlo_dev_context *mld_ctx,
 				      uint32_t active_link_bitmap)
 {
-	uint8_t i;
+	uint8_t i, vdev_id, num_links = 0;
 	struct mlo_link_info *link_info;
+	struct wlan_objmgr_vdev *vdev;
+	struct mlo_mgr_context *mlo_ctx = wlan_objmgr_get_mlo_ctx();
+	bool is_cb_register = false;
 
+	if (mlo_ctx && mlo_ctx->osif_ops &&
+	    mlo_ctx->osif_ops->mlo_mgr_osif_update_link_state)
+		is_cb_register = true;
+
+	num_links = mlo_get_sta_num_links(mld_ctx);
 	for (i = 0; i < WLAN_MAX_ML_BSS_LINKS; i++) {
 		link_info = &mld_ctx->link_ctx->links_info[i];
+
+		if (qdf_is_macaddr_zero(&link_info->ap_link_addr) ||
+		    qdf_is_macaddr_zero(&link_info->link_addr))
+			continue;
 
 		if (IS_LINK_SET(active_link_bitmap, link_info->link_id))
 			link_info->is_link_active = true;
 		else
 			link_info->is_link_active = false;
+
+		vdev_id = link_info->vdev_id;
+		mlo_debug("vdev:%d is_link_active:%d num_links:%d", vdev_id,
+			  link_info->is_link_active, num_links);
+		/*
+		 * Teardown TDLS for non-DBS target when number of
+		 * connected links is > 1, so that it can be formed again on
+		 * active link.
+		 */
+		if (num_links > WLAN_MLO_SINGLE_LINK &&
+		    !link_info->is_link_active &&
+		    mlo_ctx && mlo_ctx->mlme_ops &&
+		    mlo_ctx->mlme_ops->mlo_mlme_ext_teardown_tdls)
+			mlo_ctx->mlme_ops->mlo_mlme_ext_teardown_tdls(psoc,
+								      vdev_id);
+
+		if (is_cb_register)
+			mlo_ctx->osif_ops->mlo_mgr_osif_update_link_state(
+						link_info->vdev_id,
+						link_info->is_link_active);
+
+		vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
+							    WLAN_MLO_MGR_ID);
+		if (!vdev)
+			continue;
+
+		/*
+		 * If VDEV is not in connected state don't update the policy
+		 * manager table, this can happen if disconnect is ongoing when
+		 * host receives event from FW.
+		 */
+		if (wlan_cm_is_vdev_connected(vdev))
+			mlo_mgr_update_policy_mgr_disabled_links_info(psoc,
+								      vdev_id,
+								      link_info->link_id,
+								      link_info->is_link_active);
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_MLO_MGR_ID);
 	}
 }
 
@@ -1284,6 +2090,7 @@ mlo_mgr_link_state_switch_info_handler(struct wlan_objmgr_psoc *psoc,
 {
 	uint8_t i;
 	struct wlan_mlo_dev_context *mld_ctx = NULL;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
 	wlan_mlo_get_mlpeer_by_peer_mladdr(
 			&info->link_switch_param[0].mld_addr, &mld_ctx);
@@ -1299,11 +2106,11 @@ mlo_mgr_link_state_switch_info_handler(struct wlan_objmgr_psoc *psoc,
 				psoc,
 				&info->link_switch_param[i]);
 		mlo_mgr_update_link_state(
-				mld_ctx,
+				psoc, mld_ctx,
 				info->link_switch_param[i].active_link_bitmap);
 	}
 
-	return QDF_STATUS_SUCCESS;
+	return status;
 }
 
 QDF_STATUS mlo_mgr_link_switch_complete(struct wlan_objmgr_vdev *vdev)
@@ -1313,6 +2120,10 @@ QDF_STATUS mlo_mgr_link_switch_complete(struct wlan_objmgr_vdev *vdev)
 	struct mlo_link_switch_context *link_ctx;
 	struct wlan_mlo_link_switch_req *req;
 	struct wlan_objmgr_psoc *psoc;
+	QDF_STATUS comp_status = QDF_STATUS_SUCCESS;
+	bool link_recfg_in_prog = mlo_is_link_recfg_in_progress(vdev);
+	struct wlan_objmgr_peer *peer;
+	struct wlan_mlo_peer_context *ml_peer;
 
 	/* Not checking NULL value as reference is already taken for vdev */
 	psoc = wlan_vdev_get_psoc(vdev);
@@ -1320,6 +2131,7 @@ QDF_STATUS mlo_mgr_link_switch_complete(struct wlan_objmgr_vdev *vdev)
 	if (!vdev->mlo_dev_ctx) {
 		mlo_err("mlo_dev_ctx for vdev is null vedv_id %d",
 			wlan_vdev_get_id(vdev));
+		wlan_objmgr_vdev_release_ref(vdev, WLAN_MLO_MGR_ID);
 		return QDF_STATUS_E_INVAL;
 	}
 
@@ -1335,12 +2147,45 @@ QDF_STATUS mlo_mgr_link_switch_complete(struct wlan_objmgr_vdev *vdev)
 	params.vdev_id = wlan_vdev_get_id(vdev);
 	params.reason = MLO_LINK_SWITCH_CNF_REASON_BSS_PARAMS_CHANGED;
 
-	mlo_mgr_link_switch_send_cnf_cmd(psoc, &params);
+	if (req->reason != MLO_LINK_SWITCH_REASON_HOST_ADD_LINK)
+		mlo_mgr_link_switch_send_cnf_cmd(psoc, &params);
 
 	mlo_mgr_link_switch_init_state(vdev->mlo_dev_ctx);
 	wlan_vdev_mlme_clear_mlo_link_switch_in_progress(vdev);
+
+	/* notify link recfg the link switch completed */
+	if (link_recfg_in_prog) {
+		if (params.status != MLO_LINK_SWITCH_CNF_STATUS_ACCEPT)
+			comp_status = QDF_STATUS_E_FAILURE;
+
+		mlo_link_recfg_linksw_completion_indication(vdev, comp_status);
+	}
+
+	peer = wlan_objmgr_vdev_try_get_bsspeer(vdev, WLAN_MLO_MGR_ID);
+	if (!peer) {
+		mlo_err("peer is null");
+		comp_status = QDF_STATUS_E_NULL_VALUE;
+		goto end;
+	}
+
+	ml_peer = peer->mlo_peer_ctx;
+	if (!ml_peer) {
+		mlo_err("ml peer is null");
+		comp_status = QDF_STATUS_E_NULL_VALUE;
+		goto end;
+	}
+
+	if (ml_peer->t2lm_policy.is_standby_link_enabled) {
+		mlme_cm_osif_roam_abort_ind(vdev);
+		ml_peer->t2lm_policy.is_standby_link_enabled = false;
+		t2lm_debug("Enable all queues");
+	}
+
+	wlan_objmgr_peer_release_ref(peer, WLAN_MLO_MGR_ID);
+end:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_MLO_MGR_ID);
-	return QDF_STATUS_SUCCESS;
+
+	return comp_status;
 }
 
 QDF_STATUS
@@ -1391,6 +2236,8 @@ mlo_mgr_link_switch_defer_disconnect_req(struct wlan_objmgr_vdev *vdev,
 	/* Move current link switch to abort state */
 	mlo_mgr_link_switch_trans_abort_state(mlo_dev_ctx);
 
+	mlo_link_recfg_abort_if_in_progress(vdev, false);
+
 	if (sta_ctx->disconn_req) {
 		mlo_debug("Pending disconnect from source %d, reason %d",
 			  sta_ctx->disconn_req->source,
@@ -1409,5 +2256,24 @@ mlo_mgr_link_switch_defer_disconnect_req(struct wlan_objmgr_vdev *vdev,
 
 	mlo_debug("Deferred disconnect source: %d, reason: %d", source, reason);
 	return QDF_STATUS_SUCCESS;
+}
+
+bool mlo_mgr_is_mlo_vdev_active(struct wlan_objmgr_vdev *vdev)
+{
+	struct mlo_link_info *link_info;
+	uint8_t link_id = WLAN_INVALID_LINK_ID;
+
+	if (!wlan_vdev_mlme_is_mlo_vdev(vdev) || !vdev->mlo_dev_ctx)
+		return false;
+
+	link_id = wlan_vdev_get_link_id(vdev);
+	link_info = mlo_mgr_get_ap_link_by_link_id(vdev->mlo_dev_ctx, link_id);
+	if (!link_info) {
+		mlo_debug("Link info not found for link_id %d vdev %d",
+			  link_id, wlan_vdev_get_id(vdev));
+		return false;
+	}
+
+	return link_info->is_link_active;
 }
 #endif

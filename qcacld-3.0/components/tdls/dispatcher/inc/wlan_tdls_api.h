@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -25,6 +25,7 @@
 #include "wlan_objmgr_pdev_obj.h"
 #include "wlan_objmgr_vdev_obj.h"
 #include "wlan_tdls_main.h"
+#include "wlan_mlo_mgr_public_structs.h"
 
 #ifdef FEATURE_WLAN_TDLS
 #ifdef WLAN_FEATURE_11BE_MLO
@@ -164,6 +165,17 @@ void wlan_tdls_notify_start_bss_failure(struct wlan_objmgr_psoc *psoc);
 void wlan_tdls_notify_start_bss(struct wlan_objmgr_psoc *psoc,
 				struct wlan_objmgr_vdev *vdev);
 
+/**
+ * wlan_tdls_find_peer() - find TDLS peer in TDLS vdev object
+ * @vdev_obj: TDLS vdev object
+ * @macaddr: MAC address of peer
+ *
+ * Return: If peer is found, then it returns pointer to tdls_peer;
+ *         otherwise, it returns NULL.
+ */
+struct tdls_peer *wlan_tdls_find_peer(struct tdls_vdev_priv_obj *vdev_obj,
+				      const uint8_t *macaddr);
+
 #ifdef WLAN_FEATURE_TDLS_CONCURRENCIES
 /**
  * wlan_tdls_notify_channel_switch_complete() - Notify TDLS module about the
@@ -197,6 +209,17 @@ void wlan_tdls_notify_channel_switch_start(struct wlan_objmgr_psoc *psoc,
  */
 void wlan_tdls_handle_p2p_client_connect(struct wlan_objmgr_psoc *psoc,
 					 struct wlan_objmgr_vdev *vdev);
+
+/**
+ * wlan_tdls_recompute_offchannel_mode() - Recompute TDLS offchannel mode
+ * related parameters
+ * @psoc: Pointer to PSOC object
+ * @vdev: Pointer to vdev
+ *
+ * Return: None
+ */
+void wlan_tdls_recompute_offchannel_mode(struct wlan_objmgr_psoc *psoc,
+					 struct wlan_objmgr_vdev *vdev);
 #else
 static inline
 void wlan_tdls_notify_channel_switch_complete(struct wlan_objmgr_psoc *psoc,
@@ -226,6 +249,19 @@ void wlan_tdls_handle_p2p_client_connect(struct wlan_objmgr_psoc *psoc,
 void wlan_tdls_increment_discovery_attempts(struct wlan_objmgr_psoc *psoc,
 					    uint8_t vdev_id,
 					    uint8_t *peer_addr);
+
+/**
+ * wlan_tdls_teardown_links_for_non_dbs() - notify TDLS module to teardown
+ * TDLS links for non-DBS target
+ * @psoc: psoc object
+ * @vdev_id: Vdev id
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+wlan_tdls_teardown_links_for_non_dbs(struct wlan_objmgr_psoc *psoc,
+				     uint8_t vdev_id);
+
 /**
  * wlan_tdls_is_addba_request_allowed() - API to check if Add Block ack request
  * is allowed for TDLS peer in current state.
@@ -242,7 +278,8 @@ bool wlan_tdls_is_addba_request_allowed(struct wlan_objmgr_vdev *vdev,
  *
  * Return: None
  */
-void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev);
+void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev,
+				enum wlan_tdls_peer_delete_reason);
 
 /*
  * wlan_tdls_update_peer_kickout_count() - Update the TDLS peer sta kickout
@@ -254,6 +291,17 @@ void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev);
  */
 QDF_STATUS wlan_tdls_update_peer_kickout_count(struct wlan_objmgr_vdev *vdev,
 					       uint8_t *macaddr);
+
+/**
+ * wlan_tdls_is_key_install_allowed() - API to check if key_install request
+ * is allowed for TDLS peer in current state.
+ * @vdev: Vdev object pointer
+ * @mac_addr: Mac address of the peer
+ *
+ * Return: True if key_install can be allowed
+ */
+bool wlan_tdls_is_key_install_allowed(struct wlan_objmgr_vdev *vdev,
+				      struct qdf_mac_addr *mac_addr);
 #else
 static inline
 void wlan_tdls_register_lim_callbacks(struct wlan_objmgr_psoc *psoc,
@@ -295,6 +343,12 @@ wlan_tdls_notify_sta_connect(uint8_t vdev_id,
 			     bool tdls_chan_swit_prohibited,
 			     bool tdls_prohibited,
 			     struct wlan_objmgr_vdev *vdev) {}
+
+static inline QDF_STATUS
+wlan_is_tdls_session_present(struct wlan_objmgr_vdev *vdev)
+{
+	return QDF_STATUS_E_INVAL;
+}
 
 static inline void
 wlan_tdls_update_tx_pkt_cnt(struct wlan_objmgr_vdev *vdev,
@@ -340,6 +394,13 @@ void wlan_tdls_increment_discovery_attempts(struct wlan_objmgr_psoc *psoc,
 {}
 
 static inline
+QDF_STATUS wlan_tdls_teardown_links_for_non_dbs(struct wlan_objmgr_psoc *psoc,
+						uint8_t vdev_id)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline
 bool wlan_tdls_is_addba_request_allowed(struct wlan_objmgr_vdev *vdev,
 					struct qdf_mac_addr *mac_addr)
 {
@@ -347,7 +408,9 @@ bool wlan_tdls_is_addba_request_allowed(struct wlan_objmgr_vdev *vdev,
 }
 
 static inline
-void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev)
+void wlan_tdls_delete_all_peers(struct wlan_objmgr_vdev *vdev,
+				uint8_t wlan_tdls_peer_delete_reason)
+
 {}
 
 static inline
@@ -356,5 +419,17 @@ QDF_STATUS wlan_tdls_update_peer_kickout_count(struct wlan_objmgr_vdev *vdev,
 {
 	return QDF_STATUS_SUCCESS;
 }
+
+static inline
+bool wlan_tdls_is_key_install_allowed(struct wlan_objmgr_vdev *vdev,
+				      struct qdf_mac_addr *mac_addr)
+{
+	return false;
+}
+
+static inline void
+wlan_tdls_recompute_offchannel_mode(struct wlan_objmgr_psoc *psoc,
+				    struct wlan_objmgr_vdev *vdev)
+{}
 #endif
 #endif

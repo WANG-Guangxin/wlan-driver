@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -409,13 +409,11 @@ QDF_STATUS mlme_cm_reassoc_req(struct wlan_objmgr_vdev *vdev,
 	return ret;
 }
 
-#ifdef CONN_MGR_ADV_FEATURE
 void mlme_cm_osif_connect_active_notify(uint8_t vdev_id)
 {
 	if (glbl_cm_ops && glbl_cm_ops->mlme_cm_connect_active_notify_cb)
 		glbl_cm_ops->mlme_cm_connect_active_notify_cb(vdev_id);
 }
-#endif
 
 QDF_STATUS mlme_cm_connect_complete_ind(struct wlan_objmgr_vdev *vdev,
 					struct wlan_cm_connect_resp *rsp)
@@ -460,6 +458,16 @@ QDF_STATUS mlme_cm_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev)
 	return ret;
 }
 
+QDF_STATUS mlme_cm_force_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev)
+{
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+
+	if ((glbl_ops) && glbl_ops->mlme_cm_ext_force_bss_peer_delete_req_cb)
+		ret = glbl_ops->mlme_cm_ext_force_bss_peer_delete_req_cb(vdev);
+
+	return ret;
+}
+
 QDF_STATUS mlme_cm_disconnect_complete_ind(struct wlan_objmgr_vdev *vdev,
 					   struct wlan_cm_discon_rsp *rsp)
 {
@@ -488,6 +496,16 @@ QDF_STATUS mlme_cm_osif_connect_complete(struct wlan_objmgr_vdev *vdev,
 
 	if (glbl_cm_ops && glbl_cm_ops->mlme_cm_connect_complete_cb)
 		ret = glbl_cm_ops->mlme_cm_connect_complete_cb(vdev, rsp);
+
+	return ret;
+}
+
+QDF_STATUS mlme_cm_osif_roam_connect_complete(struct wlan_objmgr_vdev *vdev)
+{
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+
+	if (glbl_cm_ops && glbl_cm_ops->mlme_cm_roam_connect_complete_cb)
+		ret = glbl_cm_ops->mlme_cm_roam_connect_complete_cb(vdev);
 
 	return ret;
 }
@@ -555,7 +573,6 @@ QDF_STATUS mlme_cm_osif_get_vendor_handoff_params(struct wlan_objmgr_psoc *psoc,
 }
 #endif
 
-#ifdef CONN_MGR_ADV_FEATURE
 QDF_STATUS mlme_cm_osif_roam_sync_ind(struct wlan_objmgr_vdev *vdev)
 {
 	QDF_STATUS ret = QDF_STATUS_SUCCESS;
@@ -605,7 +622,6 @@ QDF_STATUS mlme_cm_osif_link_reconfig_notify(struct wlan_objmgr_vdev *vdev)
 
 	return ret;
 }
-#endif
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 QDF_STATUS mlme_cm_osif_roam_start_ind(struct wlan_objmgr_vdev *vdev)
@@ -667,6 +683,16 @@ mlme_cm_osif_roam_get_scan_params(struct wlan_objmgr_vdev *vdev,
 	return ret;
 }
 
+QDF_STATUS mlme_cm_osif_reset_scan_reject_params(struct wlan_objmgr_vdev *vdev)
+{
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+
+	if (glbl_cm_ops &&
+	    glbl_cm_ops->mlme_cm_reset_scan_reject_params_cb)
+		ret = glbl_cm_ops->mlme_cm_reset_scan_reject_params_cb(vdev);
+
+	return ret;
+}
 #endif
 
 #ifdef WLAN_FEATURE_PREAUTH_ENABLE
@@ -945,5 +971,35 @@ void mlme_cm_osif_perfd_reset_cpufreq(void)
 {
 	if (glbl_cm_ops && glbl_cm_ops->mlme_cm_perfd_reset_cpufreq_ctrl_cb)
 		glbl_cm_ops->mlme_cm_perfd_reset_cpufreq_ctrl_cb();
+}
+#endif
+#ifdef WLAN_FEATURE_11BE_MLO
+QDF_STATUS mlme_cm_send_link_reconfig_status(void *ctx)
+{
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	if (glbl_cm_ops &&
+	    glbl_cm_ops->mlme_cm_link_reconfig_status_cb)
+		status = glbl_cm_ops->mlme_cm_link_reconfig_status_cb(ctx);
+
+	return status;
+}
+
+void *
+mlme_cm_populate_link_recfg_done_data(struct wlan_objmgr_vdev *vdev)
+{
+	if (glbl_cm_ops &&
+	    glbl_cm_ops->mlme_cm_populate_link_recfg_done_data)
+		return glbl_cm_ops->mlme_cm_populate_link_recfg_done_data(
+								vdev);
+
+	return NULL;
+}
+
+void mlme_cm_free_link_reconfig_done_data(void *ctx)
+{
+	if (glbl_cm_ops &&
+	    glbl_cm_ops->mlme_cm_free_link_reconfig_done_data)
+		glbl_cm_ops->mlme_cm_free_link_reconfig_done_data(ctx);
 }
 #endif

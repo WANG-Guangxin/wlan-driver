@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -169,7 +169,8 @@ void hdd_ndp_peer_departed_handler(uint8_t vdev_id, uint16_t sta_id,
 				   struct qdf_mac_addr *peer_mac_addr,
 				   bool last_peer);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) || \
+(defined CFG80211_CHANGE_NETDEV_REGISTRATION_SEMANTICS))
 /**
  * hdd_ndi_set_mode() - set the adapter mode to NDI
  * @iface_name: NDI interface name
@@ -187,6 +188,25 @@ static inline int hdd_ndi_set_mode(const char *iface_name)
 }
 #endif /* LINUX_VERSION_CODE  */
 
+#ifdef NDP_TX_BW_FLOW_CTRL
+/**
+ * hdd_ndp_get_peer_bw() - get NDP peer bandwidth
+ * @adapter: HDD adapter
+ * @peer_mac: ndp peer mac address
+ * @out_peer_idx: peer idx filled by API on match
+ *
+ * Return: peer bandwidth
+ */
+uint8_t hdd_ndp_get_peer_bw(struct hdd_adapter *adapter, uint8_t *peer_mac,
+			    uint8_t *out_peer_idx);
+#else
+static inline
+uint8_t hdd_ndp_get_peer_bw(struct hdd_adapter *adapter, uint8_t *peer_mac,
+			    uint8_t *out_peer_idx)
+{
+	return 0;
+}
+#endif
 #else
 #define WLAN_HDD_IS_NDI(adapter)	(false)
 #define WLAN_HDD_IS_NDI_CONNECTED(adapter) (false)

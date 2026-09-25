@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -30,6 +30,7 @@
 #include <wlan_dp_fisa_rx.h>
 #include <cdp_txrx_ctrl.h>
 #include "qdf_ssr_driver_dump.h"
+#include "wlan_dp_flow_balance.h"
 
 /* Timeout in milliseconds to wait for CMEM FST HTT response */
 #define DP_RX_FST_CMEM_RESP_TIMEOUT 2000
@@ -154,8 +155,9 @@ static QDF_STATUS dp_rx_dump_fisa_stats(struct wlan_dp_psoc_context *dp_ctx)
 			sw_ft_entry->aggr_count,
 			sw_ft_entry->flush_count,
 			sw_ft_entry->bytes_aggregated,
-			qdf_do_div(sw_ft_entry->bytes_aggregated,
-				   sw_ft_entry->flush_count),
+			sw_ft_entry->flush_count ?
+				qdf_do_div(sw_ft_entry->bytes_aggregated,
+					   sw_ft_entry->flush_count) : 0,
 			sw_ft_entry->same_mld_vdev_mismatch);
 	}
 	return QDF_STATUS_SUCCESS;
@@ -186,6 +188,46 @@ void dp_print_fisa_rx_stats(enum cdp_fisa_stats_id stats_id)
 		break;
 	}
 }
+
+#ifdef WLAN_DP_FEATURE_STC
+void dp_fisa_rx_fst_inv_peer_id(uint16_t peer_id)
+{
+	struct wlan_dp_psoc_context *dp_ctx = dp_get_context();
+	struct wlan_dp_psoc_cfg *dp_cfg = &dp_ctx->dp_cfg;
+	struct dp_rx_fst *fisa_hdl = dp_ctx->rx_fst;
+	struct dp_fisa_rx_fst_update_elem *elem;
+
+	/* Check if it is enabled in the INI */
+	if (!wlan_dp_cfg_is_rx_fisa_enabled(dp_cfg))
+		return;
+
+	if (!fisa_hdl->fst_in_cmem)
+		return;
+
+	elem = qdf_mem_malloc(sizeof(*elem));
+	if (!elem) {
+		/* TODO - How to handle this case ? */
+		return;
+	}
+
+	elem->action_code = DP_FT_INV_PEER_ID;
+	elem->peer_id = peer_id;
+	qdf_spin_lock_bh(&fisa_hdl->dp_rx_fst_lock);
+	qdf_list_insert_back(&fisa_hdl->fst_update_list, &elem->node);
+	qdf_spin_unlock_bh(&fisa_hdl->dp_rx_fst_lock);
+	if (qdf_atomic_read(&fisa_hdl->pm_suspended)) {
+		fisa_hdl->fst_wq_defer = true;
+		dp_info("Defer DP_FT_INV_PEER_ID task in WoW for peer %hu",
+			peer_id);
+	} else {
+		qdf_queue_work(fisa_hdl->dp_ctx->qdf_dev,
+			       fisa_hdl->fst_update_wq,
+			       &fisa_hdl->fst_update_work);
+		dp_info("Queued DP_FT_INV_PEER_ID task in work for peer %hu",
+			peer_id);
+	}
+}
+#endif
 
 /**
  * dp_rx_flow_send_htt_operation_cmd() - Invalidate FSE cache on FT change
@@ -316,6 +358,9 @@ static QDF_STATUS dp_rx_fst_cmem_init(struct dp_rx_fst *fst)
 		return QDF_STATUS_E_FAILURE;
 	}
 
+	fst->last_update_time_ns = 0;
+	fst->update_count = 0;
+
 	qdf_create_work(0, &fst->fst_update_work,
 			dp_fisa_rx_fst_update_work, fst);
 	qdf_list_create(&fst->fst_update_list, 128);
@@ -417,7 +462,7 @@ QDF_STATUS dp_rx_fst_attach(struct wlan_dp_psoc_context *dp_ctx)
 					 &soc_param);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		dp_err("Unable to fetch RX pkt tlv size");
-		return status;
+		goto free_rx_fst;
 	}
 
 	fst->rx_pkt_tlv_size = soc_param.rx_pkt_tlv_size;
@@ -428,7 +473,7 @@ QDF_STATUS dp_rx_fst_attach(struct wlan_dp_psoc_context *dp_ctx)
 					 &soc_param);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		dp_err("Unable to fetch fisa params");
-		return status;
+		goto free_rx_fst;
 	}
 
 	fst->max_skid_length = soc_param.fisa_params.rx_flow_max_search;
@@ -444,8 +489,10 @@ QDF_STATUS dp_rx_fst_attach(struct wlan_dp_psoc_context *dp_ctx)
 	fst->base = (uint8_t *)dp_context_alloc_mem(soc, DP_FISA_RX_FT_TYPE,
 				DP_RX_GET_SW_FT_ENTRY_SIZE * fst->max_entries);
 
-	if (!fst->base)
+	if (!fst->base) {
+		status = QDF_STATUS_E_NOMEM;
 		goto free_rx_fst;
+	}
 
 	ft_entry = (struct dp_fisa_rx_sw_ft *)fst->base;
 
@@ -490,12 +537,17 @@ QDF_STATUS dp_rx_fst_attach(struct wlan_dp_psoc_context *dp_ctx)
 	fst->soc_hdl = soc;
 	fst->dp_ctx = dp_ctx;
 	dp_ctx->rx_fst = fst;
-	dp_ctx->fisa_enable = true;
+	fst->fisa_initialized = true;
+	fst->is_fisa_aggr_enabled = dp_cfg->is_fisa_aggr_enabled;
 	dp_ctx->fisa_lru_del_enable =
 				wlan_dp_cfg_is_rx_fisa_lru_del_enabled(dp_cfg);
 
 	qdf_atomic_init(&dp_ctx->skip_fisa_param.skip_fisa);
 	qdf_atomic_init(&fst->pm_suspended);
+
+	if (wlan_dp_fb_enabled(dp_ctx) ||
+	    wlan_dp_rx_is_latency_sensitive_reo_enabled())
+		fst->add_tcp_flow_to_fst = true;
 
 	QDF_TRACE(QDF_MODULE_ID_ANY, QDF_TRACE_LEVEL_ERROR,
 		  "Rx FST attach successful, #entries:%d\n",
@@ -518,7 +570,7 @@ free_hist:
 	dp_context_free_mem(soc, DP_FISA_RX_FT_TYPE, fst->base);
 free_rx_fst:
 	qdf_mem_free(fst);
-	return QDF_STATUS_E_NOMEM;
+	return status;
 }
 
 /**
@@ -701,7 +753,7 @@ QDF_STATUS dp_rx_fst_target_config(struct wlan_dp_psoc_context *dp_ctx)
 	struct dp_rx_fst *fst = dp_ctx->rx_fst;
 
 	/* Check if it is enabled in the INI */
-	if (!dp_ctx->fisa_enable) {
+	if (!fst || !fst->fisa_initialized) {
 		dp_err("RX FISA feature is disabled");
 		return QDF_STATUS_E_NOSUPPORT;
 	}
@@ -757,10 +809,10 @@ QDF_STATUS dp_rx_fisa_config(struct wlan_dp_psoc_context *dp_ctx)
 void dp_fisa_cfg_init(struct wlan_dp_psoc_cfg *config,
 		      struct wlan_objmgr_psoc *psoc)
 {
-	config->fisa_enable = cfg_get(psoc, CFG_DP_RX_FISA_ENABLE);
 	config->is_rx_fisa_enabled = cfg_get(psoc, CFG_DP_RX_FISA_ENABLE);
 	config->is_rx_fisa_lru_del_enabled =
 				cfg_get(psoc, CFG_DP_RX_FISA_LRU_DEL_ENABLE);
+	config->is_fisa_aggr_enabled = cfg_get(psoc, CFG_DP_RX_FISA_ENABLE);
 }
 #else /* WLAN_SUPPORT_RX_FISA */
 

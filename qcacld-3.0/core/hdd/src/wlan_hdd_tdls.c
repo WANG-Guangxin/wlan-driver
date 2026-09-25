@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -46,6 +46,7 @@
 #include "wlan_hdd_object_manager.h"
 #include <wlan_reg_ucfg_api.h>
 #include "wlan_tdls_api.h"
+#include "wlan_policy_mgr_ucfg.h"
 
 /**
  * enum qca_wlan_vendor_tdls_trigger_mode_hdd_map: Maps the user space TDLS
@@ -119,47 +120,6 @@ int wlan_hdd_tdls_get_all_peers(struct hdd_adapter *adapter,
 	return ret;
 }
 
-static const struct nla_policy
-	wlan_hdd_tdls_config_enable_policy[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_MAX +
-					   1] = {
-	[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_MAC_ADDR] =
-		VENDOR_NLA_POLICY_MAC_ADDR,
-	[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_CHANNEL] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_GLOBAL_OPERATING_CLASS] = {.type =
-								NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_MAX_LATENCY_MS] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_ENABLE_MIN_BANDWIDTH_KBPS] = {.type =
-								NLA_U32},
-};
-static const struct nla_policy
-	wlan_hdd_tdls_config_disable_policy[QCA_WLAN_VENDOR_ATTR_TDLS_DISABLE_MAX +
-					    1] = {
-	[QCA_WLAN_VENDOR_ATTR_TDLS_DISABLE_MAC_ADDR] =
-		VENDOR_NLA_POLICY_MAC_ADDR,
-};
-static const struct nla_policy
-	wlan_hdd_tdls_config_state_change_policy[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_MAX
-						 + 1] = {
-	[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_MAC_ADDR] =
-		VENDOR_NLA_POLICY_MAC_ADDR,
-	[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_NEW_STATE] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_REASON] = {.type = NLA_S32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_CHANNEL] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_STATE_GLOBAL_OPERATING_CLASS] = {.type =
-								NLA_U32},
-};
-static const struct nla_policy
-	wlan_hdd_tdls_config_get_status_policy
-[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_MAX + 1] = {
-	[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_MAC_ADDR] =
-		VENDOR_NLA_POLICY_MAC_ADDR,
-	[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_STATE] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_REASON] = {.type = NLA_S32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_CHANNEL] = {.type = NLA_U32},
-	[QCA_WLAN_VENDOR_ATTR_TDLS_GET_STATUS_GLOBAL_OPERATING_CLASS] = {
-							.type = NLA_U32},
-};
-
 const struct nla_policy
 	wlan_hdd_tdls_disc_rsp_policy
 	[QCA_WLAN_VENDOR_ATTR_TDLS_DISC_RSP_EXT_MAX + 1] = {
@@ -190,8 +150,8 @@ const struct nla_policy
 						.type = NLA_S32},
 };
 
-static bool wlan_hdd_is_tdls_allowed(struct hdd_context *hdd_ctx,
-				     struct wlan_objmgr_vdev *vdev)
+bool wlan_hdd_is_tdls_allowed(struct hdd_context *hdd_ctx,
+			      struct wlan_objmgr_vdev *vdev)
 {
 	bool tdls_support;
 	struct wlan_hdd_link_info *link_info;
@@ -202,8 +162,9 @@ static bool wlan_hdd_is_tdls_allowed(struct hdd_context *hdd_ctx,
 		return false;
 	}
 
-	if (!wlan_cm_is_vdev_connected(vdev)) {
-		hdd_debug("Failed due to Not associated");
+	if (wlan_vdev_is_up(vdev) != QDF_STATUS_SUCCESS) {
+		hdd_debug("vdev %d Failed due to Not associated",
+			  wlan_vdev_get_id(vdev));
 		return false;
 	}
 
@@ -646,20 +607,13 @@ static int wlan_hdd_tdls_disable(struct hdd_context *hdd_ctx,
 {
 	struct wlan_hdd_link_info *link_info;
 	struct wlan_objmgr_vdev *vdev;
-	bool tdls_chan_switch_prohibited;
 
 	hdd_adapter_for_each_active_link_info(adapter, link_info) {
 		vdev = hdd_objmgr_get_vdev_by_user(link_info, WLAN_TDLS_NB_ID);
 		if (!vdev)
 			return -EINVAL;
 
-		tdls_chan_switch_prohibited =
-				ucfg_mlme_get_tdls_chan_switch_prohibited(vdev);
-
-		wlan_tdls_notify_sta_disconnect(wlan_vdev_get_id(vdev),
-						tdls_chan_switch_prohibited,
-						true, vdev);
-
+		ucfg_tdls_teardown_links(hdd_ctx->psoc);
 		ucfg_tdls_set_user_tdls_enable(vdev, false);
 
 		if (!wlan_vdev_mlme_is_mlo_vdev(vdev)) {
@@ -785,7 +739,8 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 				bool initiator, const uint8_t *buf,
 				size_t len, int link_id)
 
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) || \
+	defined(CFG80211_TDLS_MGMT_LINK_AWARE)
 static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 				struct net_device *dev,
 				const u8 *peer, int link_id,
@@ -825,7 +780,8 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 	struct hdd_context *hdd_ctx = wiphy_priv(wiphy);
 	bool tdls_support;
 #if !defined(TDLS_MGMT_VERSION5) && \
-	(LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0))
+	(LINUX_VERSION_CODE < KERNEL_VERSION(6, 5, 0)) && \
+	!defined(CFG80211_TDLS_MGMT_LINK_AWARE)
 	int link_id = -1;
 #endif
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 15, 0))
@@ -860,12 +816,46 @@ static int __wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 
 	if (hdd_ctx->tdls_umac_comp_active) {
 		int ret;
+		bool is_dbs_target = false;
+		struct wlan_objmgr_psoc *psoc = hdd_ctx->psoc;
+		enum tdls_feature_mode mode;
+
+		if (!psoc) {
+			hdd_err("psoc is null");
+			return -EINVAL;
+		}
+		mode = ucfg_tdls_get_current_mode(psoc);
+		if (action_code != TDLS_TEARDOWN) {
+			if (mode == TDLS_SUPPORT_DISABLED ||
+			    mode == TDLS_SUPPORT_SUSPENDED) {
+				hdd_debug_rl("TDLS mode is %d. action %d declined.",
+					     mode,
+					     action_code);
+				return -ENOTSUPP;
+			}
+		}
 
 		link_id = wlan_hdd_get_tdls_link_id(hdd_ctx, link_id);
-		ret = wlan_cfg80211_tdls_mgmt_mlo(adapter, peer,
-						  action_code, dialog_token,
-						  status_code, peer_capability,
-						  buf, len, link_id);
+		is_dbs_target = ucfg_policy_mgr_is_fw_supports_dbs(psoc);
+
+		if (is_dbs_target) {
+			ret = wlan_cfg80211_tdls_mgmt_mlo(adapter, peer,
+							  action_code,
+							  dialog_token,
+							  status_code,
+							  peer_capability,
+							  buf, len, link_id);
+		} else {
+			ret = wlan_cfg80211_tdls_send_mgmt_on_active_link(
+								adapter, peer,
+								action_code,
+								dialog_token,
+								status_code,
+								peer_capability,
+								buf, len,
+								link_id);
+		}
+
 		return ret;
 	}
 
@@ -900,7 +890,8 @@ int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 					u32 peer_capability, bool initiator,
 					const u8 *buf, size_t len, int link_id)
 
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) || \
+	defined(CFG80211_TDLS_MGMT_LINK_AWARE)
 int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 					struct net_device *dev,
 					const u8 *peer, int link_id,
@@ -951,7 +942,8 @@ int wlan_hdd_cfg80211_tdls_mgmt(struct wiphy *wiphy,
 					      dialog_token, status_code,
 					      peer_capability, initiator,
 					      buf, len, link_id);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0))
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)) || \
+	defined(CFG80211_TDLS_MGMT_LINK_AWARE)
 	errno = __wlan_hdd_cfg80211_tdls_mgmt(wiphy, dev, peer, link_id,
 					      action_code, dialog_token,
 					      status_code, peer_capability,
@@ -1145,11 +1137,18 @@ static int __wlan_hdd_cfg80211_tdls_oper(struct wiphy *wiphy,
 	vdev = hdd_objmgr_get_vdev_by_user(adapter->deflink, WLAN_OSIF_TDLS_ID);
 	if (!vdev)
 		return -EINVAL;
+
+	if (!wlan_hdd_is_tdls_allowed(hdd_ctx, vdev)) {
+		hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_TDLS_ID);
+		return -EINVAL;
+	}
+
 	status = wlan_cfg80211_tdls_oper(vdev, peer, oper);
 	hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_TDLS_ID);
 
 exit:
 	hdd_exit();
+
 	return status;
 }
 
@@ -1327,6 +1326,7 @@ void hdd_init_tdls_config(struct tdls_start_params *tdls_cfg)
 	tdls_cfg->tdls_add_sta_req = eWNI_SME_TDLS_ADD_STA_REQ;
 	tdls_cfg->tdls_del_sta_req = eWNI_SME_TDLS_DEL_STA_REQ;
 	tdls_cfg->tdls_update_peer_state = WMA_UPDATE_TDLS_PEER_STATE;
+	tdls_cfg->tdls_update_offchan_mode = WMA_UPDATE_TDLS_OFF_CHAN;
 }
 
 void hdd_config_tdls_with_band_switch(struct hdd_context *hdd_ctx)

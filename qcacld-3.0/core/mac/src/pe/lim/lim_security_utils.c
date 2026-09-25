@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -94,8 +94,9 @@ lim_is_auth_algo_supported(struct mac_context *mac, tAniAuthType authType,
 	} else {
 
 		if (LIM_IS_AP_ROLE(pe_session)) {
-			if ((pe_session->authType == eSIR_SHARED_KEY)
-			    || (pe_session->authType == eSIR_AUTO_SWITCH))
+			if (pe_session->authType == eSIR_SHARED_KEY ||
+			    pe_session->authType == SIR_FILS_SK_WITHOUT_PFS ||
+			    pe_session->authType == eSIR_AUTO_SWITCH)
 				algoEnable = true;
 			else
 				algoEnable = false;
@@ -760,3 +761,23 @@ lim_decrypt_auth_frame(struct mac_context *mac, uint8_t *pKey, uint8_t *pEncrBod
 
 	return QDF_STATUS_SUCCESS;
 } /****** end lim_decrypt_auth_frame() ******/
+
+#ifdef AUTO_PLATFORM
+void
+lim_del_stale_auth_node_assoc_req_timeout(struct mac_context *mac_ctx,
+					  struct tLimPreAuthNode *auth_node)
+{
+	uint32_t assoc_req_timeout;
+	struct wlan_mlme_cfg *cfg = mac_ctx->mlme_cfg;
+
+	assoc_req_timeout = SYS_MS_TO_TICKS(cfg->timeouts.assoc_req_timeout);
+
+	if (qdf_mc_timer_get_system_ticks() >
+	    (assoc_req_timeout + auth_node->timestamp) ||
+	    qdf_mc_timer_get_system_ticks() < auth_node->timestamp) {
+		pe_debug("delete stale auth node "QDF_MAC_ADDR_FMT,
+			 QDF_MAC_ADDR_REF(auth_node->peerMacAddr));
+		lim_delete_pre_auth_node(mac_ctx, auth_node->peerMacAddr);
+	}
+}
+#endif

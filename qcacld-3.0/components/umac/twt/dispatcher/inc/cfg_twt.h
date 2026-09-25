@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -45,14 +45,23 @@
 		"twt_requestor", \
 		1, \
 		"TWT requestor")
+
+#define CFG_TWT_RESPONDER_BIT_SAP       0
+#define CFG_TWT_RESPONDER_BIT_LL_LT_SAP 1
+#define CFG_TWT_RESPONDER_BIT_P2P_GO    2
 /*
  * <ini>
- * twt_responder - twt responder.
+ * twt_responder - TWT responder enable/disable per VDEV
  * @Min: 0
- * @Max: 1
- * @Default: false
+ * @Max: 0xFF
+ * @Default: 0x06
  *
- * This cfg is used to store twt responder config.
+ * This cfg is used to configure the TWT responder.
+ * Bitmap for enabling the TWT responder per VDEV
+ * BIT 0: SAP
+ * BIT 1: LL_LT_SAP
+ * BIT 2: P2P GO
+ * BIT 3-31: Reserved
  *
  * Related: NA
  *
@@ -62,9 +71,12 @@
  *
  * </ini>
  */
-#define CFG_TWT_RESPONDER CFG_INI_BOOL( \
+#define CFG_TWT_RESPONDER CFG_INI_UINT( \
 		"twt_responder", \
-		false, \
+		0, \
+		0xFF, \
+		0x07, \
+		CFG_VALUE_OR_DEFAULT, \
 		"TWT responder")
 
 /*
@@ -150,7 +162,7 @@
 		"twt_bcast_req_resp_config", \
 		0, \
 		3, \
-		1, \
+		3, \
 		CFG_VALUE_OR_DEFAULT, \
 		"BROADCAST TWT CAPABILITY")
 
@@ -234,6 +246,29 @@
 		"enable_twt_24ghz", \
 		true, \
 		"enable twt in 2.4Ghz band")
+
+/*
+ * <ini>
+ * disable_twt_on_scan - Disable target Wake Time during scan
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to enable/disable the TWT during scan
+ *
+ * Related: NA
+ *
+ * Supported Feature: 11AX
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_DISABLE_TWT_ON_SCAN CFG_INI_BOOL( \
+		"disable_twt_on_scan", \
+		false, \
+		"disable twt on scan")
+
 /*
  * <ini>
  * twt_disable_info - Enable/Disable TWT info frame.
@@ -258,31 +293,54 @@
 
 #define CFG_HE_FLEX_TWT_SCHED CFG_BOOL( \
 				"he_flex_twt_sched", \
-				0, \
+				1, \
 				"HE Flex Twt Sched")
 
 /*
  * <ini>
- * enable_twt_in_11n - Enable TWT support in 11n mode
- * @MIN: 0
- * @MAX: 1
+ * twt_req_res_ht_vht - To enable twt requestor and responder support in
+ * ht/vht mode.
+ * @Min: 0 Disable twt capability for both req/res in ht/vht mode
+ * @Max: 3
  * @Default: 0
  *
- * This ini is used to enable/disable TWT support 11n mode.
- * Generally by default TWT support present from HE capable
- * devices but if this ini is enabled then it will support
- * partially from 11n mode itself.
+ * This cfg is used to configure the TWT requestor and responder in ht/vht mode.
+ * Bitmap for enabling the twt requestor and responder in ht/vht mode.
+ * BIT 0: Enable/Disable twt requestor in ht/vht mode.
+ * BIT 1: Enable/Disable twt responder in ht/vht mode.
+ * BIT 2-31: Reserved
  *
- * Related: NA
+ * Related: CFG_ENABLE_TWT
+ * Related: CFG_TWT_RESPONDER
+ * Related: CFG_TWT_REQUESTOR
  *
  * Usage: External
  *
  * </ini>
  */
-#define CFG_TWT_ENABLE_IN_11N CFG_INI_BOOL( \
-		"enable_twt_in_11n", \
-		false, \
-		"enable twt support in 11n mode")
+/* defines to extract the requestor/responder capabilities from cfg */
+#define TWT_REQ_HT_VHT_INDEX    0
+#define TWT_REQ_HT_VHT_BITS     1
+#define TWT_RES_HT_VHT_INDEX    1
+#define TWT_RES_HT_VHT_BITS     1
+
+#define CFG_TWT_REQ_RESP_HT_VHT CFG_INI_UINT( \
+		"twt_req_res_ht_vht", \
+		0, \
+		3, \
+		0, \
+		CFG_VALUE_OR_DEFAULT, \
+		"twt req/res capability for ht/vht mode")
+
+#define CFG_GET_TWT_REQ_HT_VHT(_twt_req_res_ht_vht) \
+		QDF_GET_BITS(_twt_req_res_ht_vht, \
+		TWT_REQ_HT_VHT_INDEX, \
+		TWT_REQ_HT_VHT_BITS)
+
+#define CFG_GET_TWT_RES_HT_VHT(_twt_req_res_ht_vht) \
+		QDF_GET_BITS(_twt_req_res_ht_vht, \
+		TWT_RES_HT_VHT_INDEX, \
+		TWT_RES_HT_VHT_BITS)
 
 #define CFG_TWT_ALL \
 	CFG(CFG_ENABLE_TWT) \
@@ -291,9 +349,10 @@
 	CFG(CFG_TWT_CONGESTION_TIMEOUT) \
 	CFG(CFG_BCAST_TWT_REQ_RESP) \
 	CFG(CFG_ENABLE_TWT_24GHZ) \
+	CFG(CFG_DISABLE_TWT_ON_SCAN) \
 	CFG(CFG_DISABLE_TWT_INFO_FRAME) \
-	CFG(CFG_TWT_ENABLE_IN_11N) \
-	CFG(CFG_RTWT_REQ_RESP)
+	CFG(CFG_RTWT_REQ_RESP) \
+	CFG(CFG_TWT_REQ_RESP_HT_VHT)
 #elif !defined(WLAN_SUPPORT_TWT) && !defined(WLAN_TWT_CONV_SUPPORTED)
 #define CFG_TWT_ALL
 #endif

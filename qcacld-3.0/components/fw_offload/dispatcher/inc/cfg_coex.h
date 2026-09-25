@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -68,10 +68,13 @@
 
 /*
  * <ini>
- * gSetMaxTxPowerForBTC - Set Max WLAN Tx power in COEX scenario
+ * gSetMaxTxPowerForBTC - Set Max Tx power in COEX scenario
+ * byte0 - WLAN Max Tx power.
+ * byte1 - BT Max Tx power.
+ * It is 0.5dbm every unit. E.g. 0x64, it means 50dbm.
  * @Min: 0
- * @Max: 100
- * @Default: 100
+ * @Max: 0xffff
+ * @Default: 0x0a0a
  *
  * Usage: External
  *
@@ -80,8 +83,8 @@
 #define CFG_MAX_TX_POWER_FOR_BTC CFG_INI_UINT( \
 			"gSetMaxTxPowerForBTC", \
 			0, \
-			100, \
-			100, \
+			0xffff, \
+			0x0a0a, \
 			CFG_VALUE_OR_DEFAULT, \
 			"Max Tx Power for BTC")
 

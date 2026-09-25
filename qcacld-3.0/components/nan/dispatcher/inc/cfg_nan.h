@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -300,7 +300,7 @@
  * g_nan_enable_eht_cap- enable/disable NAN EHT CAP
  * @Min: 0
  * @Max: 1
- * @Default: 0
+ * @Default: 1
  *
  * This ini is used to enable/disable NAN EHT capability
  *
@@ -313,8 +313,33 @@
  * </ini>
  */
 #define CFG_NAN_ENABLE_EHT_CAP CFG_INI_BOOL("g_nan_enable_eht_cap", \
-					     0, \
+					     1, \
 					     "Enable NAN EHT CAP")
+
+/*
+ * <ini>
+ * g_nan_config - NAN capability configuration bitmap
+ * @Min: 0
+ * @Max: 31
+ * @Default: 1
+ *
+ * Bit 0 - NAN pairing support enabled.
+ * Bit 1 - Bit 31 - reserved.
+ *
+ * Related: None
+ *
+ * Supported Feature: NAN
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_NAN_CONFIG CFG_INI_UINT("g_nan_config", \
+				     0, \
+				     0xFF, \
+				     1, \
+				     CFG_VALUE_OR_DEFAULT, \
+				     "NAN capability configuration bitmap")
 
 
 #ifdef WLAN_FEATURE_NAN
@@ -336,6 +361,7 @@
 			CFG(CFG_NDP_MAX_SESSIONS) \
 			CFG(CFG_NDI_MAX_SUPPORT) \
 			CFG(CFG_NAN_FEATURE_CONFIG) \
-			CFG(CFG_NAN_ENABLE_EHT_CAP)
+			CFG(CFG_NAN_ENABLE_EHT_CAP) \
+			CFG(CFG_NAN_CONFIG)
 
 #endif

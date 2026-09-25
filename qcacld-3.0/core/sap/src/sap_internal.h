@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -334,14 +334,16 @@ void sap_chan_sel_exit(struct sap_sel_ch_info *ch_info_params);
  * @ch_info: Pointer to sap_sel_ch_info structure
  * @domain: Regulatory Domain
  * @operating_band: Operating band
+ * @only_2g_freq: only 2 GHz
  *
- * Return: None
+ * Return: QDF_STATUS
  *
  */
-void
+QDF_STATUS
 sap_sort_channel_list(struct mac_context *mac_ctx, uint8_t vdev_id,
 		      qdf_list_t *ch_list, struct sap_sel_ch_info *ch_info,
-		      v_REGDOMAIN_t *domain, uint32_t *operating_band);
+		      v_REGDOMAIN_t *domain, uint32_t *operating_band,
+		      bool only_2g_freq);
 
 /**
  * sap_select_channel() - select SAP channel
@@ -401,6 +403,15 @@ void sap_dfs_cac_timer_callback(void *data);
  */
 void sap_cac_reset_notify(mac_handle_t mac_handle);
 
+/**
+ * sap_cac_reset_current_notify() - Current BSS cleanup notification handler
+ * @sap_ctx: SAP context
+ *
+ * This function should be called upon stop bss or channel switch to
+ * clean up DFS global structure of current SAP
+ */
+void sap_cac_reset_current_notify(struct sap_context *sap_ctx);
+
 bool is_concurrent_sap_ready_for_channel_change(mac_handle_t mac_handle,
 						struct sap_context *sap_ctx);
 
@@ -446,7 +457,7 @@ sap_validate_chan(struct sap_context *sap_context,
  * which MDM device's AP with MCC was detected. This function checks if given
  * channel is present in that list.
  *
- * Return: true, if channel was present, false othersie.
+ * Return: true, if channel was present, false otherwise.
  */
 bool
 sap_check_in_avoid_ch_list(struct sap_context *sap_ctx, uint8_t channel);
@@ -502,7 +513,7 @@ static inline qdf_freq_t sap_indicate_radar(struct sap_context *sap_ctx)
 /**
  * sap_select_default_oper_chan() - Select AP mode default operating channel
  * @mac_ctx: mac context
- * @acs_cfg: pointer to ACS config info
+ * @sap_ctx: pointer to SAP context
  *
  * Select AP mode default operating channel based on ACS hw mode and channel
  * range configuration when ACS scan fails due to some reasons, such as scan
@@ -511,7 +522,7 @@ static inline qdf_freq_t sap_indicate_radar(struct sap_context *sap_ctx)
  * Return: Selected operating channel frequency
  */
 uint32_t sap_select_default_oper_chan(struct mac_context *mac_ctx,
-				      struct sap_acs_cfg *acs_cfg);
+				      struct sap_context *sap_ctx);
 
 /*
  * sap_is_dfs_cac_wait_state() - check if sap is in cac wait state
@@ -559,4 +570,47 @@ bool sap_plus_sap_cac_skip(struct mac_context *mac,
 void
 sap_build_start_bss_config(struct start_bss_config *sap_bss_cfg,
 			   struct sap_config *config);
+
+/**
+ * sap_is_ch_non_overlap() - returns true if non-overlapping channel
+ * @sap_ctx: Sap context
+ * @ch: channel number
+ *
+ * Returns: true if non-overlapping (1, 6, 11) channel, false otherwise
+ */
+bool sap_is_ch_non_overlap(struct sap_context *sap_ctx, uint16_t ch);
+
+/**
+ * sap_get_bw_score_multiplier() - get bw score multiplier
+ * @ch_width: channel width
+ *
+ * Return: multiplier
+ */
+uint8_t sap_get_bw_score_multiplier(enum phy_ch_width ch_width);
+
+#ifdef QCA_DFS_BW_PUNCTURE
+/**
+ * sap_is_chan_change_needed_for_radar() - Check if SAP channel change needed
+ * when radar found.
+ * @sap_ctx: sap context.
+ * @freq: pointer to freq
+ *
+ * Even some 20 MHz sub channel disabled for nol, if puncture pattern is valid,
+ * SAP still can keep current channel width and primary channel, don't need
+ * change channel, but need send CSA to update puncture bitmap.
+ * if radar found on punctured sub channel, then do nothing, no CSA needed.
+ *
+ * Return: bool, true: channel change needed
+ */
+bool
+sap_is_chan_change_needed_for_radar(struct sap_context *sap_ctx,
+				    qdf_freq_t *freq);
+#else
+static inline bool
+sap_is_chan_change_needed_for_radar(struct sap_context *sap_ctx,
+				    qdf_freq_t *freq)
+{
+	return true;
+}
+#endif
 #endif

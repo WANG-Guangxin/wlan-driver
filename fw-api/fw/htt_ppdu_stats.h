@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2026 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -424,7 +424,16 @@ enum HTT_STATS_FTYPE {
     HTT_STATS_FTYPE_SGEN_BE_MU_BRP,
     HTT_STATS_FTYPE_SGEN_BE_MU_RTS,
     HTT_STATS_FTYPE_SGEN_BE_MU_BSRP,
-    HTT_STATS_FTYPE_MAX,
+    HTT_STATS_FTYPE_SGEN_BN_NDPA,
+    HTT_STATS_FTYPE_SGEN_BN_NDP,
+    HTT_STATS_FTYPE_SGEN_BN_MU_TRIG,
+    HTT_STATS_FTYPE_SGEN_BN_MU_BAR,
+    HTT_STATS_FTYPE_SGEN_BN_MU_BRP,
+    HTT_STATS_FTYPE_SGEN_BN_MU_RTS,
+    HTT_STATS_FTYPE_SGEN_BN_MU_BSRP,
+    HTT_STATS_FTYPE_SGEN_BN_MU_BSRP_NTB,
+
+    HTT_STATS_FTYPE_MAX
 };
 typedef enum HTT_STATS_FTYPE HTT_STATS_FTYPE;
 
@@ -501,6 +510,11 @@ enum HTT_PPDU_STATS_SEQ_TYPE {
     HTT_SEQTYPE_BE_UL_MU_OFDMA_TRIG = 13,
     HTT_SEQTYPE_BE_UL_MU_MIMO_TRIG  = 14,
     HTT_SEQTYPE_BE_UL_BSR_TRIG      = 15,
+    HTT_SEQTYPE_BN_MU_MIMO          = 16,
+    HTT_SEQTYPE_BN_MU_OFDMA         = 17,
+    HTT_SEQTYPE_BN_UL_MU_OFDMA_TRIG = 18,
+    HTT_SEQTYPE_BN_UL_MU_MIMO_TRIG  = 19,
+    HTT_SEQTYPE_BN_UL_BSR_TRIG      = 20,
 };
 typedef enum HTT_PPDU_STATS_SEQ_TYPE HTT_PPDU_STATS_SEQ_TYPE;
 
@@ -962,7 +976,16 @@ typedef struct {
      * BIT [3 : 3] - is_combined_ul_bsrp_trigger - Flag to indicate if a
      *               given UL BSRP trigger is sent combined as part of
      *               an existing DL/UL data sequence
-     * BIT [31: 4] - reserved
+     * BIT [4 : 4] - is_sta_dps_seq - Flag to indicate if a TX is to a STA with
+     *               active Dynamic Power Save state (DPS)
+     * BIT [5 : 5] - is_allow_comb_sched_cmd - Flag to indicate if a given TX
+     *               is part of a allowed combined sched_cmd sequence
+     * BIT [6 : 6] - is_abort_comb_sched_cmd - Flag to indicate if a given TX
+     *               is part of a aborted combined sched_cmd sequence
+     * BIT [7 : 7] - is_comb_sched_cmd_pending - Flag to indicate if a the
+     *               first sched_cmd of a combined sched_cmd sequence is
+     *               pending in the current ring.
+     * BIT [31: 8] - reserved
      */
     union {
         A_UINT32 reserved__htt_seq_type;
@@ -971,11 +994,31 @@ typedef struct {
                      is_combined_ul_basic_trigger: 1,
                      is_manual_ulofdma_trigger: 1,
                      is_combined_ul_bsrp_trigger: 1,
-                     reserved3:     28;
+                     is_sta_dps_seq: 1,
+                     is_allow_comb_sched_cmd: 1,
+                     is_abort_comb_sched_cmd: 1,
+                     is_comb_sched_cmd_pending: 1,
+                     is_sched_cmd_combined: 1,
+                     reserved3:     23;
         };
     };
     /* Flag to indicate if the channel chosen is 320_1 / 320_2 */
     A_UINT32 chan_type_320mhz;
+
+    /*
+     * BIT [15 :  0] - obss_dur_us reports the remaining OBSS dur when
+     *                 this FES started OTA.
+     * BIT [16 : 16] - oprim indicates M/O primary FES.
+     * BIT [31 : 17] - reserved
+     */
+    union {
+        A_UINT32 reserved__oprim__obss_dur;
+        struct {
+            A_UINT32 obss_dur_us: 16,
+                     oprim:        1,
+                     reserved4:   15;
+        };
+    };
 } htt_ppdu_stats_common_tlv;
 
 #define HTT_PPDU_STATS_USER_COMMON_TLV_TID_NUM_M     0x000000ff
@@ -1371,6 +1414,15 @@ typedef struct {
      * correspond to the default UDP msduq.
      */
     A_UINT32 msduq_bitmap;
+
+    /* Aggregate MSDUQ counts for the last monitor cycle for this TID.
+     * enqueue_count: total MSDUs enqueued across all MSDUQs for this TID
+     * dequeue_count: total MSDUs successfully sent
+     * drop_count   : total MSDUs dropped
+     */
+    A_UINT32 enqueue_count;
+    A_UINT32 dequeue_count;
+    A_UINT32 drop_count;
 } htt_ppdu_stats_user_common_tlv;
 
 #define HTT_PPDU_STATS_USER_RATE_TLV_TID_NUM_M     0x000000ff
@@ -1953,6 +2005,19 @@ typedef enum HTT_PPDU_STATS_RESP_PPDU_TYPE HTT_PPDU_STATS_RESP_PPDU_TYPE;
         ((_var) |= ((_val) << HTT_PPDU_STATS_USER_RATE_TLV_2xLDPC_S)); \
     } while (0)
 
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_M  0x00080000
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S          19
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_GET(_var) \
+    (((_var) & HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_M) >> \
+    HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S)
+
+#define HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_SET (_var , _val) \
+    do { \
+        HTT_CHECK_SET_VAL(HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED, _val); \
+        ((_var) |= ((_val) << HTT_PPDU_STATS_USER_RATE_TLV_IS_NPCA_ENABLED_S)); \
+    } while (0)
+
 typedef enum HTT_PPDU_STATS_RU_SIZE {
     HTT_PPDU_STATS_RU_26,
     HTT_PPDU_STATS_RU_52,
@@ -1971,6 +2036,14 @@ typedef enum HTT_PPDU_STATS_RU_SIZE {
     HTT_PPDU_STATS_RU_996x3_484,
     HTT_PPDU_STATS_RU_996x4,
 } HTT_PPDU_STATS_RU_SIZE;
+
+typedef enum HTT_PPDU_STATS_DRU_SIZE {
+    HTT_PPDU_STATS_DRU_26,
+    HTT_PPDU_STATS_DRU_52,
+    HTT_PPDU_STATS_DRU_106,
+    HTT_PPDU_STATS_DRU_242,
+    HTT_PPDU_STATS_DRU_484,
+} HTT_PPDU_STATS_DRU_SIZE;
 
 typedef struct {
     htt_tlv_hdr_t tlv_hdr;
@@ -2009,6 +2082,7 @@ typedef struct {
      * Discriminant is field ru_format:
      *     - ru_format = 0: ru_end, ru_start
      *     - ru_format = 1: ru_index, ru_size
+     *     - ru_format = 2: dru_index, dru_size, dru_sbw, dru_sbw_idx
      *     - ru_format = other: reserved for future expansion
      *
      * ru_start and ru_end are RU 26 indices
@@ -2041,10 +2115,15 @@ typedef struct {
      *
      * resp_ru_size is an HTT_PPDU_STATS_RU_SIZE, resp_ru_index
      * is a size specific index for the given ru_size.
+     *
+     * 'is_dru' field indicates if the current RU allocation
+     * is a distributed RU allocation or not.
+     * 'dru_sbw' is the spreading BW size of current dru_size.
      */
     union {
         A_UINT32 resp_ru_start__ru_end;
         A_UINT32 resp_ru_size__ru_index;
+        A_UINT32 dru_size__dru_index__dru_sbw_idx__dru_sbw__is_dru;
         struct {
             A_UINT32 resp_ru_end:   16,
                      resp_ru_start: 16;
@@ -2052,6 +2131,14 @@ typedef struct {
         struct {
             A_UINT32 resp_ru_index: 16,
                      resp_ru_size:  16;
+        };
+        struct {
+            A_UINT32 is_dru:         1,
+                     dru_sbw:        3,
+                     dru_sbw_idx:    2,
+                     dru_index:     16,
+                     dru_size:       4,
+                     reserved5:       6;
         };
     };
 
@@ -2075,6 +2162,9 @@ typedef struct {
      * BIT [ 11:   8 ]   :- bw
      * BIT [ 15:   12]   :- nss  NSS 1,2, ...8
      * BIT [ 19:   16]   :- mcs
+     *                      NOTE: This 4-bit field is extended (on the MSb side)
+     *                      by the below 1-bit mcs_ext field, resulting in a
+     *                      5-bit MCS value, stored in a segmented manner.
      * BIT [ 23:   20]   :- preamble
      * BIT [ 27:   24]   :- gi - HTT_PPDU_STATS_GI
      * BIT [ 28:   28]   :- dcm
@@ -2104,18 +2194,20 @@ typedef struct {
     };
 
     /* Note: resp_rate_info is only valid for if resp_type is UL
-     * BIT [ 1 :   0 ]   :- ltf_size
-     * BIT [ 2 :   2 ]   :- stbc
-     * BIT [ 3 :   3 ]   :- he_re (range extension)
-     * BIT [ 7 :   4 ]   :- reserved3
-     * BIT [ 11:   8 ]   :- bw
-     * BIT [ 15:   12]   :- nss  NSS 1,2, ...8
-     * BIT [ 19:   16]   :- mcs
-     * BIT [ 23:   20]   :- preamble
-     * BIT [ 27:   24]   :- gi
-     * BIT [ 28:   28]   :- dcm
-     * BIT [ 29:   29]   :- ldpc
-     * BIT [ 31:   30]   :- resp_ppdu_type - HTT_PPDU_STATS_RESP_PPDU_TYPE
+     * BIT [ 1 :0 ] :- ltf_size
+     * BIT [ 2 :2 ] :- stbc
+     * BIT [ 3 :3 ] :- he_re (range extension)
+     * BIT [ 4 :4 ] :- resp_2xldpc
+     *                 (UL TB PPDU used 2xLDPC, valid for 11BN/UHR only)
+     * BIT [ 7 :5 ] :- reserved3
+     * BIT [ 11:8 ] :- bw
+     * BIT [ 15:12] :- nss  NSS 1,2, ...8
+     * BIT [ 19:16] :- mcs
+     * BIT [ 23:20] :- preamble
+     * BIT [ 27:24] :- gi
+     * BIT [ 28:28] :- dcm
+     * BIT [ 29:29] :- ldpc
+     * BIT [ 31:30] :- resp_ppdu_type - HTT_PPDU_STATS_RESP_PPDU_TYPE
      */
     union {
         A_UINT32 resp_rate_info;
@@ -2123,7 +2215,8 @@ typedef struct {
             A_UINT32 resp_ltf_size:           2,
                      resp_stbc:               1,
                      resp_he_re:              1,
-                     reserved3:               4,
+                     resp_2xldpc:             1,
+                     reserved3:               3,
                      resp_bw:                 4,
                      resp_nss:                4,
                      resp_mcs:                4,
@@ -2142,12 +2235,17 @@ typedef struct {
      *                for current PPDU
      * BIT 17      :- flag to show is_min_rate
      * BIT 18      :- flag showing whether PPDU is transmitted with 2xLDPC
+     * BIT 19      :- flag showing whether PPDU is transmitted with NPCA enabled
+     * BIT 20      :- mcs_ext: 5th bit (MSb) of MCS, extends the above 4-bit
+     *                mcs field to create a 5-bit MCS value
      */
     A_UINT32 punc_pattern_bitmap: 16,
-             extra_eht_ltf:       1,
-             is_min_rate:         1,
-             is_2xldpc:           1,
-             reserved4:           13;
+             extra_eht_ltf:        1,
+             is_min_rate:          1,
+             is_2xldpc:            1,
+             is_npca_enabled:      1,
+             mcs_ext:              1,
+             reserved4:           11;
 } htt_ppdu_stats_user_rate_tlv;
 
 #define HTT_PPDU_STATS_USR_RATE_VALID_M     0x80000000
@@ -2553,8 +2651,9 @@ typedef struct {
         /* older names */
         A_UINT32 resp_type_is_ampdu__short_retry__long_retry;
         A_UINT32 resp_type__is_ampdu__short_retry__long_retry__mprot_type__rts_success__rts_failure;
-        /* newest name */
         A_UINT32 resp_type__is_ampdu__short_retry__long_retry__mprot_type__rts_success__rts_failure__pream_punc_tx;
+        /* newest name */
+        A_UINT32 resp_type__is_ampdu__short_retry__long_retry__mprot_type__rts_success__rts_failure__pream_punc_tx__num_start_prot_tlvs;
         struct { /* bitfield names */
             A_UINT32 long_retries:               4,
                      short_retries:              4,
@@ -2564,7 +2663,9 @@ typedef struct {
                      rts_success:                1,
                      rts_failure:                1,
                      pream_punc_tx:              1,
-                     reserved0:                 13;
+                     /* per-FES START_PROT TLV count (0-3) */
+                     num_start_prot_tlvs:        3,
+                     reserved0:                 10;
         };
     };
 
@@ -2610,7 +2711,9 @@ typedef struct {
              sw_rts_success:    1,
              sw_rts_failure:    1,
              cts_rcvd_diff_bw:  1,
-             reserved2:        28;
+             urrn_warning_type: 1,
+             mpdu_underrun_cnt: 16,
+             reserved2:        11;
 
     /*
      * Max rates configured per BW:
@@ -2622,6 +2725,10 @@ typedef struct {
      * hw protection frame's FES duration in micro seconds.
      */
     A_UINT32 hw_prot_dur_us;
+
+    A_UINT32 num_eof_delim;
+
+    A_UINT32 num_null_delim;
 } htt_ppdu_stats_user_cmpltn_common_tlv;
 
 #define HTT_PPDU_STATS_USER_CMPLTN_BA_BITMAP_TLV_TID_NUM_M     0x000000ff

@@ -35,7 +35,7 @@
 #include "wlan_tdls_ucfg_api.h"
 #include "wlan_cm_roam_api.h"
 #include "wlan_cfg80211_tdls.h"
-#include "wlan_nan_api_i.h"
+#include "wlan_nan_api.h"
 #include "wlan_mlme_vdev_mgr_interface.h"
 
 /* Global tdls soc pvt object
@@ -74,6 +74,7 @@ static char *tdls_get_cmd_type_str(enum tdls_command_type cmd_type)
 	CASE_RETURN_STRING(TDLS_CMD_SESSION_DECREMENT);
 	CASE_RETURN_STRING(TDLS_CMD_TEARDOWN_LINKS);
 	CASE_RETURN_STRING(TDLS_NOTIFY_RESET_ADAPTERS);
+	CASE_RETURN_STRING(TDLS_CMD_GET_ALL_PEERS);
 	CASE_RETURN_STRING(TDLS_CMD_ANTENNA_SWITCH);
 	CASE_RETURN_STRING(TDLS_CMD_SET_OFFCHANMODE);
 	CASE_RETURN_STRING(TDLS_CMD_SET_OFFCHANNEL);
@@ -210,6 +211,8 @@ static QDF_STATUS tdls_vdev_init(struct tdls_vdev_priv_obj *vdev_obj)
 	qdf_mc_timer_init(&vdev_obj->peer_discovery_timer, QDF_TIMER_TYPE_SW,
 			  tdls_discovery_timeout_peer_cb, vdev_obj->vdev);
 
+	vdev_obj->rx_mgmt = NULL;
+
 	return QDF_STATUS_SUCCESS;
 }
 
@@ -220,6 +223,9 @@ static void tdls_vdev_deinit(struct tdls_vdev_priv_obj *vdev_obj)
 
 	qdf_mc_timer_destroy(&vdev_obj->peer_update_timer);
 	qdf_mc_timer_destroy(&vdev_obj->peer_discovery_timer);
+
+	qdf_mem_free(vdev_obj->rx_mgmt);
+	vdev_obj->rx_mgmt = NULL;
 
 	tdls_peer_idle_timers_destroy(vdev_obj);
 	tdls_free_peer_list(vdev_obj);
@@ -248,7 +254,7 @@ QDF_STATUS tdls_vdev_obj_create_notification(struct wlan_objmgr_vdev *vdev,
 	tdls_feature_flags = tdls_soc_obj->tdls_configs.tdls_feature_flags;
 	if (!TDLS_IS_ENABLED(tdls_feature_flags)) {
 		tdls_debug("disabled in ini");
-		return QDF_STATUS_E_NOSUPPORT;
+		return QDF_STATUS_SUCCESS;
 	}
 
 	if (tdls_soc_obj->tdls_osif_init_cb) {
@@ -337,7 +343,7 @@ QDF_STATUS tdls_vdev_obj_destroy_notification(struct wlan_objmgr_vdev *vdev,
 	tdls_feature_flags = tdls_soc_obj->tdls_configs.tdls_feature_flags;
 	if (!TDLS_IS_ENABLED(tdls_feature_flags)) {
 		tdls_debug("disabled in ini");
-		return QDF_STATUS_E_NOSUPPORT;
+		return QDF_STATUS_SUCCESS;
 	}
 
 	tdls_vdev_obj = wlan_objmgr_vdev_get_comp_private_obj(vdev,
@@ -352,6 +358,11 @@ QDF_STATUS tdls_vdev_obj_destroy_notification(struct wlan_objmgr_vdev *vdev,
 		    qdf_mc_timer_get_current_state(
 					&tdls_vdev_obj->peer_discovery_timer))
 			qdf_mc_timer_stop(&tdls_vdev_obj->peer_discovery_timer);
+
+		if (tdls_vdev_obj->rx_mgmt) {
+			qdf_mem_free(tdls_vdev_obj->rx_mgmt);
+			tdls_vdev_obj->rx_mgmt = NULL;
+		}
 	}
 
 	qdf_event_destroy(&tdls_vdev_obj->tdls_teardown_comp);
@@ -478,7 +489,7 @@ static void tdls_get_all_peers_from_list(
  * @vdev: vdev object
  *
  * This function is called to reset all tdls peers and
- * notify upper layers of teardown inidcation
+ * notify upper layers of teardown indication
  *
  * Return: QDF_STATUS
  */
@@ -549,7 +560,7 @@ static QDF_STATUS tdls_process_reset_all_peers(struct wlan_objmgr_vdev *vdev)
  * @delete_all_peers_ind: Delete all peers indication
  *
  * This function is called to reset all tdls peers and
- * notify upper layers of teardown inidcation
+ * notify upper layers of teardown indication
  *
  * Return: QDF_STATUS
  */
@@ -876,11 +887,13 @@ uint32_t tdls_get_6g_pwr_for_power_type(struct wlan_objmgr_vdev *vdev,
 	num_chan = wlan_reg_get_band_channel_list_for_pwrmode(pdev,
 							      band_mask,
 							      chan,
-							      REG_CLI_DEF_VLP);
+							      pwr_typ,
+							      false);
 
 	for (chn_idx = 0; chn_idx < num_chan; chn_idx++) {
 		if (chan[chn_idx].center_freq == freq) {
-			tdls_debug("VLP power for channel %d is %d",
+			tdls_debug("power for power type %d channel %d is %d",
+				   pwr_typ,
 				   chan[chn_idx].center_freq,
 				   chan[chn_idx].tx_power);
 			tx_power = chan[chn_idx].tx_power;
@@ -929,6 +942,191 @@ uint32_t tdls_get_6g_pwr_for_power_type(struct wlan_objmgr_vdev *vdev,
 }
 #endif
 
+#ifdef WLAN_FEATURE_11BE
+/**
+ * tdls_check_support_upto_11be() - Check TDLS enable support if upto 11be
+ * If configured upto 11be, check current phy mode is big than EHT320 or not
+ * @tdls_support_enable: vdev object
+ * @bss_chan: pointer to bss channel
+ *
+ * Return: true if tdls support
+ */
+static bool
+tdls_check_support_upto_11be(uint8_t tdls_support_enable,
+			     struct wlan_channel *bss_chan)
+{
+	if (TDLS_IS_ENABLE_UPTO_11BE(tdls_support_enable) &&
+	    bss_chan && (bss_chan->ch_phymode > WLAN_PHYMODE_11BEA_EHT320))
+		return false;
+	else
+		return true;
+}
+#else
+static bool
+tdls_check_support_upto_11be(uint8_t tdls_support_enable,
+			     struct wlan_channel *bss_chan)
+{
+	return true;
+}
+#endif
+
+#ifdef WLAN_FEATURE_11BE_MLO
+struct wlan_objmgr_vdev *wlan_tdls_get_mlo_vdev(struct wlan_objmgr_vdev *vdev,
+						uint8_t index,
+						wlan_objmgr_ref_dbgid dbg_id)
+{
+	struct wlan_mlo_dev_context *mlo_dev_ctx;
+	struct wlan_objmgr_vdev *mlo_vdev;
+
+	if (!vdev)
+		return NULL;
+
+	mlo_dev_ctx = vdev->mlo_dev_ctx;
+	if (!mlo_dev_ctx)
+		return NULL;
+
+	mlo_vdev = mlo_dev_ctx->wlan_vdev_list[index];
+	if (mlo_vdev &&
+	    wlan_objmgr_vdev_try_get_ref(mlo_vdev, dbg_id) ==
+							QDF_STATUS_SUCCESS)
+		return mlo_vdev;
+
+	return NULL;
+}
+
+void wlan_tdls_release_mlo_vdev(struct wlan_objmgr_vdev *vdev,
+				wlan_objmgr_ref_dbgid dbg_id)
+{
+	if (!vdev)
+		return;
+
+	wlan_objmgr_vdev_release_ref(vdev, dbg_id);
+}
+
+/**
+ * tdls_is_6g_freq_allowed_in_ml_vdev() - Check whether 6g freq is
+ * present or not in ml vdev. If it is present, check whether it is
+ * allowed or not
+ * @vdev: pointer to vdev
+ *
+ * Return: True/False
+ */
+static bool tdls_is_6g_freq_allowed_in_ml_vdev(struct wlan_objmgr_vdev *vdev)
+{
+	struct wlan_mlo_dev_context *ml_dev_ctx;
+	struct wlan_objmgr_vdev *vdev_iter;
+	struct wlan_objmgr_pdev *pdev;
+	QDF_STATUS status;
+	qdf_freq_t ch_freq;
+	uint8_t i, vdev_id;
+
+	pdev = wlan_vdev_get_pdev(vdev);
+	if (!pdev)
+		return false;
+
+	ml_dev_ctx = vdev->mlo_dev_ctx;
+	if (!ml_dev_ctx)
+		return false;
+
+	for (i =  0; i < WLAN_UMAC_MLO_MAX_VDEVS; i++) {
+		if (!ml_dev_ctx->wlan_vdev_list[i])
+			continue;
+
+		vdev_iter = ml_dev_ctx->wlan_vdev_list[i];
+		status = wlan_objmgr_vdev_try_get_ref(vdev_iter,
+						      WLAN_TDLS_NB_ID);
+		if (QDF_IS_STATUS_ERROR(status))
+			continue;
+
+		ch_freq = wlan_get_operation_chan_freq(vdev_iter);
+		vdev_id =  wlan_vdev_get_id(vdev_iter);
+		wlan_objmgr_vdev_release_ref(vdev_iter, WLAN_TDLS_NB_ID);
+		if (wlan_reg_is_6ghz_chan_freq(ch_freq) &&
+		    !tdls_is_6g_freq_allowed(pdev, ch_freq)) {
+			tdls_err("vdev:%d 6g freq:%d not allowed for tdls",
+				 vdev_id, ch_freq);
+			return false;
+		}
+	}
+	return true;
+}
+
+#else
+struct wlan_objmgr_vdev *wlan_tdls_get_mlo_vdev(struct wlan_objmgr_vdev *vdev,
+						uint8_t index,
+						wlan_objmgr_ref_dbgid dbg_id)
+{
+	return NULL;
+}
+
+void wlan_tdls_release_mlo_vdev(struct wlan_objmgr_vdev *vdev,
+				wlan_objmgr_ref_dbgid dbg_id)
+{
+}
+
+static bool tdls_is_6g_freq_allowed_in_ml_vdev(struct wlan_objmgr_vdev *vdev)
+{
+	return false;
+}
+#endif
+
+/**
+ * tdls_check_6g_freq_allowed() - tdls check whether 6G freq allowed
+ * or not.
+ * @pdev: pointer to pdev
+ * @vdev: pointer to vdev
+ * @ch_freq: channel frequency
+ *
+ * Return: True/False
+ */
+static bool tdls_check_6g_freq_allowed(struct wlan_objmgr_pdev *pdev,
+				       struct wlan_objmgr_vdev *vdev,
+				       qdf_freq_t ch_freq)
+{
+	if (!wlan_vdev_mlme_is_mlo_vdev(vdev)) {
+		if (wlan_reg_is_6ghz_chan_freq(ch_freq) &&
+		    !tdls_is_6g_freq_allowed(pdev, ch_freq)) {
+			tdls_debug("6GHz freq:%d not allowed for TDLS",
+				   ch_freq);
+			return false;
+		}
+	} else {
+		if (!tdls_is_6g_freq_allowed_in_ml_vdev(vdev))
+			return false;
+	}
+
+	return true;
+}
+
+/**
+ * tdls_check_support_bit() - Check TDLS enable support bits
+ * @vdev: vdev object
+ * @tdls_soc_obj: tdls psoc object
+ *
+ * Return: true if support enabled
+ */
+static bool
+tdls_check_support_bit(struct wlan_objmgr_vdev *vdev,
+		       struct tdls_soc_priv_obj *tdls_soc_obj)
+{
+	struct wlan_channel *bss_chan;
+	uint8_t support_enable;
+
+	support_enable = tdls_soc_obj->tdls_configs.tdls_support_enable;
+	if (TDLS_IS_ENABLE_FULL(support_enable))
+		return true;
+
+	bss_chan = wlan_vdev_mlme_get_bss_chan(vdev);
+	if (TDLS_IS_ENABLE_UPTO_11AX(support_enable) &&
+	    bss_chan && (bss_chan->ch_phymode > WLAN_PHYMODE_11AXA_HE80_80))
+		return false;
+
+	if (!tdls_check_support_upto_11be(support_enable, bss_chan))
+		return false;
+
+	return true;
+}
+
 bool tdls_check_is_user_tdls_enable(struct tdls_soc_priv_obj *tdls_soc_obj)
 {
 	return tdls_soc_obj->is_user_tdls_enable;
@@ -955,6 +1153,12 @@ bool tdls_check_is_tdls_allowed(struct wlan_objmgr_vdev *vdev)
 	status = tdls_get_vdev_objects(vdev, &tdls_vdev_obj, &tdls_soc_obj);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		tdls_err("Failed to get TDLS objects");
+		goto exit;
+	}
+
+	if (!tdls_check_support_bit(vdev, tdls_soc_obj)) {
+		tdls_debug("tdls not enabled %d",
+			   tdls_soc_obj->tdls_configs.tdls_support_enable);
 		goto exit;
 	}
 
@@ -1002,10 +1206,9 @@ bool tdls_check_is_tdls_allowed(struct wlan_objmgr_vdev *vdev)
 	}
 
 	ch_freq = wlan_get_operation_chan_freq(vdev);
-	if (wlan_reg_is_6ghz_chan_freq(ch_freq) &&
-	    !tdls_is_6g_freq_allowed(pdev, ch_freq)) {
-		tdls_debug("6GHz freq:%d not allowed for TDLS", ch_freq);
+	if (!tdls_check_6g_freq_allowed(pdev, vdev, ch_freq)) {
 		state = false;
+		goto exit;
 	}
 
 exit:
@@ -1032,8 +1235,9 @@ bool tdls_is_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 	    WLAN_TDLS_MAX_CONCURRENT_VDEV_SUPPORTED)
 		return false;
 
-	if (policy_mgr_mode_specific_connection_count(psoc, PM_STA_MODE,
-						      NULL) > 1) {
+	/* TDLS should be disabled for STA + STA concurrency */
+	if (policy_mgr_mode_specific_connection_count_with_mlo(
+						psoc, PM_STA_MODE) > 1) {
 		tdls_debug("More than one STA exist. Don't allow TDLS");
 		return false;
 	}
@@ -1050,6 +1254,40 @@ bool tdls_is_concurrency_allowed(struct wlan_objmgr_psoc *psoc)
 	    !policy_mgr_mode_specific_connection_count(psoc, PM_STA_MODE,
 						       NULL))
 		return false;
+
+	/* Disable the TDLS in case XPAN is present */
+	if (policy_mgr_get_ll_lt_sap_freq(psoc)) {
+		tdls_debug("XPAN is present, Don't allow TDLS");
+		return false;
+	}
+
+	return true;
+}
+
+bool tdls_check_if_offchannel_allowed(struct wlan_objmgr_vdev *vdev)
+{
+	struct wlan_objmgr_psoc *psoc = wlan_vdev_get_psoc(vdev);
+	uint32_t mac_id = wlan_mlme_get_vdev_mac_id(vdev);
+
+	if (policy_mgr_mode_specific_connection_count(psoc, PM_PASSTHRU_MODE,
+						      NULL)) {
+		tdls_debug("TDLS offchannel disallowed: wondertap concurrency");
+		return false;
+	}
+
+	if (policy_mgr_is_hw_dbs_capable(psoc))
+		return true;
+
+	if (mac_id > MAX_MAC)
+		return false;
+
+	/* NON-DBS + SCC */
+	if (policy_mgr_get_conc_vdev_on_same_mac(psoc, wlan_vdev_get_id(vdev),
+						 mac_id) !=
+						WLAN_INVALID_VDEV_ID) {
+		tdls_debug("TDLS offchannel is not allowed due to concurrency");
+		return false;
+	}
 
 	return true;
 }
@@ -1075,6 +1313,9 @@ void tdls_set_ct_mode(struct wlan_objmgr_psoc *psoc,
 	}
 
 	qdf_atomic_set(&tdls_soc_obj->timer_cnt, 0);
+	qdf_mem_free(tdls_vdev_obj->rx_mgmt);
+	tdls_vdev_obj->rx_mgmt = NULL;
+
 	tdls_feature_flags = tdls_soc_obj->tdls_configs.tdls_feature_flags;
 	if (TDLS_SUPPORT_DISABLED == tdls_soc_obj->tdls_current_mode ||
 	    TDLS_SUPPORT_SUSPENDED == tdls_soc_obj->tdls_current_mode ||
@@ -1172,6 +1413,9 @@ tdls_process_policy_mgr_notification(struct wlan_objmgr_psoc *psoc)
 		return QDF_STATUS_E_NULL_VALUE;
 	}
 
+	tdls_debug("vdev:%d enter", wlan_vdev_get_id(tdls_vdev));
+
+	/* Check if TDLS is allowed */
 	if (!tdls_check_is_tdls_allowed(tdls_vdev)) {
 		tdls_debug("Disable the tdls in FW due to concurrency");
 		if (wlan_vdev_mlme_is_mlo_vdev(tdls_vdev))
@@ -1184,9 +1428,14 @@ tdls_process_policy_mgr_notification(struct wlan_objmgr_psoc *psoc)
 		return QDF_STATUS_E_NULL_VALUE;
 	}
 
-	tdls_debug("vdev:%d enter", wlan_vdev_get_id(tdls_vdev));
+	/* If TDLS is allowed, check if off-channel is allowed */
+	if (tdls_check_if_offchannel_allowed(tdls_vdev))
+		tdls_set_tdls_offchannelmode(tdls_vdev, ENABLE_CHANSWITCH);
+	else if (tdls_priv_soc->tdls_fw_off_chan_mode !=
+		   DISABLE_ACTIVE_CHANSWITCH)
+		tdls_set_tdls_offchannelmode(tdls_vdev,
+					     DISABLE_ACTIVE_CHANSWITCH);
 
-	tdls_set_tdls_offchannelmode(tdls_vdev, ENABLE_CHANSWITCH);
 	tdls_set_ct_mode(psoc, tdls_vdev);
 
 	wlan_objmgr_vdev_release_ref(tdls_vdev, WLAN_TDLS_NB_ID);
@@ -1199,6 +1448,9 @@ QDF_STATUS
 tdls_process_decrement_active_session(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_objmgr_vdev *tdls_obj_vdev;
+	struct tdls_vdev_priv_obj *tdls_priv_vdev;
+	struct tdls_soc_priv_obj *tdls_priv_soc;
+	QDF_STATUS status;
 
 	tdls_debug("Enter");
 	if (!psoc)
@@ -1215,6 +1467,14 @@ tdls_process_decrement_active_session(struct wlan_objmgr_psoc *psoc)
 	if (!tdls_obj_vdev)
 		return QDF_STATUS_E_FAILURE;
 
+	status = tdls_get_vdev_objects(tdls_obj_vdev, &tdls_priv_vdev,
+				       &tdls_priv_soc);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		tdls_debug("TDLS vdev objects NULL");
+		wlan_objmgr_vdev_release_ref(tdls_obj_vdev, WLAN_TDLS_NB_ID);
+		return QDF_STATUS_E_FAILURE;
+	}
+
 	if (!tdls_check_is_tdls_allowed(tdls_obj_vdev))
 		goto release_ref;
 
@@ -1230,57 +1490,16 @@ tdls_process_decrement_active_session(struct wlan_objmgr_psoc *psoc)
 	else
 		tdls_process_enable_for_vdev(tdls_obj_vdev);
 
+	if (tdls_priv_soc->tdls_fw_off_chan_mode != ENABLE_CHANSWITCH &&
+	    tdls_priv_soc->connected_peer_count == 1)
+		tdls_set_tdls_offchannelmode(tdls_obj_vdev,  ENABLE_CHANSWITCH);
+
 release_ref:
 	wlan_objmgr_vdev_release_ref(tdls_obj_vdev, WLAN_TDLS_NB_ID);
 
 	return QDF_STATUS_SUCCESS;
 }
 
-#ifdef WLAN_FEATURE_11BE_MLO
-struct wlan_objmgr_vdev *wlan_tdls_get_mlo_vdev(struct wlan_objmgr_vdev *vdev,
-						uint8_t index,
-						wlan_objmgr_ref_dbgid dbg_id)
-{
-	struct wlan_mlo_dev_context *mlo_dev_ctx;
-	struct wlan_objmgr_vdev *mlo_vdev;
-
-	if (!vdev)
-		return NULL;
-
-	mlo_dev_ctx = vdev->mlo_dev_ctx;
-	if (!mlo_dev_ctx)
-		return NULL;
-
-	mlo_vdev = mlo_dev_ctx->wlan_vdev_list[index];
-	if (mlo_vdev &&
-	    wlan_objmgr_vdev_try_get_ref(mlo_vdev, dbg_id) ==
-							QDF_STATUS_SUCCESS)
-		return mlo_vdev;
-
-	return NULL;
-}
-
-void wlan_tdls_release_mlo_vdev(struct wlan_objmgr_vdev *vdev,
-				wlan_objmgr_ref_dbgid dbg_id)
-{
-	if (!vdev)
-		return;
-
-	wlan_objmgr_vdev_release_ref(vdev, dbg_id);
-}
-#else
-struct wlan_objmgr_vdev *wlan_tdls_get_mlo_vdev(struct wlan_objmgr_vdev *vdev,
-						uint8_t index,
-						wlan_objmgr_ref_dbgid dbg_id)
-{
-	return NULL;
-}
-
-void wlan_tdls_release_mlo_vdev(struct wlan_objmgr_vdev *vdev,
-				wlan_objmgr_ref_dbgid dbg_id)
-{
-}
-#endif
 /**
  * tdls_get_vdev() - Get tdls specific vdev object manager
  * @psoc: wlan psoc object manager
@@ -1393,7 +1612,8 @@ void tdls_send_update_to_fw(struct tdls_vdev_priv_obj *tdls_vdev_obj,
 
 	tdls_feature_flags = tdls_soc_obj->tdls_configs.tdls_feature_flags;
 	if (!TDLS_IS_ENABLED(tdls_feature_flags)) {
-		tdls_debug("TDLS mode is not enabled");
+		tdls_notice_rl("vdev:%d TDLS mode is not enabled",
+			       wlan_vdev_get_id(tdls_vdev_obj->vdev));
 		return;
 	}
 
@@ -1416,12 +1636,17 @@ void tdls_send_update_to_fw(struct tdls_vdev_priv_obj *tdls_vdev_obj,
 
 	if (!wlan_cm_is_vdev_connected(tdls_vdev_obj->vdev) &&
 	    sta_connect_event && current_mode != TDLS_SUPPORT_DISABLED) {
-		tdls_debug("Vdev:%d is not connected. Don't enable TDLS",
-			   wlan_vdev_get_id(tdls_vdev_obj->vdev));
+		tdls_notice_rl("Vdev:%d is not connected. Don't enable TDLS",
+			       wlan_vdev_get_id(tdls_vdev_obj->vdev));
 		return;
 	}
 
 	tdls_soc_obj->tdls_current_mode = current_mode;
+	/*
+	 * Update the previous TDLS mode also so that scan done callback
+	 * doesn't enable TDLS again
+	 */
+	tdls_soc_obj->tdls_last_mode = current_mode;
 
 	tdls_info_to_fw = qdf_mem_malloc(sizeof(struct tdls_info));
 	if (!tdls_info_to_fw)
@@ -1458,7 +1683,6 @@ void tdls_send_update_to_fw(struct tdls_vdev_priv_obj *tdls_vdev_obj,
 	if (TDLS_IS_SLEEP_STA_ENABLED(tdls_feature_flags))
 		tdls_info_to_fw->tdls_options |=  ENA_TDLS_SLEEP_STA;
 
-
 	tdls_info_to_fw->peer_traffic_ind_window =
 		tdls_soc_obj->tdls_configs.tdls_uapsd_pti_window;
 	tdls_info_to_fw->peer_traffic_response_timeout =
@@ -1480,11 +1704,11 @@ void tdls_send_update_to_fw(struct tdls_vdev_priv_obj *tdls_vdev_obj,
 	if (QDF_IS_STATUS_ERROR(status))
 		goto done;
 
-	if (sta_connect_event) {
+	if (sta_connect_event)
 		tdls_soc_obj->set_state_info.vdev_id = session_id;
-	}
 
-	tdls_debug("FW tdls state sent for vdev id %d", session_id);
+	tdls_debug("FW tdls state%d sent for vdev id %d",
+		   tdls_info_to_fw->tdls_state, session_id);
 done:
 	qdf_mem_free(tdls_info_to_fw);
 	return;
@@ -1564,7 +1788,11 @@ tdls_process_sta_connect(struct tdls_sta_notify_params *notify)
 	if (!tdls_check_is_tdls_allowed(notify->vdev))
 		return QDF_STATUS_E_NOSUPPORT;
 
-	tdls_process_enable_for_vdev(notify->vdev);
+	if (wlan_cm_is_link_switch_connection(notify->vdev) &&
+	    wlan_vdev_mlme_is_mlo_vdev(notify->vdev))
+		tdls_process_enable_disable_for_ml_vdev(notify->vdev, true);
+	else
+		tdls_process_enable_for_vdev(notify->vdev);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -1643,6 +1871,7 @@ tdls_process_sta_disconnect(struct tdls_sta_notify_params *notify)
 			       false, false, notify->session_id);
 
 	tdls_timers_stop(tdls_vdev_obj);
+	tdls_allow_suspend(tdls_soc_obj);
 
 	/*
 	 * If concurrency is not marked, then we have to
@@ -1651,6 +1880,26 @@ tdls_process_sta_disconnect(struct tdls_sta_notify_params *notify)
 	 */
 	if (notify->lfr_roam)
 		return status;
+
+	/*
+	 * If the disconnect is due to link switch, then the other TDLS vdev
+	 * could be either of the following:
+	 * a) The ML-STA Partner vdev
+	 * b) In the case of ML-STA + P2P-CLI concurrency, it could be
+	 * P2P-CLI vdev (if the other partner link is in disabled table)
+	 *
+	 * The TDLS for both these VDEVs should not be enabled back during
+	 * link switch.
+	 *
+	 * The TDLS will be enabled for these VDEVs:
+	 * a) For ML-partner: At MLD level, when the ongoing link switch
+	 * completes.
+	 * b) For P2P-CLI: When the ML-STA disconnects completely.
+	 */
+	if (wlan_vdev_mlme_is_mlo_link_switch_in_progress(notify->vdev)) {
+		tdls_debug("Do not enable TDLS for the other vdev for link switch disconnects");
+		return status;
+	}
 
 	temp_vdev = tdls_get_vdev(tdls_soc_obj->soc, WLAN_TDLS_NB_ID);
 	if (!temp_vdev)
@@ -1716,12 +1965,20 @@ QDF_STATUS tdls_notify_sta_disconnect(struct tdls_sta_notify_params *notify)
 
 static void tdls_process_reset_adapter(struct wlan_objmgr_vdev *vdev)
 {
+	struct tdls_soc_priv_obj *tdls_soc;
 	struct tdls_vdev_priv_obj *tdls_vdev;
 
 	tdls_vdev = wlan_vdev_get_tdls_vdev_obj(vdev);
 	if (!tdls_vdev)
 		return;
+
 	tdls_timers_stop(tdls_vdev);
+
+	tdls_soc = wlan_vdev_get_tdls_soc_obj(vdev);
+	if (!tdls_soc)
+		return;
+
+	tdls_allow_suspend(tdls_soc);
 }
 
 void tdls_notify_reset_adapter(struct wlan_objmgr_vdev *vdev)
@@ -1957,7 +2214,7 @@ static void tdls_set_current_mode(struct tdls_soc_priv_obj *tdls_soc,
 	if (!tdls_soc)
 		return;
 
-	tdls_debug("mode %d", (int)tdls_mode);
+	tdls_debug("mode %d source %d", (int)tdls_mode, source);
 
 	if (update_last)
 		tdls_soc->tdls_last_mode = tdls_mode;
@@ -1990,6 +2247,11 @@ static void tdls_set_current_mode(struct tdls_soc_priv_obj *tdls_soc,
 							QDF_STA_MODE,
 							WLAN_TDLS_NB_ID);
 	if (vdev) {
+		if (!wlan_cm_is_vdev_connected(vdev)) {
+			wlan_objmgr_vdev_release_ref(vdev, WLAN_TDLS_NB_ID);
+			goto lookup_p2p_client;
+		}
+
 		tdls_debug("set mode in tdls STA vdev:%d",
 			   wlan_vdev_get_id(vdev));
 		tdls_vdev = wlan_vdev_get_tdls_vdev_obj(vdev);
@@ -1997,15 +2259,20 @@ static void tdls_set_current_mode(struct tdls_soc_priv_obj *tdls_soc,
 			tdls_set_mode_in_vdev(tdls_vdev, tdls_soc,
 					      tdls_mode, source);
 		wlan_objmgr_vdev_release_ref(vdev, WLAN_TDLS_NB_ID);
-
 		goto exit;
 	}
 
+lookup_p2p_client:
 	/* get p2p client vdev */
 	vdev = wlan_objmgr_get_vdev_by_opmode_from_psoc(tdls_soc->soc,
 							QDF_P2P_CLIENT_MODE,
 							WLAN_TDLS_NB_ID);
 	if (vdev) {
+		if (!wlan_cm_is_vdev_connected(vdev)) {
+			wlan_objmgr_vdev_release_ref(vdev, WLAN_TDLS_NB_ID);
+			goto exit;
+		}
+
 		tdls_debug("set mode in tdls P2P cli vdev:%d",
 			   wlan_vdev_get_id(vdev));
 		tdls_vdev = wlan_vdev_get_tdls_vdev_obj(vdev);
@@ -2101,7 +2368,6 @@ void tdls_scan_complete_event_handler(struct wlan_objmgr_vdev *vdev,
 			struct scan_event *event,
 			void *arg)
 {
-	enum QDF_OPMODE device_mode;
 	struct tdls_soc_priv_obj *tdls_soc;
 
 	if (!vdev || !event || !arg)
@@ -2109,8 +2375,6 @@ void tdls_scan_complete_event_handler(struct wlan_objmgr_vdev *vdev,
 
 	if (SCAN_EVENT_TYPE_COMPLETED != event->type)
 		return;
-
-	device_mode = wlan_vdev_mlme_get_opmode(vdev);
 
 	tdls_soc = (struct tdls_soc_priv_obj *) arg;
 	tdls_post_scan_done_msg(tdls_soc);
@@ -2195,13 +2459,14 @@ QDF_STATUS tdls_scan_callback(struct tdls_soc_priv_obj *tdls_soc)
 
 	if (tdls_is_progress(tdls_vdev, NULL, 0)) {
 		if (tdls_soc->scan_reject_count++ >= TDLS_SCAN_REJECT_MAX) {
-			tdls_notice("Allow this scan req. as already max no of scan's are rejected");
+			tdls_notice_rl("Allow scan during tdls, as scan reject count %d reached threshold",
+					tdls_soc->scan_reject_count);
 			tdls_soc->scan_reject_count = 0;
 			status = QDF_STATUS_SUCCESS;
 
 		} else {
-			tdls_warn("tdls in progress. scan rejected %d",
-				  tdls_soc->scan_reject_count);
+			tdls_warn_rl("tdls in progress. scan rejected %d",
+				     tdls_soc->scan_reject_count);
 			status = QDF_STATUS_E_BUSY;
 		}
 	}
@@ -2212,7 +2477,7 @@ QDF_STATUS tdls_scan_callback(struct tdls_soc_priv_obj *tdls_soc)
 
 	feature = tdls_soc->tdls_configs.tdls_feature_flags;
 	if (TDLS_IS_SCAN_ENABLED(feature)) {
-		tdls_debug("TDLS Scan enabled, keep tdls link and allow scan, connected tdls peers: %d",
+		tdls_debug("TDLS Scan enabled so allow scan, tdls peers cnt %d",
 			   tdls_peer_count);
 		goto disable_tdls;
 	}

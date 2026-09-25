@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -100,11 +100,32 @@ extern bool is_hal_verbose_debug_enabled;
 
 struct hal_hw_cc_config {
 	uint32_t lut_base_addr_31_0;
-	uint32_t cc_global_en:1,
+	uint64_t cc_global_en:1,
 		 page_4k_align:1,
 		 cookie_offset_msb:5,
 		 cookie_page_msb:5,
 		 lut_base_addr_39_32:8,
+#ifdef CONFIG_BORON
+		 tqm2sw6_cc_en:1,
+		 tqm2sw5_cc_en:1,
+		 tqm2sw4_cc_en:1,
+		 tqm2sw3_cc_en:1,
+		 tqm2sw2_cc_en:1,
+		 tqm2sw1_cc_en:1,
+		 tqm2sw0_cc_en:1,
+		 tqm2fw_cc_en:1,
+		 reo2sw9_cc_en:1,
+		 reo2sw8_cc_en:1,
+		 reo2sw7_cc_en:1,
+		 reo2sw6_cc_en:1,
+		 reo2sw5_cc_en:1,
+		 reo2sw4_cc_en:1,
+		 reo2sw3_cc_en:1,
+		 reo2sw2_cc_en:1,
+		 reo2sw1_cc_en:1,
+		 reo2sw0_cc_en:1,
+		 reo2fw_cc_en:1,
+#else
 		 wbm2sw6_cc_en:1,
 		 wbm2sw5_cc_en:1,
 		 wbm2sw4_cc_en:1,
@@ -113,6 +134,7 @@ struct hal_hw_cc_config {
 		 wbm2sw1_cc_en:1,
 		 wbm2sw0_cc_en:1,
 		 wbm2fw_cc_en:1,
+#endif
 		 error_path_cookie_conv_en:1,
 		 release_path_cookie_conv_en:1,
 		 reserved:2;
@@ -187,9 +209,10 @@ enum hal_srng_ring_id {
 	HAL_SRNG_REO2SW6 = 6,
 	HAL_SRNG_REO2SW7 = 7,
 	HAL_SRNG_REO2SW8 = 8,
-	HAL_SRNG_REO2TCL = 9,
-	HAL_SRNG_REO2PPE = 10,
-	/* 11-15 unused */
+	HAL_SRNG_REO2SW9 = 9,
+	HAL_SRNG_REO2TCL = 10,
+	HAL_SRNG_REO2PPE = 11,
+	/* 12-15 unused */
 	HAL_SRNG_SW2REO = 16,
 	HAL_SRNG_SW2REO1 = 17,
 	HAL_SRNG_SW2REO2 = 18,
@@ -273,6 +296,13 @@ enum hal_srng_ring_id {
 	HAL_SRNG_WBM2SW5_RELEASE = 133,
 	HAL_SRNG_WBM2SW6_RELEASE = 134,
 	HAL_SRNG_WBM_ERROR_RELEASE = 135,
+	HAL_SRNG_TQM2SW0_RELEASE = 136,
+	HAL_SRNG_TQM2SW1_RELEASE = 137,
+	HAL_SRNG_TQM2SW2_RELEASE = 138,
+	HAL_SRNG_TQM2SW3_RELEASE = 139,
+	HAL_SRNG_TQM2SW4_RELEASE = 140,
+	HAL_SRNG_TQM2SW5_RELEASE = 141,
+	HAL_SRNG_TQM2SW6_RELEASE = 142,
 	/* 136-158 unused */
 	HAL_SRNG_UMAC_ID_END = 159,
 	/* Common DMAC rings shared by all LMACs */
@@ -297,6 +327,9 @@ enum hal_srng_ring_id {
 #ifdef FEATURE_DIRECT_LINK
 	HAL_SRNG_WMAC1_RX_DIRECT_LINK_SW_REFILL_RING,
 #endif
+#ifdef FEATURE_MGMT_RX_OVER_SRNG
+	HAL_SRNG_WMAC1_MGMT_RX_SW_REFILL_RING,
+#endif
 	HAL_SRNG_WMAC1_SW2RXDMA2_BUF,
 	HAL_SRNG_WMAC1_SW2RXDMA0_STATBUF,
 	HAL_SRNG_WMAC1_SW2RXDMA1_STATBUF,
@@ -309,10 +342,12 @@ enum hal_srng_ring_id {
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING,
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING1,
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING2,
+	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING3,
 #else
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING,
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING1,
 	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING2,
+	HAL_SRNG_DIR_BUF_RX_SRC_DMA_RING3,
 #endif
 	HAL_SRNG_WMAC1_TXMON2SW0,
 	HAL_SRNG_SW2TXMON_BUF0,
@@ -365,6 +400,12 @@ enum hal_srng_ring_id {
 
 #define HAL_SRNG_ID_MAX (HAL_SRNG_DMAC_CMN_ID_END + HAL_MAX_LMAC_RINGS)
 
+#ifdef CONFIG_BORON
+#define COMP_RING_TYPE TQM2SW_RELEASE
+#else
+#define COMP_RING_TYPE WBM2SW_RELEASE
+#endif
+
 /* SRNG type to be passed in APIs hal_srng_get_entrysize and hal_srng_setup */
 enum hal_ring_type {
 	REO_DST = 0,
@@ -398,6 +439,11 @@ enum hal_ring_type {
 	TX_MONITOR_DST,
 	SW2RXDMA_NEW,
 	SW2RXDMA_LINK_RELEASE,
+	TQM2SW_RELEASE,
+	/*
+	 * If you are adding new ring type, then update hal_hw_srng_config
+	 * for all the targets
+	 */
 	MAX_RING_TYPES
 };
 
@@ -423,6 +469,7 @@ enum SRNG_REGISTERS {
 #ifdef CONFIG_BERYLLIUM
 	DST_PRODUCER_INT2_SETUP,
 #endif
+	DST_STATUS,
 
 	SRC_HP,
 	SRC_TP,
@@ -1159,6 +1206,10 @@ struct hal_hw_txrx_ops {
 
 	void (*hal_rx_proc_phyrx_other_receive_info_tlv)(void *rx_tlv_hdr,
 							void *ppdu_info_handle);
+	void (*hal_rx_ru_info_details)(void *rx_tlv_hdr,
+				       void *ppdu_info_handle);
+	void (*hal_rx_proc_phyrx_all_sigb_tlv)(void *rx_tlv_hdr,
+					       void *ppdu_info_handle);
 	void (*hal_rx_dump_msdu_end_tlv)(void *pkt_tlvs, uint8_t dbg_level);
 	void (*hal_rx_dump_rx_attention_tlv)(void *pkt_tlvs, uint8_t dbg_level);
 	void (*hal_rx_dump_msdu_start_tlv)(void *pkt_tlvs, uint8_t dbg_level);
@@ -1196,6 +1247,8 @@ struct hal_hw_txrx_ops {
 	uint8_t (*hal_rx_msdu_end_sa_is_valid_get)(uint8_t *buf);
 	uint16_t (*hal_rx_msdu_end_sa_idx_get)(uint8_t *buf);
 	uint32_t (*hal_rx_desc_is_first_msdu)(void *hw_desc_addr);
+	void (*hal_rx_msdu_end_l3_hdr_padding_set)(uint8_t *buf,
+						   uint32_t l3_hdr_pad);
 	uint32_t (*hal_rx_msdu_end_l3_hdr_padding_get)(uint8_t *buf);
 	uint32_t (*hal_rx_encryption_info_valid)(uint8_t *buf);
 	void (*hal_rx_print_pn)(uint8_t *buf);
@@ -1274,6 +1327,9 @@ struct hal_hw_txrx_ops {
 	void * (*hal_rx_flow_setup_fse)(uint8_t *rx_fst,
 					uint32_t table_offset,
 					uint8_t *rx_flow);
+	void * (*hal_rx_flow_write_fse_metadata)(uint8_t *rx_fst,
+						 uint32_t table_offset,
+						 uint8_t *rx_flow);
 	void * (*hal_rx_flow_get_tuple_info)(uint8_t *rx_fst,
 					     uint32_t hal_hash,
 					     uint8_t *tuple_info);
@@ -1288,6 +1344,9 @@ struct hal_hw_txrx_ops {
 	uint32_t (*hal_rx_flow_setup_cmem_fse)(
 				struct hal_soc *soc, uint32_t cmem_ba,
 				uint32_t table_offset, uint8_t *rx_flow);
+	QDF_STATUS (*hal_rx_flow_delete_cmem_fse)(struct hal_soc *soc,
+						  uint32_t cmem_ba,
+						  uint32_t table_offset);
 	uint32_t (*hal_rx_flow_get_cmem_fse_ts)(struct hal_soc *soc,
 						uint32_t fse_offset);
 	void (*hal_rx_flow_get_cmem_fse)(struct hal_soc *soc,
@@ -1296,6 +1355,13 @@ struct hal_hw_txrx_ops {
 
 	void (*hal_cmem_write)(hal_soc_handle_t hal_soc_hdl, uint32_t offset,
 			       uint32_t value);
+
+	void (*hal_umac_reset_intr)(hal_soc_handle_t hal_soc_hdl,
+				    uint32_t offset, uint32_t value,
+				    void __iomem *addr);
+
+	uint32_t (*hal_umac_reset_read)(hal_soc_handle_t hal_soc_hdl,
+					uint32_t offset, void __iomem *addr);
 
 	void (*hal_rx_msdu_get_reo_destination_indication)(uint8_t *buf,
 							   uint32_t *reo_destination_indication);
@@ -1425,7 +1491,8 @@ struct hal_hw_txrx_ops {
 					       void *pkt_info);
 	/* TX MONITOR */
 #ifdef WLAN_PKT_CAPTURE_TX_2_0
-	uint32_t (*hal_txmon_status_parse_tlv)(void *data_ppdu_info,
+	uint32_t (*hal_txmon_status_parse_tlv)(hal_soc_handle_t hal_soc_hdl,
+					       void *data_ppdu_info,
 					       void *prot_ppdu_info,
 					       void *data_status_info,
 					       void *prot_status_info,
@@ -1434,6 +1501,8 @@ struct hal_hw_txrx_ops {
 	uint32_t (*hal_txmon_status_get_num_users)(void *tx_tlv_hdr,
 						   uint8_t *num_users);
 	void (*hal_txmon_get_word_mask)(void *wmask);
+	void (*hal_txmon_get_frame_timestamp)(uint32_t tlv_tag,
+					      void *tx_tlv, void *ppdu_info);
 #endif /* WLAN_PKT_CAPTURE_TX_2_0 */
 	QDF_STATUS (*hal_reo_shared_qaddr_setup)(hal_soc_handle_t hal_soc_hdl,
 						 struct reo_queue_ref_table
@@ -1485,6 +1554,16 @@ struct hal_hw_txrx_ops {
 	void (*hal_rx_parse_eht_sig_hdr)(struct hal_soc *hal_soc,
 					 uint8_t *tlv,
 					 void *ppdu_info_handle);
+	void (*hal_rx_flow_cmem_update_reo_dst_ind)(struct hal_soc *hal_soc,
+						    uint32_t cmem_ba,
+						    uint32_t flow_idx,
+						    uint8_t reo_dest_ind);
+	uint16_t (*hal_srng_dst_get_num_avail_words)(
+			hal_ring_handle_t hal_ring_hdl);
+#ifdef DRIVER_PASSTHRU_MODE
+	uint32_t (*hal_rx_tlv_get_rssi)(uint8_t *buf);
+	uint32_t (*hal_rx_tlv_get_ppdu_start_ts)(uint8_t *rx_tlv_hdr);
+#endif
 };
 
 /**
@@ -1581,6 +1660,9 @@ struct hal_suspend_write_history {
  * @dev_base_addr: Device base address
  * @dev_base_addr_ce: Device base address for ce - qca5018 target
  * @dev_base_addr_cmem: Device base address for CMEM
+ * @dev_base_addr_pcie0: Device base address for PCIE0
+ * @dev_base_addr_pcie1: Device base address for PCIE1
+ * @dev_base_addr_pcie2: Device base address for PCIE2
  * @dev_base_addr_pmm: Device base address for PMM
  * @srng_list: HAL internal state for all SRNG rings
  * @shadow_rdptr_mem_vaddr: Remote pointer memory for HW/FW updates (virtual)
@@ -1624,6 +1706,9 @@ struct hal_soc {
 	void *dev_base_addr;
 	void *dev_base_addr_ce;
 	void *dev_base_addr_cmem;
+	void *dev_base_addr_pcie0;
+	void *dev_base_addr_pcie1;
+	void *dev_base_addr_pcie2;
 	void *dev_base_addr_pmm;
 	struct hal_srng srng_list[HAL_SRNG_ID_MAX];
 
@@ -1701,9 +1786,12 @@ void hal_qca8074_attach(struct hal_soc *hal_soc);
  */
 void hal_kiwi_attach(struct hal_soc *hal_soc);
 void hal_peach_attach(struct hal_soc *hal_soc);
+void hal_fig_attach(struct hal_soc *hal_soc);
 
 void hal_qcn9224v2_attach(struct hal_soc *hal_soc);
 void hal_wcn6450_attach(struct hal_soc *hal_soc);
+void hal_wcn7750_attach(struct hal_soc *hal_soc);
+void hal_qcc2072_attach(struct hal_soc *hal_soc);
 
 /**
  * hal_soc_to_hal_soc_handle() - API to convert hal_soc to opaque
@@ -1748,8 +1836,8 @@ struct hal_srng *hal_ring_handle_to_hal_srng(hal_ring_handle_t hal_ring)
  * = 278528 bytes
  */
 #define REO_QUEUE_REF_NON_ML_TABLE_SIZE 278528
-/* Calculated based on 512 MLO peers */
-#define REO_QUEUE_REF_ML_TABLE_SIZE 69632
+/* Calculated based on 1024 MLO peers */
+#define REO_QUEUE_REF_ML_TABLE_SIZE 139400
 #define HAL_ML_PEER_ID_START 0x2000
 #define HAL_PEER_ID_IS_MLO(peer_id) ((peer_id) & HAL_ML_PEER_ID_START)
 

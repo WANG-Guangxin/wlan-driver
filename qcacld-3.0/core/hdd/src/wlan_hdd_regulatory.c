@@ -39,6 +39,9 @@
 #include "osif_psoc_sync.h"
 #include "wlan_osif_features.h"
 #include "wlan_p2p_ucfg_api.h"
+#include "wlan_mlo_mgr_public_api.h"
+#include <wlan_cfg80211.h>
+#include <nan_ucfg_api.h>
 
 #define REG_RULE_2412_2462    REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)
 
@@ -896,7 +899,8 @@ int hdd_reg_set_country(struct hdd_context *hdd_ctx, char *country_code)
 		qdf_mutex_release(&hdd_ctx->regulatory_status_lock);
 	}
 
-	hdd_reg_wait_for_country_change(hdd_ctx);
+	if (!cds_is_driver_loading())
+		hdd_reg_wait_for_country_change(hdd_ctx);
 
 	return qdf_status_to_os_return(status);
 }
@@ -914,6 +918,22 @@ uint32_t hdd_reg_legacy_setband_to_reg_wifi_band_bitmap(uint8_t qca_setband)
 		break;
 	case QCA_SETBAND_2G:
 		band_bitmap |= BIT(REG_BAND_2G);
+		break;
+	case (QCA_SETBAND_2G | QCA_SETBAND_5G):
+		band_bitmap |= (BIT(REG_BAND_2G) | BIT(REG_BAND_5G));
+		break;
+	case QCA_SETBAND_6G:
+		band_bitmap |= BIT(REG_BAND_6G);
+		break;
+	case QCA_SETBAND_6G | QCA_SETBAND_2G:
+		band_bitmap |= (BIT(REG_BAND_6G) | BIT(REG_BAND_2G));
+		break;
+	case QCA_SETBAND_6G | QCA_SETBAND_5G:
+		band_bitmap |= (BIT(REG_BAND_6G) | BIT(REG_BAND_5G));
+		break;
+	case QCA_SETBAND_6G | QCA_SETBAND_5G | QCA_SETBAND_2G:
+		band_bitmap |= (BIT(REG_BAND_6G) | BIT(REG_BAND_5G) |
+				BIT(REG_BAND_2G));
 		break;
 	default:
 		hdd_err("Invalid band value %u", qca_setband);
@@ -939,6 +959,13 @@ int hdd_reg_set_band(struct net_device *dev, uint32_t band_bitmap)
 
 	hdd_debug("change band to %u", band_bitmap);
 
+	if (!(band_bitmap & BIT(REG_BAND_2G)) &&
+	    ucfg_is_nan_disc_active(hdd_ctx->psoc)) {
+		hdd_err("NAN is enabled. Failed to set the band bitmap value to %u",
+			band_bitmap);
+		return -EINVAL;
+	}
+
 	if (ucfg_reg_get_band(hdd_ctx->pdev, &current_band) !=
 	    QDF_STATUS_SUCCESS) {
 		hdd_debug("Failed to get current band config");
@@ -958,6 +985,15 @@ int hdd_reg_set_band(struct net_device *dev, uint32_t band_bitmap)
 		return 0;
 	}
 
+	if (hdd_is_chan_switch_in_progress()) {
+		hdd_debug("channel switch is in progress");
+		status = policy_mgr_wait_chan_switch_complete_evt(hdd_ctx->psoc);
+		if (!QDF_IS_STATUS_SUCCESS(status)) {
+			hdd_err("qdf wait for csa event failed");
+			return QDF_STATUS_E_FAILURE;
+		}
+	}
+
 	hdd_ctx->curr_band = wlan_reg_band_bitmap_to_band_info(band_bitmap);
 
 	if (QDF_IS_STATUS_ERROR(ucfg_reg_set_band(hdd_ctx->pdev,
@@ -969,6 +1005,8 @@ int hdd_reg_set_band(struct net_device *dev, uint32_t band_bitmap)
 
 	status = ucfg_cm_set_roam_band_update(hdd_ctx->psoc,
 					      adapter->deflink->vdev_id);
+	ucfg_cm_set_roam_band_mask(hdd_ctx->psoc,
+				   adapter->deflink->vdev_id, band_bitmap);
 	if (QDF_IS_STATUS_ERROR(status))
 		hdd_err("Failed to send RSO update to fw on set band");
 
@@ -1462,7 +1500,25 @@ static inline void hdd_set_dfs_pri_multiplier(struct hdd_context *hdd_ctx,
 }
 #endif
 
-void hdd_send_wiphy_regd_sync_event(struct hdd_context *hdd_ctx)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)) || \
+	defined(CFG80211_WIPHY_REGD_NO_RTNL_SUPPORT)
+static int
+hdd_regulatory_set_wiphy_regd_sync(struct wiphy *wiphy,
+				   struct ieee80211_regdomain *regd)
+{
+	return regulatory_set_wiphy_regd_sync(wiphy, regd);
+}
+#else
+static int
+hdd_regulatory_set_wiphy_regd_sync(struct wiphy *wiphy,
+				   struct ieee80211_regdomain *regd)
+{
+	return regulatory_set_wiphy_regd_sync_rtnl(wiphy, regd);
+}
+#endif
+
+void hdd_send_wiphy_regd_sync_event(struct hdd_context *hdd_ctx,
+				    bool send_sync_event)
 {
 	struct ieee80211_regdomain *regd;
 	struct ieee80211_reg_rule *regd_rules;
@@ -1525,7 +1581,14 @@ void hdd_send_wiphy_regd_sync_event(struct hdd_context *hdd_ctx)
 			  regd_rules[i].flags);
 	}
 
-	regulatory_set_wiphy_regd(hdd_ctx->wiphy, regd);
+	if (send_sync_event && hdd_hold_rtnl_lock()) {
+		osif_wiphy_lock(hdd_ctx->wiphy, NULL);
+		hdd_regulatory_set_wiphy_regd_sync(hdd_ctx->wiphy, regd);
+		osif_wiphy_unlock(hdd_ctx->wiphy, NULL);
+		hdd_release_rtnl_lock();
+	} else {
+		regulatory_set_wiphy_regd(hdd_ctx->wiphy, regd);
+	}
 
 	hdd_debug("regd sync event sent with reg rules info");
 	qdf_mem_free(regd);
@@ -1636,6 +1699,37 @@ hdd_country_change_bw_check(struct wlan_hdd_link_info *link_info,
 }
 #endif
 
+static bool
+hdd_is_phy_mode_changed(struct wlan_objmgr_psoc *psoc,
+			struct hdd_station_ctx *sta_ctx,
+			enum reg_phymode new_max_phy)
+{
+	enum wlan_phymode wlan_phy;
+	enum reg_phymode reg_phy;
+	QDF_STATUS status;
+
+	if (sta_ctx->reg_phymode == new_max_phy)
+		return false;
+
+	sta_ctx->reg_phymode = new_max_phy;
+
+	/* New regulatory domain supports all the dot11 modes */
+	if (new_max_phy == REG_PHYMODE_MAX)
+		return false;
+
+	status = ucfg_mlme_get_peer_phymode(psoc,
+					    (uint8_t *)&sta_ctx->conn_info.bssid,
+					    &wlan_phy);
+	if (QDF_IS_STATUS_ERROR(status))
+		return false;
+
+	reg_phy = hdd_convert_wlan_phy_to_reg_phy(wlan_phy);
+	if (reg_phy <= new_max_phy)
+		return false;
+
+	return true;
+}
+
 /**
  * hdd_country_change_update_sta() - handle country code change for STA
  * @hdd_ctx: Global HDD context
@@ -1653,11 +1747,11 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 	uint32_t new_phy_mode;
 	bool freq_changed, phy_changed, width_changed;
 	qdf_freq_t oper_freq;
-	eCsrPhyMode csr_phy_mode;
 	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_COUNTRY_CHANGE_UPDATE_STA;
 	struct wlan_hdd_link_info *link_info;
 	enum qca_wlan_vendor_phy_mode vendor_phy_mode =
 						QCA_WLAN_VENDOR_PHY_MODE_AUTO;
+	QDF_STATUS status;
 
 	pdev = hdd_ctx->pdev;
 
@@ -1665,6 +1759,7 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 					   dbgid) {
 		hdd_adapter_for_each_active_link_info(adapter, link_info) {
 			width_changed = false;
+			phy_changed = false;
 			oper_freq = hdd_get_link_info_home_channel(link_info);
 			if (oper_freq)
 				freq_changed = wlan_reg_is_disable_for_pwrmode(
@@ -1690,10 +1785,6 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 				new_phy_mode = wlan_reg_get_max_phymode(pdev,
 								REG_PHYMODE_MAX,
 								oper_freq);
-				csr_phy_mode =
-					csr_convert_from_reg_phy_mode(new_phy_mode);
-				phy_changed =
-					(sta_ctx->reg_phymode != csr_phy_mode);
 
 				width_changed =
 					hdd_country_change_bw_check(link_info,
@@ -1705,18 +1796,28 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 					continue;
 				}
 
+				if (hdd_is_phy_mode_changed(hdd_ctx->psoc,
+							    sta_ctx,
+							    new_phy_mode))
+					phy_changed = true;
+
 				if (phy_changed || freq_changed ||
 				    width_changed) {
 					hdd_debug("changed: phy %d, freq %d, width %d",
 						  phy_changed, freq_changed,
 						  width_changed);
-					wlan_hdd_cm_issue_disconnect(
-							link_info,
-							REASON_UNSPEC_FAILURE,
-							false);
+					status = wlan_mlo_mgr_link_switch_defer_disconnect_req(
+							link_info->vdev,
+							CM_OSIF_DISCONNECT,
+							REASON_UNSPEC_FAILURE);
+					if (status != QDF_STATUS_E_ALREADY && QDF_IS_STATUS_ERROR(status))
+						wlan_hdd_cm_issue_disconnect(
+								link_info,
+								REASON_UNSPEC_FAILURE,
+								false);
 					hdd_set_vdev_phy_mode(adapter,
 							      vendor_phy_mode);
-					sta_ctx->reg_phymode = csr_phy_mode;
+					sta_ctx->reg_phymode = new_phy_mode;
 				} else {
 					hdd_debug("Remain on current channel but update tx power");
 					wlan_reg_update_tx_power_on_ctry_change(
@@ -1734,7 +1835,8 @@ static void hdd_country_change_update_sta(struct hdd_context *hdd_ctx)
 }
 
 /**
- * hdd_restart_sap_with_new_phymode() - restart the SAP with the new phymode
+ * hdd_restart_sap_with_new_phymode() - restart the SAP with the new
+ * phymode
  * @link_info: Link info pointer in HDD adapter.
  * @sap_config: sap configuration pointer
  * @csr_phy_mode: phymode to restart SAP with
@@ -1758,10 +1860,12 @@ hdd_restart_sap_with_new_phymode(struct wlan_hdd_link_info *link_info,
 	hostapd_state = WLAN_HDD_GET_HOSTAP_STATE_PTR(link_info);
 	sap_ctx = WLAN_HDD_GET_SAP_CTX_PTR(link_info);
 
-	if (!test_bit(SOFTAP_BSS_STARTED, &link_info->link_flags)) {
+	mutex_lock(&hdd_ctx->sap_lock);
+	if (!qdf_atomic_test_bit(SOFTAP_BSS_STARTED, link_info->link_flags)) {
 		sap_config->sap_orig_hw_mode = sap_config->SapHw_mode;
 		sap_config->SapHw_mode = csr_phy_mode;
 		hdd_err("Can't restart AP because it is not started");
+		mutex_unlock(&hdd_ctx->sap_lock);
 		return;
 	}
 
@@ -1769,12 +1873,14 @@ hdd_restart_sap_with_new_phymode(struct wlan_hdd_link_info *link_info,
 	status = wlansap_stop_bss(sap_ctx);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		hdd_err("SAP Stop Bss fail");
+		mutex_unlock(&hdd_ctx->sap_lock);
 		return;
 	}
 	status = qdf_wait_single_event(&hostapd_state->qdf_stop_bss_event,
 				       SME_CMD_STOP_BSS_TIMEOUT);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		hdd_err("SAP Stop timeout");
+		mutex_unlock(&hdd_ctx->sap_lock);
 		return;
 	}
 
@@ -1784,10 +1890,9 @@ hdd_restart_sap_with_new_phymode(struct wlan_hdd_link_info *link_info,
 	sap_config->sap_orig_hw_mode = sap_config->SapHw_mode;
 	sap_config->SapHw_mode = csr_phy_mode;
 
-	mutex_lock(&hdd_ctx->sap_lock);
 	qdf_event_reset(&hostapd_state->qdf_event);
 	status = wlansap_start_bss(sap_ctx, hdd_hostapd_sap_event_cb,
-				   sap_config, adapter->dev);
+				   sap_config);
 	if (!QDF_IS_STATUS_SUCCESS(status)) {
 		mutex_unlock(&hdd_ctx->sap_lock);
 		hdd_err("SAP Start Bss fail");
@@ -1801,6 +1906,33 @@ hdd_restart_sap_with_new_phymode(struct wlan_hdd_link_info *link_info,
 		return;
 	}
 	mutex_unlock(&hdd_ctx->sap_lock);
+}
+
+static bool
+hdd_is_sap_with_new_chan_width_needed(struct wlan_objmgr_psoc *psoc,
+				      struct wlan_objmgr_pdev *pdev,
+				      struct sap_config *sap_config,
+				      qdf_freq_t oper_freq,
+				      struct wlan_hdd_link_info *link_info)
+{
+	enum phy_ch_width new_ch_width;
+	struct sap_context *sap_ctx;
+
+	new_ch_width = sap_config->ch_params.ch_width;
+
+	/* Force SAP to 20MHz if INI is enabled, country is Indonesia
+	 * and device mode is SAP
+	 */
+	sap_ctx = WLAN_HDD_GET_SAP_CTX_PTR(link_info);
+	if (sap_config->ch_params.ch_width != CH_WIDTH_20MHZ &&
+	    sap_ctx && link_info->vdev &&
+	    policy_mgr_get_sap_force_20mhz_for_country_id(
+			psoc, link_info->vdev, oper_freq)) {
+		hdd_debug("Force SAP to 20MHz due to INI and country code ID");
+		new_ch_width = CH_WIDTH_20MHZ;
+	}
+
+	return (new_ch_width != sap_config->ch_params.ch_width);
 }
 
 /**
@@ -1819,6 +1951,7 @@ static void hdd_country_change_update_sap(struct hdd_context *hdd_ctx)
 	struct wlan_objmgr_pdev *pdev = NULL;
 	uint32_t reg_phy_mode, new_phy_mode;
 	bool phy_changed;
+	bool chan_width_changed;
 	qdf_freq_t oper_freq;
 	eCsrPhyMode csr_phy_mode;
 	wlan_net_dev_ref_dbgid dbgid = NET_DEV_HOLD_COUNTRY_CHANGE_UPDATE_SAP;
@@ -1837,8 +1970,9 @@ static void hdd_country_change_update_sap(struct hdd_context *hdd_ctx)
 							     link_info->vdev_id);
 				break;
 			case QDF_SAP_MODE:
-				if (!test_bit(SOFTAP_INIT_DONE,
-					      &link_info->link_flags)) {
+				if (!qdf_atomic_test_bit(
+						SOFTAP_INIT_DONE,
+						link_info->link_flags)) {
 					hdd_info("AP is not started yet");
 					break;
 				}
@@ -1854,14 +1988,37 @@ static void hdd_country_change_update_sap(struct hdd_context *hdd_ctx)
 				phy_changed =
 					(csr_phy_mode != sap_config->SapHw_mode);
 
-				if (phy_changed)
-					hdd_restart_sap_with_new_phymode(link_info,
-									 sap_config,
-									 csr_phy_mode);
-				else
+				chan_width_changed =
+					hdd_is_sap_with_new_chan_width_needed(
+							hdd_ctx->psoc,
+							pdev,
+							sap_config,
+							oper_freq,
+							link_info);
+
+				hdd_debug("phy_changes: %d, chan_width_changed: %d",
+					  phy_changed, chan_width_changed);
+
+				if (phy_changed) {
+					hdd_restart_sap_with_new_phymode(
+								link_info,
+								sap_config,
+								csr_phy_mode);
+				} else if (chan_width_changed &&
+					   QDF_IS_STATUS_SUCCESS(
+						   policy_mgr_change_sap_channel_with_csa(
+							   hdd_ctx->psoc,
+							   link_info->vdev_id,
+							   oper_freq,
+							   CH_WIDTH_20MHZ,
+							   true))) {
+					hdd_debug("SAP CSA due to chan width changed BW 20 MHz");
+				} else {
 					policy_mgr_check_sap_restart(
 							hdd_ctx->psoc,
 							link_info->vdev_id);
+				}
+
 				hdd_debug("Update tx power due to ctry change");
 				wlan_reg_update_tx_power_on_ctry_change(
 						    pdev, link_info->vdev_id);
@@ -1970,6 +2127,10 @@ static void hdd_regulatory_dyn_cbk(struct wlan_objmgr_psoc *psoc,
 	bool reg_flag;
 
 	pdev_priv = wlan_pdev_get_ospriv(pdev);
+	if (!pdev_priv) {
+		hdd_err("pdev_priv null");
+		return;
+	}
 	wiphy = pdev_priv->wiphy;
 	hdd_ctx = wiphy_priv(wiphy);
 
@@ -2004,7 +2165,7 @@ sync_chanlist:
 #if defined CFG80211_USER_HINT_CELL_BASE_SELF_MANAGED || \
 	    (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0))
 	if (wiphy->registered)
-		hdd_send_wiphy_regd_sync_event(hdd_ctx);
+		hdd_send_wiphy_regd_sync_event(hdd_ctx, false);
 #endif
 
 	hdd_config_tdls_with_band_switch(hdd_ctx);
@@ -2085,7 +2246,7 @@ int hdd_regulatory_init(struct hdd_context *hdd_ctx, struct wiphy *wiphy)
 	fill_wiphy_band_channels(wiphy, cur_chan_list, NL80211_BAND_2GHZ);
 	fill_wiphy_band_channels(wiphy, cur_chan_list, NL80211_BAND_5GHZ);
 	fill_wiphy_6ghz_band_channels(wiphy, cur_chan_list);
-	qdf_mem_zero(hdd_ctx->reg.alpha2, REG_ALPHA2_LEN + 1);
+	ucfg_reg_get_current_country(hdd_ctx->psoc, hdd_ctx->reg.alpha2);
 
 	qdf_mem_free(cur_chan_list);
 	return 0;
@@ -2148,3 +2309,143 @@ void hdd_update_regdb_offload_config(struct hdd_context *hdd_ctx)
 	hdd_debug("Ignore regdb offload Indication from FW");
 	ucfg_set_ignore_fw_reg_offload_ind(hdd_ctx->psoc);
 }
+
+void hdd_remove_vlp_depriority_channels(struct wlan_objmgr_pdev *pdev,
+					uint16_t *ch_freq_list,
+					uint32_t *num_channels)
+{
+	uint32_t num_chan_temp = 0;
+	uint16_t i;
+	uint8_t country[REG_ALPHA2_LEN + 1];
+	struct wlan_objmgr_psoc *psoc;
+
+	psoc = wlan_pdev_get_psoc(pdev);
+	if (!psoc)
+		return;
+
+	if (!(*num_channels > 1))
+		return;
+
+	ucfg_reg_get_current_country(psoc, country);
+	if (!ucfg_reg_get_num_rules_of_ap_pwr_type(pdev,
+						   REG_VERY_LOW_POWER_AP)) {
+		hdd_debug("Current country %.2s don't support VLP", country);
+		return;
+	}
+
+	for (i = 0; i < *num_channels; i++) {
+		if (ucfg_reg_is_vlp_depriority_freq(pdev,
+						    ch_freq_list[i])) {
+			hdd_nofl_debug("skip freq %u", ch_freq_list[i]);
+			continue;
+		}
+		ch_freq_list[num_chan_temp++] = ch_freq_list[i];
+	}
+
+	*num_channels = num_chan_temp;
+}
+
+#ifdef WLAN_FEATURE_11BE
+enum reg_phymode hdd_convert_wlan_phy_to_reg_phy(enum wlan_phymode wlan_phy)
+{
+	switch (wlan_phy) {
+	case WLAN_PHYMODE_AUTO:
+		return REG_PHYMODE_MAX;
+	case WLAN_PHYMODE_11A:
+		return REG_PHYMODE_11A;
+	case WLAN_PHYMODE_11B:
+		return REG_PHYMODE_11B;
+	case WLAN_PHYMODE_11G:
+	case WLAN_PHYMODE_11G_ONLY:
+		return REG_PHYMODE_11G;
+	case WLAN_PHYMODE_11NA_HT20:
+	case WLAN_PHYMODE_11NG_HT20:
+	case WLAN_PHYMODE_11NA_HT40:
+	case WLAN_PHYMODE_11NG_HT40PLUS:
+	case WLAN_PHYMODE_11NG_HT40MINUS:
+	case WLAN_PHYMODE_11NG_HT40:
+		return REG_PHYMODE_11N;
+	case WLAN_PHYMODE_11AC_VHT20:
+	case WLAN_PHYMODE_11AC_VHT20_2G:
+	case WLAN_PHYMODE_11AC_VHT40:
+	case WLAN_PHYMODE_11AC_VHT40PLUS_2G:
+	case WLAN_PHYMODE_11AC_VHT40MINUS_2G:
+	case WLAN_PHYMODE_11AC_VHT40_2G:
+	case WLAN_PHYMODE_11AC_VHT80:
+	case WLAN_PHYMODE_11AC_VHT80_2G:
+	case WLAN_PHYMODE_11AC_VHT160:
+	case WLAN_PHYMODE_11AC_VHT80_80:
+		return REG_PHYMODE_11AC;
+	case WLAN_PHYMODE_11AXA_HE20:
+	case WLAN_PHYMODE_11AXG_HE20:
+	case WLAN_PHYMODE_11AXA_HE40:
+	case WLAN_PHYMODE_11AXG_HE40PLUS:
+	case WLAN_PHYMODE_11AXG_HE40MINUS:
+	case WLAN_PHYMODE_11AXG_HE40:
+	case WLAN_PHYMODE_11AXA_HE80:
+	case WLAN_PHYMODE_11AXG_HE80:
+	case WLAN_PHYMODE_11AXA_HE160:
+	case WLAN_PHYMODE_11AXA_HE80_80:
+		return REG_PHYMODE_11AX;
+	case WLAN_PHYMODE_11BEA_EHT20:
+	case WLAN_PHYMODE_11BEG_EHT20:
+	case WLAN_PHYMODE_11BEA_EHT40:
+	case WLAN_PHYMODE_11BEG_EHT40PLUS:
+	case WLAN_PHYMODE_11BEG_EHT40MINUS:
+	case WLAN_PHYMODE_11BEG_EHT40:
+	case WLAN_PHYMODE_11BEA_EHT80:
+	case WLAN_PHYMODE_11BEG_EHT80:
+	case WLAN_PHYMODE_11BEA_EHT160:
+	case WLAN_PHYMODE_11BEA_EHT320:
+		return REG_PHYMODE_11BE;
+	default:
+		return REG_PHYMODE_MAX;
+	}
+}
+#else
+enum reg_phymode hdd_convert_wlan_phy_to_reg_phy(enum wlan_phymode wlan_phy)
+{
+	switch (wlan_phy) {
+	case WLAN_PHYMODE_AUTO:
+		return REG_PHYMODE_MAX;
+	case WLAN_PHYMODE_11A:
+		return REG_PHYMODE_11A;
+	case WLAN_PHYMODE_11B:
+		return REG_PHYMODE_11B;
+	case WLAN_PHYMODE_11G:
+	case WLAN_PHYMODE_11G_ONLY:
+		return REG_PHYMODE_11G;
+	case WLAN_PHYMODE_11NA_HT20:
+	case WLAN_PHYMODE_11NG_HT20:
+	case WLAN_PHYMODE_11NA_HT40:
+	case WLAN_PHYMODE_11NG_HT40PLUS:
+	case WLAN_PHYMODE_11NG_HT40MINUS:
+	case WLAN_PHYMODE_11NG_HT40:
+		return REG_PHYMODE_11N;
+	case WLAN_PHYMODE_11AC_VHT20:
+	case WLAN_PHYMODE_11AC_VHT20_2G:
+	case WLAN_PHYMODE_11AC_VHT40:
+	case WLAN_PHYMODE_11AC_VHT40PLUS_2G:
+	case WLAN_PHYMODE_11AC_VHT40MINUS_2G:
+	case WLAN_PHYMODE_11AC_VHT40_2G:
+	case WLAN_PHYMODE_11AC_VHT80:
+	case WLAN_PHYMODE_11AC_VHT80_2G:
+	case WLAN_PHYMODE_11AC_VHT160:
+	case WLAN_PHYMODE_11AC_VHT80_80:
+		return REG_PHYMODE_11AC;
+	case WLAN_PHYMODE_11AXA_HE20:
+	case WLAN_PHYMODE_11AXG_HE20:
+	case WLAN_PHYMODE_11AXA_HE40:
+	case WLAN_PHYMODE_11AXG_HE40PLUS:
+	case WLAN_PHYMODE_11AXG_HE40MINUS:
+	case WLAN_PHYMODE_11AXG_HE40:
+	case WLAN_PHYMODE_11AXA_HE80:
+	case WLAN_PHYMODE_11AXG_HE80:
+	case WLAN_PHYMODE_11AXA_HE160:
+	case WLAN_PHYMODE_11AXA_HE80_80:
+		return REG_PHYMODE_11AX;
+	default:
+		return REG_PHYMODE_MAX;
+	}
+}
+#endif

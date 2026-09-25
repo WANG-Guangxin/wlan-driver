@@ -461,6 +461,24 @@ void wlan_cm_init_occupied_ch_freq_list(struct wlan_objmgr_pdev *pdev,
 uint32_t cm_crypto_authmode_to_wmi_authmode(int32_t authmodeset,
 					    int32_t akm,
 					    int32_t ucastcipherset);
+
+/**
+ * cm_wmi_auth_type_to_crypto_key_mgmt() - API to convert akm wmi
+ * auth type to crypto key mgmt type
+ * @akm: akm wmi auth type
+ *
+ * Return: crypto key management type
+ */
+uint32_t cm_wmi_auth_type_to_crypto_key_mgmt(uint32_t akm);
+
+/**
+ * cm_get_wmi_auth_type() - API to get wmi auth type
+ * @akm: akm
+ *
+ * Return: WMI auth type
+ */
+uint32_t cm_get_wmi_auth_type(uint32_t akm);
+
 uint8_t *wlan_cm_get_rrm_cap_ie_data(void);
 
 /**
@@ -476,7 +494,7 @@ void wlan_cm_append_assoc_ies(struct wlan_roam_scan_offload_params *rso_mode_cfg
 			      uint8_t ie_id, uint8_t ie_len,
 			      const uint8_t *ie_data);
 /**
- * wlan_add_supported_5Ghz_channels()- Add valid 5Ghz channels
+ * wlan_add_supported_5ghz_channels()- Add valid 5GHz channels
  * in Join req.
  * @psoc: psoc ptr
  * @pdev: pdev
@@ -484,7 +502,7 @@ void wlan_cm_append_assoc_ies(struct wlan_roam_scan_offload_params *rso_mode_cfg
  * @num_chnl: Pointer to number of channels value to update
  * @supp_chan_ie: Boolean to check if we need to populate as IE
  *
- * This function is called to update valid 5Ghz channels
+ * This function is called to update valid 5GHz channels
  * in Join req. If @supp_chan_ie is true, supported channels IE
  * format[chan num 1, num of channels 1, chan num 2, num of
  * channels 2, ..] is populated. Else, @chan_list would be a list
@@ -492,11 +510,35 @@ void wlan_cm_append_assoc_ies(struct wlan_roam_scan_offload_params *rso_mode_cfg
  *
  * Return: void
  */
-void wlan_add_supported_5Ghz_channels(struct wlan_objmgr_psoc *psoc,
+void wlan_add_supported_5ghz_channels(struct wlan_objmgr_psoc *psoc,
 				      struct wlan_objmgr_pdev *pdev,
 				      uint8_t *chan_list,
 				      uint8_t *num_chnl,
 				      bool supp_chan_ie);
+
+/**
+ * wlan_add_supported_6ghz_channels()- Add valid 6GHz channels
+ * in Join req.
+ * @psoc: psoc ptr
+ * @pdev: pdev
+ * @chan_list: Pointer to channel list buffer to populate
+ * @num_chnl: Pointer to number of channels value to update
+ * @supp_chan_ie: Boolean to check if we need to populate as IE
+ *
+ * This function is called to update valid 6GHz channels
+ * in Join req. If @supp_chan_ie is true, supported channels IE
+ * format[chan num 1, num of channels 1, chan num 2, num of
+ * channels 2, ..] is populated. Else, @chan_list would be a list
+ * of supported channels[chan num 1, chan num 2..]
+ *
+ * Return: void
+ */
+void wlan_add_supported_6ghz_channels(struct wlan_objmgr_psoc *psoc,
+				      struct wlan_objmgr_pdev *pdev,
+				      uint8_t *chan_list,
+				      uint8_t *num_chnl,
+				      bool supp_chan_ie);
+
 #ifdef WLAN_ADAPTIVE_11R
 /**
  * wlan_get_adaptive_11r_enabled() - Function to check if adaptive 11r
@@ -665,6 +707,40 @@ QDF_STATUS
 wlan_cm_roam_invoke(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 		    struct qdf_mac_addr *bssid, qdf_freq_t chan_freq,
 		    enum wlan_cm_source source);
+
+/**
+ * wlan_cm_roam_get_roam_score_algo() - get value of INI
+ * vendor_roam_score_algorithm
+ * @pdev: Pointer to pdev
+ *
+ * Return: value of vendor_roam_score_algorithm
+ */
+uint32_t wlan_cm_roam_get_roam_score_algo(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * wlan_cm_is_bssid_present_on_any_assoc_link() : Check if bssid belongs to any
+ * assoc link
+ * @vdev: Pointer to vdev
+ * @target_bssid: target bssid
+ *
+ * Return: True if bssid belongs to any assoc else return false
+ */
+bool
+wlan_cm_is_bssid_present_on_any_assoc_link(struct wlan_objmgr_vdev *vdev,
+					   struct qdf_mac_addr *target_bssid);
+
+/**
+ * wlan_cm_roam_reject_reassoc_event() - send reassoc reject log event
+ * vendor_roam_score_algorithm
+ * @pdev: Pointer to pdev
+ * @vdev: Pointer to vdev
+ * @connected_bssid: connected BSSID
+ *
+ * Return: none
+ */
+void wlan_cm_roam_reject_reassoc_event(struct wlan_objmgr_pdev *pdev,
+				       struct wlan_objmgr_vdev *vdev,
+				       struct qdf_mac_addr *connected_bssid);
 
 /**
  * cm_is_fast_roam_enabled() - check fast roam enabled or not
@@ -1199,6 +1275,16 @@ wlan_cm_get_roam_offload_bssid(struct wlan_objmgr_vdev *vdev,
 			       struct qdf_mac_addr *bssid);
 
 /**
+ * wlan_cm_clear_roam_offload_bssid() - Clear the roam offload bssid of the sae
+ * roam candidate
+ * @vdev: pointer to vdevs
+ *
+ * Return: None
+ */
+void
+wlan_cm_clear_roam_offload_bssid(struct wlan_objmgr_vdev *vdev);
+
+/**
  * wlan_cm_set_roam_offload_ssid() - Set the roam offload candidate ssid
  *
  * @vdev: pointer to vdev
@@ -1654,6 +1740,11 @@ wlan_cm_get_roam_offload_bssid(struct wlan_objmgr_vdev *vdev,
 }
 
 static inline void
+wlan_cm_clear_roam_offload_bssid(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline void
 wlan_cm_set_roam_offload_ssid(struct wlan_objmgr_vdev *vdev,
 			      uint8_t *ssid, uint8_t len)
 {
@@ -2002,11 +2093,25 @@ QDF_STATUS cm_roam_update_vdev(struct wlan_objmgr_vdev *vdev,
 			       struct roam_offload_synch_ind *sync_ind);
 
 /**
+ * cm_roam_delete_session_for_sl_to_ml_failure() - Delete newly added pe
+ * session in case of sl to ml switch failure
+ * @vdev_id: vdev id
+ *
+ * This function will deleted the newly created pe session for failure in
+ * in sl to ml switch
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+cm_roam_delete_session_for_sl_to_ml_failure(uint8_t vdev_id);
+
+/**
  * cm_roam_pe_sync_callback() - Callback registered at pe, gets invoked when
  * ROAM SYNCH event is received from firmware
  * @sync_ind: Structure with roam synch parameters
  * @vdev_id: vdev id
  * @len: length for bss_description
+ * @new_link_session: bool for whether new pe session was created
  *
  * This is a PE level callback called from CM to complete the roam synch
  * propagation at PE level and also fill the BSS descriptor which will be
@@ -2016,7 +2121,8 @@ QDF_STATUS cm_roam_update_vdev(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS
 cm_roam_pe_sync_callback(struct roam_offload_synch_ind *sync_ind,
-			 uint8_t vdev_id, uint16_t len);
+			 uint8_t vdev_id, uint16_t len,
+			 bool *new_link_session);
 
 /**
  * cm_update_phymode_on_roam() - Update new phymode after
@@ -2219,12 +2325,23 @@ cm_send_ies_for_roam_invoke(struct wlan_objmgr_vdev *vdev, uint16_t dot11_mode);
  */
 bool
 wlan_cm_is_sae_auth_addr_conversion_required(struct wlan_objmgr_vdev *vdev);
+
+void
+wlan_cm_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
+			struct wlan_objmgr_vdev *vdev,
+			struct wlan_roam_start_config *start_req);
 #else
 static inline bool
 wlan_cm_is_sae_auth_addr_conversion_required(struct wlan_objmgr_vdev *vdev)
 {
 	return false;
 }
+
+static inline void
+wlan_cm_roam_mlo_config(struct wlan_objmgr_psoc *psoc,
+			struct wlan_objmgr_vdev *vdev,
+			struct wlan_roam_start_config *start_req)
+{}
 #endif /* WLAN_FEATURE_11BE_MLO */
 
 #if defined(WLAN_FEATURE_11BE_MLO) && defined(WLAN_FEATURE_ROAM_OFFLOAD)
@@ -2335,4 +2452,21 @@ QDF_STATUS
 wlan_update_peer_phy_mode(struct wlan_channel *des_chan,
 			  struct wlan_objmgr_vdev *vdev);
 
+#if (defined(CONNECTIVITY_DIAG_EVENT) && \
+	defined(WLAN_FEATURE_ROAM_OFFLOAD))
+/**
+ * wlan_set_log_instance_id() - Increment the log instance id for each preauth
+ * event received.
+ * @pdev: pdev object
+ * @vdev_id : Vdev id
+ *
+ * Return: QDF_STATUS
+ */
+void
+wlan_set_log_instance_id(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id);
+#else
+static inline void
+wlan_set_log_instance_id(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id)
+{}
+#endif
 #endif  /* WLAN_CM_ROAM_API_H__ */

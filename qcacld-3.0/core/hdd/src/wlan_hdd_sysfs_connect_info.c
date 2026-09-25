@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,6 +26,10 @@
 #include "osif_vdev_sync.h"
 #include "wlan_hdd_sysfs_connect_info.h"
 #include "qwlan_version.h"
+#include "wlan_policy_mgr_ucfg.h"
+#include "wlan_hdd_object_manager.h"
+#include "wlan_hdd_cfg80211.h"
+#include "wlan_hdd_assoc.h"
 
 /**
  * wlan_hdd_version_info() - Populate driver, FW and HW version
@@ -182,6 +186,69 @@ wlan_hdd_add_vht_cap_info(struct hdd_connection_info *conn_info,
 	return length;
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 19, 0)) && \
+	defined(WLAN_FEATURE_11AX)
+/**
+ * wlan_hdd_add_he_cap_info() - Populate HE info
+ * @conn_info: station connection information
+ * @buf: output buffer to hold version info
+ * @buf_avail_len: available buffer length
+ *
+ * Return: No.of bytes populated by this function in buffer
+ */
+static ssize_t
+wlan_hdd_add_he_cap_info(struct hdd_connection_info *conn_info,
+			 uint8_t *buf, ssize_t buf_avail_len)
+{
+	struct ieee80211_he_cap_elem *he_cap_elem;
+	ssize_t length = 0;
+	int ret;
+
+	if (!conn_info->conn_flag.he_present)
+		return length;
+
+	he_cap_elem = &conn_info->he_cap_elem;
+	ret = scnprintf(buf, buf_avail_len,
+			"mac_cap_info = 0x%02x%02x%02x%02x%02x%02x\n"
+			"phy_cap_ch_width = 0x%02x\n"
+			"phy_cap_8_to_23 = 0x%02x%02x\n"
+			"phy_cap_24_to_39 = 0x%02x%02x\n"
+			"phy_cap_40_to_55 = 0x%02x%02x\n"
+			"phy_cap_56_to_71 = 0x%02x%02x\n"
+			"phy_cap_72_to_87 = 0x%02x%02x\n",
+			he_cap_elem->mac_cap_info[5],
+			he_cap_elem->mac_cap_info[4],
+			he_cap_elem->mac_cap_info[3],
+			he_cap_elem->mac_cap_info[2],
+			he_cap_elem->mac_cap_info[1],
+			he_cap_elem->mac_cap_info[0],
+			he_cap_elem->phy_cap_info[0],
+			he_cap_elem->phy_cap_info[2],
+			he_cap_elem->phy_cap_info[1],
+			he_cap_elem->phy_cap_info[4],
+			he_cap_elem->phy_cap_info[3],
+			he_cap_elem->phy_cap_info[6],
+			he_cap_elem->phy_cap_info[5],
+			he_cap_elem->phy_cap_info[8],
+			he_cap_elem->phy_cap_info[7],
+			he_cap_elem->phy_cap_info[10],
+			he_cap_elem->phy_cap_info[9]);
+
+	if (ret <= 0)
+		return length;
+
+	length = ret;
+	return length;
+}
+#else
+static inline ssize_t
+wlan_hdd_add_he_cap_info(struct hdd_connection_info *conn_info,
+			 uint8_t *buf, ssize_t buf_avail_len)
+{
+	return 0;
+}
+#endif
+
 /**
  * hdd_auth_type_str() - Get string for enum csr auth type
  * @auth_type: authentication id
@@ -196,6 +263,8 @@ uint8_t *hdd_auth_type_str(uint32_t auth_type)
 		return "OPEN SYSTEM";
 	case eCSR_AUTH_TYPE_SHARED_KEY:
 		return "SHARED KEY";
+	case eCSR_AUTH_TYPE_SAE_EXT_KEY:
+		return "SAE EXT";
 	case eCSR_AUTH_TYPE_SAE:
 		return "SAE";
 	case eCSR_AUTH_TYPE_AUTOSWITCH:
@@ -247,6 +316,8 @@ uint8_t *hdd_auth_type_str(uint32_t auth_type)
 		return "SUITEB EAP SHA384";
 	case eCSR_AUTH_TYPE_OSEN:
 		return "OSEN";
+	case eCSR_AUTH_TYPE_FT_SAE_EXT_KEY:
+		return "FT SAE EXT";
 	case eCSR_AUTH_TYPE_FT_SAE:
 		return "FT SAE";
 	case eCSR_AUTH_TYPE_FT_SUITEB_EAP_SHA384:
@@ -298,6 +369,39 @@ uint8_t *hdd_dot11_mode_str(uint32_t dot11mode)
 }
 
 #if defined(WLAN_FEATURE_11BE_MLO) && defined(CFG80211_11BE_BASIC)
+static
+uint8_t *hdd_curr_hw_mode_str(uint8_t curr_hw_mode)
+{
+	switch (curr_hw_mode) {
+	case POLICY_MGR_HW_MODE_SINGLE:
+		return "HW MODE SINGLE";
+	case POLICY_MGR_HW_MODE_DBS:
+		return "HW MODE DBS";
+	case POLICY_MGR_HW_MODE_SBS_PASSIVE:
+		return "HW MODE SBS PASSIVE";
+	case POLICY_MGR_HW_MODE_SBS:
+		return "HW MODE SBS";
+	case POLICY_MGR_HW_MODE_DBS_SBS:
+		return "HW MODE DBS SBS";
+	case POLICY_MGR_HW_MODE_DBS_OR_SBS:
+		return "HW MODE DBS OR SBS";
+	case POLICY_MGR_HW_MODE_DBS_2G_5G:
+		return "HW MODE DBS 2g/5g";
+	case POLICY_MGR_HW_MODE_2G_PHYB:
+		return "HW MODE 2g phyB";
+	case POLICY_MGR_HW_MODE_EMLSR:
+		return "HW MODE EMLSR";
+	case POLICY_MGR_HW_MODE_AUX_EMLSR_SINGLE:
+		return "HW MODE EMLSR AUX SINGLE";
+	case POLICY_MGR_HW_MODE_AUX_EMLSR_SPLIT:
+		return "HW MODE EMLSR AUX SPLIT";
+	case POLICY_MGR_HW_MODE_INVALID:
+		return "HW MODE INVALID";
+	}
+
+	return "UNKNOWN";
+}
+
 /**
  * wlan_hdd_connect_info() - Populate connect info
  * @adapter: pointer to sta adapter for which connect info is required
@@ -317,23 +421,18 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 	uint32_t tx_bit_rate, rx_bit_rate;
 	bool is_legacy = false;
 	bool is_standby = false;
+	uint8_t curr_hw_mode;
+	struct wlan_objmgr_vdev *vdev;
+	uint32_t chan_freq;
+	enum phy_ch_width ch_width;
+	struct wlan_channel chan_info;
+	int8_t rssi;
 
 	if (!hdd_cm_is_vdev_associated(adapter->deflink)) {
 		len = scnprintf(buf, buf_avail_len,
 				"STA is not connected\n");
 		if (len >= 0)
 			return length;
-	}
-
-	len = scnprintf(buf, buf_avail_len,
-			"CONNECTION DETAILS\n");
-	if (len <= 0)
-		return length;
-
-	length += len;
-	if (length >= buf_avail_len) {
-		hdd_err("No sufficient buf_avail_len");
-		return buf_avail_len;
 	}
 
 	hdd_sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(adapter->deflink);
@@ -356,19 +455,29 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 		return buf_avail_len;
 	}
 
+	vdev = hdd_objmgr_get_vdev_by_user(adapter->deflink, WLAN_OSIF_CM_ID);
+	if (!vdev)
+		return length;
+
+	curr_hw_mode = ucfg_policy_mgr_find_current_hw_mode(
+						wlan_vdev_get_psoc(vdev));
+	hdd_objmgr_put_vdev_by_user(vdev, WLAN_OSIF_CM_ID);
+
 	len = scnprintf(buf + length, buf_avail_len - length,
 			"ssid: %s\n"
 			"bssid: " QDF_MAC_ADDR_FMT "\n"
 			"connect_time: %s\n"
 			"auth_time: %s\n"
 			"last_auth_type: %s\n"
-			"dot11mode: %s\n",
+			"dot11mode: %s\n"
+			"current HW mode: %s\n",
 			hdd_sta_ctx->conn_info.last_ssid.SSID.ssId,
 			QDF_MAC_ADDR_REF(hdd_sta_ctx->conn_info.bssid.bytes),
 			hdd_sta_ctx->conn_info.connect_time,
 			hdd_sta_ctx->conn_info.auth_time,
 			hdd_auth_type_str(hdd_sta_ctx->conn_info.last_auth_type),
-			hdd_dot11_mode_str(hdd_sta_ctx->conn_info.dot11mode));
+			hdd_dot11_mode_str(hdd_sta_ctx->conn_info.dot11mode),
+			hdd_curr_hw_mode_str(curr_hw_mode));
 	if (len <= 0)
 		return length;
 	length += len;
@@ -384,18 +493,6 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 		if(!is_legacy && conn_info->ieee_link_id == WLAN_INVALID_LINK_ID)
 			continue;
 
-		if (hdd_cm_is_vdev_roaming(link_info)) {
-			len = scnprintf(buf + length, buf_avail_len - length,
-					"Roaming is in progress");
-			if (len <= 0)
-				return length;
-
-			length += len;
-		}
-
-		tx_bit_rate = cfg80211_calculate_bitrate(&conn_info->txrate);
-		rx_bit_rate = cfg80211_calculate_bitrate(&conn_info->rxrate);
-
 		if (!is_legacy) {
 			len = scnprintf(buf + length, buf_avail_len - length,
 					"\nlink_id: %d\n",
@@ -410,8 +507,11 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 			}
 
 			if (link_info->vdev_id == WLAN_INVALID_VDEV_ID &&
-			    conn_info->ieee_link_id != WLAN_INVALID_LINK_ID)
+			    conn_info->ieee_link_id != WLAN_INVALID_LINK_ID) {
 				is_standby = true;
+			} else {
+				is_standby = false;
+			}
 
 			len = scnprintf(buf + length, buf_avail_len - length,
 					"stand-by link: %d\n",
@@ -426,6 +526,43 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 			}
 		}
 
+		/* Avoid to check roaming in progress for standby. Standyby link
+		 * don't have valid vdev.
+		 */
+		if (!is_standby && hdd_cm_is_vdev_roaming(link_info)) {
+			len = scnprintf(buf + length, buf_avail_len - length,
+					"Roaming is in progress");
+			if (len <= 0)
+				return length;
+
+			length += len;
+		}
+
+		tx_bit_rate = cfg80211_calculate_bitrate(&conn_info->txrate);
+		rx_bit_rate = cfg80211_calculate_bitrate(&conn_info->rxrate);
+
+		if (is_standby) {
+			int ret;
+			int link_id = conn_info->ieee_link_id;
+
+			ret = wlan_hdd_get_standby_link_chan_info(adapter,
+								  link_id,
+								  &chan_info);
+			if (ret) {
+				hdd_debug("Failed to get standby link info, linkid: %d",
+					  conn_info->ieee_link_id);
+				return length;
+			}
+
+			chan_freq = chan_info.ch_freq;
+			ch_width = chan_info.ch_width;
+			rssi = WLAN_INVALID_RSSI_VALUE;
+		} else {
+			chan_freq = conn_info->chan_freq;
+			ch_width = conn_info->ch_width;
+			rssi = conn_info->signal;
+		}
+
 		len = scnprintf(buf + length, buf_avail_len - length,
 				"freq: %u\n"
 				"ch_width: %s\n"
@@ -434,9 +571,9 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 				"rx_bit_rate: %u\n"
 				"last_auth_type: %s\n"
 				"dot11mode: %s\n",
-				conn_info->chan_freq,
-				hdd_ch_width_str(conn_info->ch_width),
-				conn_info->signal,
+				chan_freq,
+				hdd_ch_width_str(ch_width),
+				rssi,
 				tx_bit_rate,
 				rx_bit_rate,
 				hdd_auth_type_str(conn_info->last_auth_type),
@@ -467,6 +604,10 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 
 		length += wlan_hdd_add_vht_cap_info(conn_info, buf + length,
 						    buf_avail_len - length);
+
+		length += wlan_hdd_add_he_cap_info(conn_info, buf + length,
+						   buf_avail_len - length);
+
 		if (is_legacy)
 			return length;
 	}
@@ -568,6 +709,10 @@ static ssize_t wlan_hdd_connect_info(struct hdd_adapter *adapter, uint8_t *buf,
 	}
 	length += wlan_hdd_add_vht_cap_info(conn_info, buf + length,
 					    buf_avail_len - length);
+
+	length += wlan_hdd_add_he_cap_info(conn_info, buf + length,
+					   buf_avail_len - length);
+
 	return length;
 }
 #endif
@@ -591,15 +736,98 @@ wlan_hdd_current_time_info(uint8_t *buf, ssize_t buf_avail_len)
 	return length;
 }
 
+static ssize_t
+wlan_hdd_p2p_connection_info(struct hdd_adapter *adapter,
+			     uint8_t *buf, ssize_t buf_avail_len)
+{
+	struct wlan_hdd_link_info *link_info = adapter->deflink;
+	struct hdd_station_ctx *sta_ctx;
+	struct hdd_connection_info *conn_info;
+	uint32_t tx_bit_rate, rx_bit_rate;
+	ssize_t length = 0;
+	int ret_val;
+
+	if (!link_info)
+		return length;
+
+	sta_ctx = WLAN_HDD_GET_STATION_CTX_PTR(link_info);
+	if (!sta_ctx) {
+		hdd_err("Invalid STA_CTX");
+		return length;
+	}
+
+	if (!hdd_cm_is_vdev_associated(link_info)) {
+		ret_val = scnprintf(buf, buf_avail_len,
+				    "P2P_Client is not connected\n");
+		if (ret_val >= 0)
+			return length;
+	}
+
+	ret_val = scnprintf(buf, buf_avail_len,
+			    "\nP2P_CLIENT CONNECTION DETAILS\n");
+	if (ret_val <= 0)
+		return length;
+
+	length += ret_val;
+	if (length >= buf_avail_len) {
+		hdd_err("No sufficient buf_avail_len");
+		return buf_avail_len;
+	}
+
+	conn_info = &sta_ctx->conn_info;
+	tx_bit_rate = cfg80211_calculate_bitrate(&conn_info->txrate);
+	rx_bit_rate = cfg80211_calculate_bitrate(&conn_info->rxrate);
+
+	ret_val = scnprintf(buf + length, buf_avail_len - length,
+			    "ssid = " QDF_SSID_FMT "\n"
+			    "bssid = " QDF_MAC_ADDR_FMT "\n"
+			    "connect_time = %s\n"
+			    "auth_time = %s\n"
+			    "freq = %u\n"
+			    "ch_width = %s\n"
+			    "signal = %ddBm\n"
+			    "tx_bit_rate = %u\n"
+			    "rx_bit_rate = %u\n"
+			    "last_auth_type = %s\n"
+			    "dot11mode = %s\n",
+			    QDF_SSID_REF(conn_info->ssid.SSID.length,
+					 conn_info->ssid.SSID.ssId),
+			    QDF_MAC_ADDR_REF(conn_info->bssid.bytes),
+			    conn_info->connect_time,
+			    conn_info->auth_time,
+			    conn_info->chan_freq,
+			    hdd_ch_width_str(conn_info->ch_width),
+			    conn_info->signal,
+			    tx_bit_rate,
+			    rx_bit_rate,
+			    hdd_auth_type_str(conn_info->last_auth_type),
+			    hdd_dot11_mode_str(conn_info->dot11mode));
+
+	if (ret_val < 0)
+		return length;
+
+	length += ret_val;
+
+	return length;
+}
+
 static ssize_t __show_connect_info(struct net_device *net_dev, char *buf,
 				   ssize_t buf_avail_len)
 {
 	struct hdd_adapter *adapter = netdev_priv(net_dev);
 	struct hdd_context *hdd_ctx;
-	ssize_t len;
-	int ret_val;
+	ssize_t len = 0;
+	int ret_val = 0;
+	enum QDF_OPMODE opmode;
 
 	hdd_enter_dev(net_dev);
+
+	if (hdd_validate_adapter(adapter))
+		goto exit;
+
+	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	if (wlan_hdd_validate_context(hdd_ctx))
+		goto exit;
 
 	len = wlan_hdd_current_time_info(buf, buf_avail_len);
 	if (len >= buf_avail_len) {
@@ -608,13 +836,18 @@ static ssize_t __show_connect_info(struct net_device *net_dev, char *buf,
 		goto exit;
 	}
 
-	ret_val = hdd_validate_adapter(adapter);
-	if (0 != ret_val)
-		return len;
+	len += wlan_hdd_version_info(hdd_ctx, buf + len, buf_avail_len - len);
+	if (len >= buf_avail_len) {
+		hdd_err("No sufficient buf_avail_len");
+		len = buf_avail_len;
+		goto exit;
+	}
 
-	if (adapter->device_mode != QDF_STA_MODE) {
+	opmode = adapter->device_mode;
+
+	if ((opmode != QDF_STA_MODE) && (opmode != QDF_P2P_CLIENT_MODE)) {
 		ret_val = scnprintf(buf + len, buf_avail_len - len,
-				    "Interface is not operating STA Mode\n");
+				    "Not in STA or P2P_CLIENT Mode\n");
 		if (ret_val <= 0)
 			goto exit;
 
@@ -622,25 +855,22 @@ static ssize_t __show_connect_info(struct net_device *net_dev, char *buf,
 		goto exit;
 	}
 
-	if (len >= buf_avail_len) {
-		hdd_err("No sufficient buf_avail_len");
-		len = buf_avail_len;
+	if (opmode == QDF_STA_MODE) {
+		len += wlan_hdd_connect_info(adapter, buf + len,
+					     buf_avail_len - len);
+		if (len >= buf_avail_len) {
+			hdd_err("No sufficient buf_avail_len");
+			len = buf_avail_len;
+		}
 		goto exit;
 	}
 
-	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
-	ret_val = wlan_hdd_validate_context(hdd_ctx);
-	if (0 != ret_val)
-		goto exit;
-
-	len += wlan_hdd_version_info(hdd_ctx, buf + len, buf_avail_len - len);
-
+	len += wlan_hdd_p2p_connection_info(adapter, buf + len,
+					    buf_avail_len - len);
 	if (len >= buf_avail_len) {
 		hdd_err("No sufficient buf_avail_len");
 		len = buf_avail_len;
-		goto exit;
 	}
-	len += wlan_hdd_connect_info(adapter, buf + len, buf_avail_len - len);
 
 exit:
 	hdd_exit();

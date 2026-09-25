@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,6 +36,7 @@
 #ifdef WLAN_FEATURE_11BE_MLO
 #include "wlan_mlo_mgr_public_structs.h"
 #endif
+#include "wlan_objmgr_global_obj.h"
 
 #define ASCII_SPACE_CHARACTER 32
 
@@ -498,6 +500,19 @@ static inline bool util_mdie_match(uint16_t mobility_domain,
 	return false;
 }
 
+static inline bool
+util_is_local_generated_entry(bool is_local_gen,
+			      struct scan_cache_entry *scan_entry)
+{
+	if (!is_local_gen)
+		return true;
+
+	if (scan_entry->is_gen_entry)
+		return true;
+
+	return false;
+}
+
 /**
  * util_scan_entry_ssid() - function to read ssid of scan entry
  * @scan_entry: scan entry
@@ -714,6 +729,9 @@ util_scan_copy_beacon_data(struct scan_cache_entry *new_entry,
 	struct ie_list *ie_lst;
 	uint8_t i;
 
+	if (!scan_entry->raw_frame.ptr || !scan_entry->raw_frame.len)
+		return QDF_STATUS_E_EMPTY;
+
 	new_entry->raw_frame.ptr =
 		qdf_mem_malloc_atomic(scan_entry->raw_frame.len);
 	if (!new_entry->raw_frame.ptr)
@@ -801,6 +819,9 @@ util_scan_copy_beacon_data(struct scan_cache_entry *new_entry,
 		ie_lst->t2lm[i] = conv_ptr(ie_lst->t2lm[i], old_ptr, new_ptr);
 #endif
 	ie_lst->qcn = conv_ptr(ie_lst->qcn, old_ptr, new_ptr);
+	ie_lst->wifi6_rsno = conv_ptr(ie_lst->wifi6_rsno, old_ptr, new_ptr);
+	ie_lst->rsnxo = conv_ptr(ie_lst->rsnxo, old_ptr, new_ptr);
+	ie_lst->wifi7_rsno = conv_ptr(ie_lst->wifi7_rsno, old_ptr, new_ptr);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -962,14 +983,52 @@ util_scan_entry_xrates(struct scan_cache_entry *scan_entry)
  * util_scan_entry_rsn()- function to read rsn IE
  * @scan_entry: scan entry
  *
- * API, function to read rsn IE
+ * API, function to read rsn IE and return the
+ * pointer to RSN data
  *
- * Return: rsnie or NULL if ie is not present
+ *
+ * Return: rsnie data or NULL if ie is not present
  */
 static inline uint8_t*
 util_scan_entry_rsn(struct scan_cache_entry *scan_entry)
 {
 	return scan_entry->ie_list.rsn;
+}
+
+/**
+ * util_scan_entry_wifi6_rsno()- function to read wifi6 RSNO/RSNO1 element
+ * @scan_entry: scan entry
+ *
+ * Return: wifi6 RSN if present or NULL if ie is not present
+ */
+static inline uint8_t*
+util_scan_entry_wifi6_rsno(struct scan_cache_entry *scan_entry)
+{
+	return scan_entry->ie_list.wifi6_rsno;
+}
+
+/**
+ * util_scan_entry_wifi7_rsno()- function to read wifi7 RSNO/RSNO2 element
+ * @scan_entry: scan entry
+ *
+ * Return: wifi7 RSN if present or NULL if ie is not present
+ */
+static inline uint8_t*
+util_scan_entry_wifi7_rsno(struct scan_cache_entry *scan_entry)
+{
+	return scan_entry->ie_list.wifi7_rsno;
+}
+
+/*
+ * util_scan_entry_rsnxo() - function to read RSNXO element
+ * @scan_entry: scan entry
+ *
+ * Return: RSNXO if present or NULL if ie is not present
+ */
+static inline uint8_t*
+util_scan_entry_rsnxo(struct scan_cache_entry *scan_entry)
+{
+	return scan_entry->ie_list.rsnxo;
 }
 
 /**
@@ -1007,24 +1066,6 @@ util_scan_entry_single_pmk(struct wlan_objmgr_psoc *psoc,
 	return false;
 }
 #endif
-
-/**
- * util_scan_get_rsn_len()- function to read rsn IE length if present
- * @scan_entry: scan entry
- *
- * API, function to read rsn length if present
- *
- * Return: rsnie length
- */
-static inline uint8_t
-util_scan_get_rsn_len(struct scan_cache_entry *scan_entry)
-{
-	if (scan_entry && scan_entry->ie_list.rsn)
-		return scan_entry->ie_list.rsn[1] + 2;
-	else
-		return 0;
-}
-
 
 /**
  * util_scan_entry_wpa() - function to read wpa IE
@@ -1333,20 +1374,6 @@ util_scan_entry_age(struct scan_cache_entry *scan_entry)
 }
 
 /**
- * util_scan_mlme_info() - function to read mlme info struct
- * @scan_entry: scan entry
- *
- * API, function to read mlme info struct
- *
- * Return: mlme info
- */
-static inline struct mlme_info*
-util_scan_mlme_info(struct scan_cache_entry *scan_entry)
-{
-	return &scan_entry->mlme_info;
-}
-
-/**
  * util_scan_entry_bss_type() - function to read bss type
  * @scan_entry: scan entry
  *
@@ -1543,20 +1570,6 @@ util_scan_entry_get_extcap(struct scan_cache_entry *scan_entry,
 }
 
 /**
- * util_scan_entry_mlme_info() - function to read MLME info
- * @scan_entry: scan entry
- *
- * API, function to read MLME info
- *
- * Return: MLME info or NULL if it is not present
- */
-static inline struct mlme_info*
-util_scan_entry_mlme_info(struct scan_cache_entry *scan_entry)
-{
-	return &(scan_entry->mlme_info);
-}
-
-/**
 * util_scan_entry_mcst() - function to read mcst IE
 * @scan_entry:scan entry
 *
@@ -1612,6 +1625,65 @@ util_scan_entry_heop(struct scan_cache_entry *scan_entry)
 	return scan_entry->ie_list.heop;
 }
 
+#ifdef WLAN_FEATURE_11BE_MLO
+static inline uint8_t*
+util_scan_entry_bv_ml_ie(struct scan_cache_entry *scan_entry)
+{
+	return scan_entry->ie_list.multi_link_bv;
+}
+
+static inline uint8_t*
+util_scan_entry_t2lm(struct scan_cache_entry *scan_entry)
+{
+	return scan_entry->ie_list.t2lm[0];
+}
+
+/**
+ * util_scan_entry_t2lm_len() - API to get t2lm IE length
+ * @scan_entry: scan entry
+ *
+ * Return, Length or 0 if ie is not present
+ */
+uint32_t util_scan_entry_t2lm_len(struct scan_cache_entry *scan_entry);
+
+/**
+ * util_scan_entry_reset_bv_ml_ie()
+ * @scan_entry: scan entry
+ *
+ * API function to reset bv_ml_ie
+ *
+ * Return: void
+ */
+static inline void
+util_scan_entry_reset_bv_ml_ie(struct scan_cache_entry *scan_entry)
+{
+	scan_entry->ie_list.multi_link_bv = NULL;
+}
+#else
+static inline uint8_t*
+util_scan_entry_bv_ml_ie(struct scan_cache_entry *scan_entry)
+{
+	return NULL;
+}
+
+static inline uint8_t*
+util_scan_entry_t2lm(struct scan_cache_entry *scan_entry)
+{
+	return NULL;
+}
+
+static inline uint32_t
+util_scan_entry_t2lm_len(struct scan_cache_entry *scan_entry)
+{
+	return 0;
+}
+
+static inline void
+util_scan_entry_reset_bv_ml_ie(struct scan_cache_entry *scan_entry)
+{
+}
+#endif
+
 #ifdef WLAN_FEATURE_11BE
 /**
  * util_scan_entry_ehtcap() - function to read eht caps vendor ie
@@ -1646,6 +1718,14 @@ util_scan_entry_bw_ind(struct scan_cache_entry *scan_entry)
 {
 	return scan_entry->ie_list.bw_ind;
 }
+
+static inline void
+util_scan_entry_reset_11be_caps(struct scan_cache_entry *scan_entry)
+{
+	scan_entry->ie_list.ehtcap = NULL;
+	scan_entry->ie_list.ehtop = NULL;
+	util_scan_entry_reset_bv_ml_ie(scan_entry);
+}
 #else
 
 static inline uint8_t*
@@ -1659,45 +1739,10 @@ util_scan_entry_bw_ind(struct scan_cache_entry *scan_entry)
 {
 	return NULL;
 }
-#endif
 
-#ifdef WLAN_FEATURE_11BE_MLO
-static inline uint8_t*
-util_scan_entry_bv_ml_ie(struct scan_cache_entry *scan_entry)
+static inline void
+util_scan_entry_reset_11be_caps(struct scan_cache_entry *scan_entry)
 {
-	return scan_entry->ie_list.multi_link_bv;
-}
-
-static inline uint8_t*
-util_scan_entry_t2lm(struct scan_cache_entry *scan_entry)
-{
-	return scan_entry->ie_list.t2lm[0];
-}
-
-/**
- * util_scan_entry_t2lm_len() - API to get t2lm IE length
- * @scan_entry: scan entry
- *
- * Return, Length or 0 if ie is not present
- */
-uint32_t util_scan_entry_t2lm_len(struct scan_cache_entry *scan_entry);
-#else
-static inline uint8_t*
-util_scan_entry_bv_ml_ie(struct scan_cache_entry *scan_entry)
-{
-	return NULL;
-}
-
-static inline uint8_t*
-util_scan_entry_t2lm(struct scan_cache_entry *scan_entry)
-{
-	return NULL;
-}
-
-static inline uint32_t
-util_scan_entry_t2lm_len(struct scan_cache_entry *scan_entry)
-{
-	return 0;
 }
 #endif
 
@@ -1759,30 +1804,6 @@ util_scan_entry_fils_indication(struct scan_cache_entry *scan_entry)
 }
 
 /**
- * util_get_last_scan_time() - function to get last scan time on this pdev
- * @vdev: vdev object
- *
- * API, function to read last scan time on this pdev
- *
- * Return: qdf_time_t
- */
-qdf_time_t
-util_get_last_scan_time(struct wlan_objmgr_vdev *vdev);
-
-/**
- * util_scan_entry_update_mlme_info() - function to update mlme info
- * @pdev: pdev object
- * @scan_entry: scan entry object
- *
- * API, function to update mlme info in scan DB
- *
- * Return: QDF_STATUS
- */
-QDF_STATUS
-util_scan_entry_update_mlme_info(struct wlan_objmgr_pdev *pdev,
-	struct scan_cache_entry *scan_entry);
-
-/**
  * util_scan_is_hidden_ssid() - function to check if ssid is hidden
  * @ssid: struct ie_ssid object
  *
@@ -1840,14 +1861,32 @@ util_scan_entry_mbo_oce(struct scan_cache_entry *scan_entry)
  * util_scan_entry_rsnxe() - function to read RSNXE ie
  * @scan_entry: scan entry
  *
- * API, function to read RSNXE ie
+ * API, function to read RSNXE data
  *
- * Return: RSNXE ie
+ * Return: RSNXE data
+ * Note: Use util_scan_get_rsnx_len() to get the length of RSNXE data
  */
 static inline uint8_t *
 util_scan_entry_rsnxe(struct scan_cache_entry *scan_entry)
 {
 	return scan_entry->ie_list.rsnxe;
+}
+
+/**
+ * util_scan_get_rsnx_len()- function to read RSNX IE length if present
+ * @scan_entry: scan entry
+ *
+ * API, function to read rsn length. If present return the len of the
+ * RSNX data
+ *
+ * Return: rsnie data length
+ */
+static inline uint8_t
+util_scan_get_rsnx_len(struct scan_cache_entry *scan_entry)
+{
+	if (scan_entry->ie_list.rsnxe)
+		return scan_entry->ie_list.rsnxe[1];
+	return 0;
 }
 
 /**
@@ -1955,6 +1994,37 @@ static inline bool util_scan_is_null_ssid(struct wlan_ssid *ssid)
 	return false;
 }
 
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * util_scan_get_ml_info(): Dump ml scan info
+ * @scan_params: new received entry
+ * @log_str: Buffer pointer
+ * @str_len: max string length
+ * @len: already filled length in buffer
+ *
+ * Return: length filled in buffer
+ */
+static inline uint32_t
+util_scan_get_ml_info(struct scan_cache_entry *scan_params,
+		      char *log_str, uint32_t str_len, uint32_t len)
+{
+	if (qdf_is_macaddr_zero(&scan_params->ml_info.mld_mac_addr))
+		return 0;
+
+	return qdf_scnprintf(log_str + len, str_len - len,
+		", MLD " QDF_MAC_ADDR_FMT " links %d",
+		QDF_MAC_ADDR_REF(scan_params->ml_info.mld_mac_addr.bytes),
+		scan_params->ml_info.num_links);
+}
+#else
+static inline uint32_t
+util_scan_get_ml_info(struct scan_cache_entry *scan_params,
+		      char *log_str, uint32_t str_len, uint32_t len)
+{
+	return 0;
+}
+#endif
+
 /**
  * util_scan_get_6g_oper_channel() - function to get primary channel
  * from he op IE
@@ -1972,6 +2042,17 @@ util_scan_get_6g_oper_channel(uint8_t *he_op_ie)
 }
 #endif
 
+/**
+ * util_scan_get_phymode() - function to get phy mode
+ * @pdev : pdev object
+ * @scan_params: scan entry
+ *
+ * Return: phy mode.
+ */
+enum wlan_phymode
+util_scan_get_phymode(struct wlan_objmgr_pdev *pdev,
+		      struct scan_cache_entry *scan_params);
+
 /*
  * util_is_bssid_non_tx() - Is the given BSSID a non-tx neighbor
  * entry in the RNR db
@@ -1985,13 +2066,77 @@ bool util_is_bssid_non_tx(struct wlan_objmgr_psoc *psoc,
 			  struct qdf_mac_addr *bssid, qdf_freq_t freq);
 
 /**
- * util_scan_get_phymode() - function to get phy mode
- * @pdev : pdev object
- * @scan_params: scan entry
+ * util_is_scan_entry_non_tx_bssid - Check if a scan entry corresponds to a
+ * non-transmitting BSSID
  *
- * Return: phy mode.
+ * @scan_entry: Pointer to the scan cache entry to be checked
+ *
+ * This function determines whether a given scan cache entry represents a
+ * non-transmitting BSSID (NTB) based on the BSSID index information stored
+ * within the entry. A non-transmitting BSSID is typically part of a MBSSID
+ * setup where the BSSID is advertised but does not actively transmit frames.
+ *
+ * Return: true if the scan entry represents a non-transmitting BSSID,
+ * false otherwise
  */
-enum wlan_phymode
-util_scan_get_phymode(struct wlan_objmgr_pdev *pdev,
-		      struct scan_cache_entry *scan_params);
+bool util_is_scan_entry_non_tx_bssid(struct scan_cache_entry *scan_entry);
+
+/**
+ * util_scan_entry_renew_timestamp() - function to renew timestamp of scan entry
+ * @pdev: pdev
+ * @scan_entry: scan entry
+ *
+ * API, function to renew timestamp of scan entry to avoid aging out
+ *
+ * Return: void
+ */
+void
+util_scan_entry_renew_timestamp(struct wlan_objmgr_pdev *pdev,
+				struct scan_cache_entry *scan_entry);
+
+/*
+ * util_scan_entry_rsn_by_gen() = Get the RSN(O) IE based on the generation
+ * specified
+ * @scan_entry: pointer to scan entry
+ * @rsno_gen: Generation of RSN used
+ *
+ * Return: Pointer to RSN(O) IE
+ */
+uint8_t *util_scan_entry_rsn_by_gen(struct scan_cache_entry *scan_entry,
+				    uint8_t rsno_gen);
+
+/*
+ * util_scan_entry_rsnxe_by_gen() = Get the RSNX(O) IE based on the generation
+ * specified
+ * @scan_entry: pointer to scan entry
+ * @rsno_gen: Generation of RSN used
+ *
+ * Return: Pointer to RSNX(O) IE
+ */
+uint8_t *util_scan_entry_rsnxe_by_gen(struct scan_cache_entry *scan_entry,
+				      uint8_t rsno_gen);
+
+/*
+ * util_get_rsnxe_len_by_gen() - Get the RSNX(O) IE length based on the
+ * generation specified
+ * @scan_entry: pointer to scan entry
+ * @rsno_gen: Generation of RSN used
+ *
+ * Return: Length of RSNX(O) IE
+ */
+uint8_t util_get_rsnxe_len_by_gen(struct scan_cache_entry *scan_entry,
+				  uint8_t rsno_gen);
+/*
+ * util_scan_is_valid_rsn_present() - API to validate the RSN(O) IE
+ * @entry: scan entry
+ * @params: security params of the RSN IE
+ *
+ * Parse each of the RSN(O) elements starting from legacy RSN and the frame is
+ * eligible is only if one of the RSN(O) IEs have a valid crypto configuration.
+ *
+ * Return: QDF STATUS
+ */
+QDF_STATUS
+util_scan_is_valid_rsn_present(struct scan_cache_entry *entry,
+			       struct wlan_crypto_params *params);
 #endif

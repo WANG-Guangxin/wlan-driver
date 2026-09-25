@@ -25,7 +25,7 @@
 #ifdef CONNECTION_ROAMING_CFG
 # define CONDTIMSKIPPING_NUMBER_MIN 0
 # define CONDTIMSKIPPING_NUMBER_MAX 10
-# define CONDTIMSKIPPING_NUMBER_DEFAULT 3
+# define CONDTIMSKIPPING_NUMBER_DEFAULT 5
 #else
 # define CONDTIMSKIPPING_NUMBER_MIN 0
 # define CONDTIMSKIPPING_NUMBER_MAX 10
@@ -168,6 +168,54 @@
 
 /*
  * <ini>
+ * gEnableTelescopicDTIM - Enable Telescopic DTIM
+ * @Min: 0
+ * @Max: 9
+ * @Default: 0
+ *
+ * This ini is used to enable/disable Telescopic DTIM.
+ *
+ * 0 - Disable Telescopic DTIM
+ * 1 to 9 - Telescopic DTIM is enabled, LI (in unit of BI) selected by Telescopic
+ *          DTIM will not exceed the value.
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_PMO_ENABLE_TELESCOPIC_DTIM CFG_INI_UINT( \
+	"gEnableTelescopicDTIM", \
+	0, \
+	9, \
+	0, \
+	CFG_VALUE_OR_DEFAULT, \
+	"Enable Telescopic DTIM")
+
+/*
+ * <ini>
+ * gMinTelesDTIMLevel - Configure minimum DTIM level of Telescopic DTIM
+ * @Min: 0
+ * @Max: 3
+ * @Default: 1
+ *
+ * The value of this INI is used to set minimum allowed DTIM level
+ * used by Telescopic DTIM.
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_PMO_MIN_TELESDTIM_LVL CFG_INI_UINT( \
+	"gMinTelesDTIMLevel", \
+	0, \
+	3, \
+	1, \
+	CFG_VALUE_OR_DEFAULT, \
+	"minimum Telescopic DTIM level")
+
+
+/*
+ * <ini>
  * gEnableModulatedDTIM/ConDTIMSkipping_Number - Enable/Disable modulated DTIM
  * feature
  * @Min: 0
@@ -274,6 +322,36 @@
 	1, \
 	CFG_VALUE_OR_DEFAULT, \
 	"Optimized Power Management")
+
+/*
+ * <ini>
+ * enable_teles_dtim_only_on_system_suspend - enable telescopic DTIM
+ * only on system suspend display off case
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This ini is used to set telescopic DTIM configuration:
+ * Current values of enable_teles_dtim_only_on_system_suspend:
+ * 0 -> Telescopic DTIM will run when below conditions met:
+ *      - system suspend or run time PM.
+ *      - 'gEnableTelescopicDTIM' is greater than 0
+ * 1 -> Telescopic DTIM will run when below conditions met:
+ *      - system suspend
+ *      - 'gEnableTelescopicDTIM' is greater than 0
+ *
+ * Related: None
+ *
+ * Supported Feature: Telescopic DTIM
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_PMO_TELES_DTIM_ONLY_ON_SYS_SUSPEND CFG_INI_BOOL( \
+	"enable_teles_dtim_only_on_system_suspend", \
+	0, \
+	"Telescopic DTIM only on System suspend wow")
 
 /*
  * <ini>
@@ -768,6 +846,56 @@
 	0, \
 	"enable/disable ICMP offload")
 
+/*
+ * <ini>
+ * gWowWakeupEventMask - WoW wake up source event configuration (32bits)
+ * @Min: 0
+ * @Max: 0xFFFFFFFF
+ * @Default: 0xFFFFFFFF
+ *
+ * This ini is used to configure WoW wake up sources. Bit defined in
+ * WOW_WAKE_EVENT_TYPE in wmi_unified.h. Bit set means wakeup source enabled
+ * bit clear means wake up source disabled
+ * This ini cover lower 32 bits
+ *
+ * Supported Feature: STA WoW
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_WOW_WAKEUP_EVENT_MASK CFG_INI_UINT( \
+	"gWowWakeupEventMask", \
+	0, \
+	0xFFFFFFFF, \
+	0xFFFFFFFF, \
+	CFG_VALUE_OR_DEFAULT, "WoW Wakeup Event Mask Lower 32bits")
+
+/*
+ * <ini>
+ * gWowWakeupEventMaskH32 - WoW wake up source event configuration (32bits)
+ * @Min: 0
+ * @Max: 0xFFFFFFFF
+ * @Default: 0xFFFFFFFF
+ *
+ * This ini is used to configure WoW wake up sources. Bit defined in
+ * WOW_WAKE_EVENT_TYPE in wmi_unified.h. Bit set means wakeup source enabled
+ * bit clear means wake up source disabled
+ * This ini cover higher 32 bits
+ *
+ * Supported Feature: STA WoW
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_WOW_WAKEUP_EVENT_MASK_H32 CFG_INI_UINT( \
+	"gWowWakeupEventMaskH32", \
+	0, \
+	0xFFFFFFFF, \
+	0xFFFFFFFF, \
+	CFG_VALUE_OR_DEFAULT, "WoW Wakeup Event Mask Higher 32bits")
+
 #define CFG_PMO_COMMON_ALL \
 	CFG(CFG_ENABLE_SAP_SUSPEND) \
 	CFG(CFG_PMO_ENABLE_HOST_ARPOFFLOAD) \
@@ -776,6 +904,8 @@
 	CFG(CFG_PMO_ENABLE_HOST_NSOFFLOAD) \
 	CFG(CFG_PMO_ENABLE_IGMP_OFFLOAD) \
 	CFG(CFG_PMO_ENABLE_DYNAMIC_DTIM) \
+	CFG(CFG_PMO_ENABLE_TELESCOPIC_DTIM) \
+	CFG(CFG_PMO_MIN_TELESDTIM_LVL) \
 	CFG(CFG_PMO_ENABLE_MODULATED_DTIM) \
 	CFG(CFG_PMO_ENABLE_FORCED_DTIM) \
 	CFG(CFG_PMO_MC_ADDR_LIST_ENABLE) \
@@ -788,6 +918,7 @@
 	CFG(CFG_PMO_WOW_DATA_INACTIVITY_TIMEOUT) \
 	CFG(CFG_PMO_WOW_SPEC_WAKE_INTERVAL) \
 	CFG(CFG_RA_RATE_LIMIT_INTERVAL) \
+	CFG(CFG_PMO_TELES_DTIM_ONLY_ON_SYS_SUSPEND) \
 	CFG(CFG_PMO_MOD_DTIM_ON_SYS_SUSPEND) \
 	CFG(CFG_ENABLE_BUS_SUSPEND_IN_SAP_MODE) \
 	CFG(CFG_ENABLE_BUS_SUSPEND_IN_GO_MODE)\
@@ -797,6 +928,8 @@
 	CFG(CFG_HOST_ACTION_ON_PAGEFAULT) \
 	CFG(CFG_MIN_PAGEFAULT_WAKEUPS_FOR_ACTION) \
 	CFG(CFG_INTERVAL_FOR_PAGEFAULT_WAKEUP_COUNT) \
-	CFG(CFG_SSR_FREQUENCY_ON_PAGEFAULT)
+	CFG(CFG_SSR_FREQUENCY_ON_PAGEFAULT) \
+	CFG(CFG_WOW_WAKEUP_EVENT_MASK) \
+	CFG(CFG_WOW_WAKEUP_EVENT_MASK_H32)
 
 #endif /* WLAN_PMO_COMMON_CFG_H__ */

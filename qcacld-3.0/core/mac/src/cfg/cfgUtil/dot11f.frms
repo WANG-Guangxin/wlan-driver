@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2006-2007, 2014-2018, 2020-2021 The Linux Foundation.
  * All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -102,6 +102,7 @@ const EID_OBSS_SCAN_PARAMETERS       =  74;
 const EID_FT_RIC_DESCRIPTOR          =  75;
 const EID_MSCS_STATUS                =  76;
 const EID_BSS_MAX_IDLE_PERIOD        =  90;
+const EID_CHANNEL_USAGE              =  97;
 const EID_LINK_IDENTIFIER            = 101;
 const EID_PTI_CONTROL                = 105;
 const EID_PU_BUFFER_STATUS           = 106;
@@ -122,6 +123,7 @@ const EID_RNR_IE                     = 201;
 const EID_VENDOR_SPECIFIC            = 221;
 const EID_FILS_INDICATION            = 240;
 const EID_FRAGMENT_IE                = 242;
+const EID_RSNXE                      = 244;
 /**
  * Extended Element ID
  *
@@ -222,6 +224,8 @@ const TLV_P2P_GROUP_ID                       =  15;
 const TLV_P2P_INTERFACE                      =  16;
 const TLV_OPERATING_CHANNEL                  =  17;
 const TLV_INVITATION_FLAGS                   =  18;
+const TLV_P2P_EXTN_CAPABILITY                =  29;
+const TLV_P2P_WLAN_AP_INFO                   =  30;
 const TLV_P2P_VENDOR_SPECIFIC                = 221;
 
 
@@ -482,6 +486,11 @@ FF vendor_oui (3)
 FF vendor_action_subtype (1)
 {
     subtype, 1;
+}
+
+FF count (1)
+{
+    count, 1;
 }
 
 IE addba_extn_element(EID_ADDBA_EXTN_ELEMENT)
@@ -1084,7 +1093,6 @@ TLV P2PGroupInfo ( TLV_P2P_GROUP_INFO ) ( 1 : 2 ) LSB
     P2PClientInfoDesc[0..1024];
 }
 
-
 /**
  * \brief P2P Interface Attribute
  */
@@ -1457,11 +1465,11 @@ IE RSN (EID_RSN)                          // 7.3.2.25
     OPTIONAL akm_suite_cnt, 2;
     // Again, I see nothing in the Standard explicitly limiting the number of
     // AKM suite selectors other than the maximum size of an IE.
-    akm_suite[4][0..6] COUNTIS akm_suite_cnt;
+    akm_suite[4][0..8] COUNTIS akm_suite_cnt;
     OPTIONAL RSN_Cap[2];
     // Finally, the IE may contain zero or more PMKIDs:
     OPTIONAL pmkid_count, 2;
-    pmkid[16][0..4] COUNTIS pmkid_count;
+    pmkid[16][0..11] COUNTIS pmkid_count;
     OPTIONAL gp_mgmt_cipher_suite[4];
 }
 
@@ -2472,6 +2480,11 @@ IE P2PIEOpaque (EID_VENDOR_SPECIFIC) OUI ( 0x50, 0x6F, 0x9A, 0x09 )
     data[ 2..249 ];
 }
 
+IE P2P2IEOpaque (EID_VENDOR_SPECIFIC) OUI ( 0x50, 0x6F, 0x9A, 0x28 )
+{
+    data[ 2..249 ];
+}
+
 IE WFDIEOpaque (EID_VENDOR_SPECIFIC) OUI ( 0x50, 0x6F, 0x9A, 0x0A )
 {
     data[ 2..249 ];
@@ -2509,6 +2522,12 @@ IE bss_max_idle_period (EID_BSS_MAX_IDLE_PERIOD)
         prot_keep_alive_reqd: 1;
         reserved:             7;
     }
+}
+
+IE channel_usage (EID_CHANNEL_USAGE)
+{
+    usage_mode, 1;
+    channel_entry[0..254];
 }
 
 IE VHTCaps (EID_VHT_CAPABILITIES)
@@ -2597,7 +2616,7 @@ IE transmit_power_env (EID_TRANSMIT_POWER_ENVELOPE)
                        ext_count: 4;
                        reserved: 4;
                }
-               max_tx_psd_power[8];
+               max_tx_psd_power[15];
        }
        ext_max_tx_power_reg_eirp (max_tx_pwr_interpret IS 2) {
                max_tx_power_for_320, 1;
@@ -2608,7 +2627,18 @@ IE transmit_power_env (EID_TRANSMIT_POWER_ENVELOPE)
                        ext_count: 4;
                        reserved: 4;
                }
-               max_tx_psd_power[8];
+               max_tx_psd_power[15];
+       }
+       ext_max_tx_power_addn_reg_eirp (max_tx_pwr_interpret IS 4) {
+	       max_tx_power_for_320, 1;
+       }
+       ext_max_tx_power_addn_reg_psd (max_tx_pwr_interpret IS 5) {
+               //ext_transmit_psd_info, 1;
+               {
+                       ext_count: 4;
+                       reserved: 4;
+               }
+               max_tx_psd_power[15];
        }
 
     };
@@ -2633,7 +2663,7 @@ IE bw_ind_element (EID_EXTN_ID_ELEMENT) OUI (0x87)
 IE ChannelSwitchWrapper (EID_CHANNEL_SWITCH_WRAPPER)
 {
     OPTIE IE  WiderBWChanSwitchAnn;
-    OPTIE IE  transmit_power_env;
+    OPTIE transmit_power_env[0..8];
     OPTIE IE  bw_ind_element;
 }
 
@@ -2731,7 +2761,7 @@ IE reduced_neighbor_report (EID_RNR_IE)
 
 IE ExtCap (EID_EXT_CAP)
 {
-    bytes[1..15];
+    bytes[1..255];
 }
 
 IE HTCaps (EID_HT_CAPABILITIES)
@@ -2907,6 +2937,7 @@ const TLV_HE_DL_MUMIMO_SUPPP_ATTR_ID      = 8;
 const TLV_HE_MCS_11_12_ATTR_ID            = 9;
 const TLV_EDCA_PIFS_PARAM_ATTR_ID         = 13;
 const TLV_ECSA_TARGET_TSF_INFO_ATTR_ID    = 14;
+const TLV_TARGET_CCK_SUPPORT_ATTR_ID      = 15;
 
 TLV qcn_version(TLV_VERSION_ATTR_ID) ( 1 : 1 ) LSB
 {
@@ -2968,6 +2999,15 @@ TLV ecsa_target_tsf_info_attr (TLV_ECSA_TARGET_TSF_INFO_ATTR_ID) ( 1 : 1 ) LSB
     target_tsf, 8;
 }
 
+TLV target_cck_support_attr (TLV_TARGET_CCK_SUPPORT_ATTR_ID) ( 1 : 1 ) LSB
+{
+  {
+	target_cck_rx_supp_5g: 1;
+	target_cck_tx_supp_5g: 1;
+	target_cck_unused: 6;
+  }
+}
+
 MULTIIE qcn_ie (EID_VENDOR_SPECIFIC) OUI ( 0x8C, 0xFD, 0xF0, 0x01 )
 {
    OPTIONALTLV qcn_version;
@@ -2981,6 +3021,7 @@ MULTIIE qcn_ie (EID_VENDOR_SPECIFIC) OUI ( 0x8C, 0xFD, 0xF0, 0x01 )
    OPTIONALTLV he_mcs13_attr;
    OPTIONALTLV edca_pifs_param_attr;
    OPTIONALTLV ecsa_target_tsf_info_attr;
+   OPTIONALTLV target_cck_support_attr;
 }
 
 IE esp_information (EID_EXTN_ID_ELEMENT) OUI ( 0x0B )
@@ -3424,8 +3465,8 @@ IE he_op (EID_EXTN_ID_ELEMENT) OUI (0x24)
             { // control
                 ch_width: 2;
                 dup_bcon: 1;
-                reg_info: 3;
-                reserved: 2;
+                reg_info: 4;
+                reserved: 1;
             }
             center_freq_seg0, 1;
             center_freq_seg1, 1;
@@ -3599,7 +3640,8 @@ IE eht_op (EID_EXTN_ID_ELEMENT) OUI (0x6A)
 	eht_default_pe_duration: 1;
 	group_addr_bu_indication_limit: 1;
 	group_addr_bu_indication_exponent: 2;
-	reserved: 2;
+	mcs15_disable: 1;
+	reserved: 1;
     }
     {
 	basic_rx_max_nss_for_mcs_0_to_7: 4;
@@ -3675,6 +3717,18 @@ IE bss_color_change (EID_EXTN_ID_ELEMENT) OUI (0x2A)
     {
         new_color: 6;
         reserved: 2;
+    }
+}
+
+IE reg_connect (EID_EXTN_ID_ELEMENT) OUI (0x89)
+{
+    //regulatory connectivity field
+    {
+        indoor_ap_valid: 1;
+        indoor_ap_support: 1;
+        sp_ap_valid: 1;
+        sp_ap_support: 1;
+        reserved: 4;
     }
 }
 
@@ -4032,7 +4086,17 @@ IE mlo_ie (EID_EXTN_ID_ELEMENT) OUI (0x6B)
 
 IE t2lm_ie (EID_EXTN_ID_ELEMENT) OUI (0x6D)
 {
-    data[3..255];
+    data[2..255];
+}
+
+IE RSNXEOpaque (EID_RSNXE)
+{
+    data[0..253];
+}
+
+IE MSCSEXTOpaque (EID_EXTN_ID_ELEMENT) OUI (0x58)
+{
+    data[0..253];
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -4217,7 +4281,7 @@ FRAME Beacon2
     OPTIE  QComVendorIE;
     OPTIE  ESEVersion;
     OPTIE  qcn_ie;
-    OPTIE  reduced_neighbor_report;
+    OPTIE  reduced_neighbor_report[0..2];
 }
 
 // This frame is just Beacon with its Fixed Fields stripped out.  It's handy
@@ -4331,6 +4395,8 @@ FRAME AssocRequest                        // 7.2.3.4
     OPTIE  fils_hlp_container;
     OPTIE  bss_max_idle_period;
     OPTIE  FTInfo;
+    OPTIE  RSNXEOpaque;
+    OPTIE  MSCSEXTOpaque;
     OPTIE  he_cap;
     OPTIE  he_6ghz_band_cap;
 
@@ -4342,6 +4408,7 @@ FRAME AssocRequest                        // 7.2.3.4
     OPTIE  eht_cap;
     OPTIE  mlo_ie;
     OPTIE  t2lm_ie[0..2];
+    OPTIE  reg_connect;
 
     OPTIE  WPAOpaque;
     OPTIE  WMMCaps;
@@ -4350,6 +4417,7 @@ FRAME AssocRequest                        // 7.2.3.4
     OPTIE  ESERadMgmtCap;
     OPTIE  ESEVersion;
     OPTIE  P2PIEOpaque;
+    OPTIE  P2P2IEOpaque;
     OPTIE  WFDIEOpaque;
     OPTIE  vendor_vht_ie;
     OPTIE  hs20vendor_ie;
@@ -4447,6 +4515,7 @@ FRAME ReAssocRequest                      // 7.2.3.6
     OPTIE  eht_cap;
     OPTIE  mlo_ie;
     OPTIE  t2lm_ie[0..2];
+    OPTIE  reg_connect;
 
     OPTIE  WPAOpaque;
     OPTIE  WMMCaps;
@@ -4457,9 +4526,11 @@ FRAME ReAssocRequest                      // 7.2.3.6
     OPTIE  WMMTSPEC[0..4];
     OPTIE  ESETrafStrmRateSet;
     OPTIE  P2PIEOpaque;
+    OPTIE  P2P2IEOpaque;
     OPTIE  WFDIEOpaque;
     OPTIE  vendor_vht_ie;
     OPTIE  hs20vendor_ie;
+    OPTIE  qcn_ie;
 } // End frame ReAssocRequest.
 
 FRAME ReAssocResponse                     // 7.2.3.7
@@ -4529,6 +4600,7 @@ FRAME ProbeRequest                        // 7.2.3.8
     OPTIE  eht_cap;
     OPTIE  mlo_ie;
 
+    OPTIE  reg_connect;
     OPTIE  WscProbeReq;
     OPTIE  WFATPC;
     OPTIE  P2PProbeReq;
@@ -4605,7 +4677,7 @@ FRAME ProbeResponse                       // 7.2.3.9
     OPTIE  QComVendorIE;
     OPTIE  MBO_IE;
     OPTIE  qcn_ie;
-    OPTIE  reduced_neighbor_report;
+    OPTIE  reduced_neighbor_report[0..2];
 } // End frame ProbeResponse.
 
 FRAME Authentication                      // 7.2.3.10
@@ -4780,7 +4852,7 @@ FRAME RadioMeasurementReport
    FF   Action;
    FF   DialogToken;
    //Measurement Report elements.
-   MANDIE MeasurementReport[1];
+   MANDIE MeasurementReport[1..8];
 }
 
 FRAME LinkMeasurementRequest
@@ -5122,6 +5194,44 @@ FRAME epcs_teardown
 {
     FF    Category;
     FF    Action;
+}
+
+FRAME channel_usage_req
+{
+    FF    Category;
+    FF    Action;
+    FF    DialogToken;
+    MANDIE channel_usage;
+    MANDIE SuppOperatingClasses;
+    OPTIE  VHTCaps;
+    OPTIE  HTCaps;
+    OPTIE  he_cap;
+    OPTIE  he_6ghz_band_cap;
+}
+
+FRAME channel_usage_resp
+{
+    FF    Category;
+    FF    Action;
+    FF    DialogToken;
+    MANDIE channel_usage;
+}
+
+FRAME link_recfg_req
+{
+    FF    Category;
+    FF    Action;
+    FF    DialogToken;
+    MANDIE  mlo_ie;
+    OPTIE  oci;
+}
+
+FRAME link_recfg_rsp
+{
+    FF    Category;
+    FF    Action;
+    FF    DialogToken;
+    FF    count;
 }
 
 // Local Variables:

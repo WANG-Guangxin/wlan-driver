@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -32,6 +32,7 @@
 #include "wlan_objmgr_vdev_obj.h"
 #include "nan_ucfg_api.h"
 #include <wlan_mlme_api.h>
+#include "cfg_ucfg_api.h"
 
 static QDF_STATUS nan_psoc_obj_created_notification(
 		struct wlan_objmgr_psoc *psoc, void *arg_list)
@@ -90,6 +91,16 @@ static QDF_STATUS nan_psoc_obj_destroyed_notification(
 	return status;
 }
 
+/**
+ * nan_vdev_obj_created_notification() - Handler for VDEV object creation
+ * notification event
+ * @vdev: Pointer to the VDEV Object
+ * @arg_list: Pointer to private argument - NULL
+ *
+ * This function gets called from object manager when VDEV is being created.
+ *
+ * Return: QDF_STATUS
+ */
 static QDF_STATUS nan_vdev_obj_created_notification(
 		struct wlan_objmgr_vdev *vdev, void *arg_list)
 {
@@ -107,7 +118,9 @@ static QDF_STATUS nan_vdev_obj_created_notification(
 		target_if_nan_set_vdev_feature_config(psoc,
 						      wlan_vdev_get_id(vdev));
 	}
-	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_NDI_MODE) {
+
+	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_NDI_MODE &&
+	    wlan_vdev_mlme_get_opmode(vdev) != QDF_NAN_DISC_MODE) {
 		nan_debug("not a ndi vdev. do nothing");
 		return QDF_STATUS_SUCCESS;
 	}
@@ -117,6 +130,7 @@ static QDF_STATUS nan_vdev_obj_created_notification(
 		return QDF_STATUS_E_NOMEM;
 
 	qdf_spinlock_create(&nan_obj->lock);
+	qdf_event_create(&nan_obj->migration_complete_event);
 	status = wlan_objmgr_vdev_component_obj_attach(vdev, WLAN_UMAC_COMP_NAN,
 						       (void *)nan_obj,
 						       QDF_STATUS_SUCCESS);
@@ -129,11 +143,22 @@ static QDF_STATUS nan_vdev_obj_created_notification(
 
 nan_vdev_notif_failed:
 
+	qdf_event_destroy(&nan_obj->migration_complete_event);
 	qdf_spinlock_destroy(&nan_obj->lock);
 	qdf_mem_free(nan_obj);
 	return status;
 }
 
+/**
+ * nan_vdev_obj_destroyed_notification() - Handler for VDEV object deletion
+ * notification event
+ * @vdev: Pointer to the VDEV Object
+ * @arg_list: Pointer to private argument - NULL
+ *
+ * This function gets called from object manager when VDEV is being destroyed.
+ *
+ * Return: QDF_STATUS
+ */
 static QDF_STATUS nan_vdev_obj_destroyed_notification(
 				struct wlan_objmgr_vdev *vdev, void *arg_list)
 {
@@ -141,7 +166,9 @@ static QDF_STATUS nan_vdev_obj_destroyed_notification(
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 
 	nan_debug("nan_vdev_delete_notif called");
-	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_NDI_MODE) {
+
+	if (wlan_vdev_mlme_get_opmode(vdev) != QDF_NDI_MODE &&
+	    wlan_vdev_mlme_get_opmode(vdev) != QDF_NAN_DISC_MODE) {
 		nan_debug("not a ndi vdev. do nothing");
 		return QDF_STATUS_SUCCESS;
 	}
@@ -158,6 +185,7 @@ static QDF_STATUS nan_vdev_obj_destroyed_notification(
 		nan_err("nan_obj detach failed");
 
 	nan_debug("nan_obj deleted with status %d", status);
+	qdf_event_destroy(&nan_obj->migration_complete_event);
 	qdf_spinlock_destroy(&nan_obj->lock);
 	qdf_mem_free(nan_obj);
 
@@ -445,6 +473,17 @@ end:
 bool wlan_is_nan_allowed_on_freq(struct wlan_objmgr_pdev *pdev, uint32_t freq)
 {
 	bool nan_allowed = true;
+	bool enable_nan_on_dfs_channels = false;
+	wmi_unified_t wmi_handle;
+
+	wmi_handle = get_wmi_unified_hdl_from_pdev(pdev);
+	if (!wmi_handle) {
+		nan_err("Invalid WMI handle");
+		return false;
+	}
+
+	wlan_mlme_get_support_for_nan_dfs_channel(wlan_pdev_get_psoc(pdev),
+						  &enable_nan_on_dfs_channels);
 
 	/* Check for 6GHz channels */
 	if (wlan_reg_is_6ghz_chan_freq(freq)) {
@@ -457,20 +496,33 @@ bool wlan_is_nan_allowed_on_freq(struct wlan_objmgr_pdev *pdev, uint32_t freq)
 		wlan_mlme_get_srd_master_mode_for_vdev(wlan_pdev_get_psoc(pdev),
 						       QDF_NAN_DISC_MODE,
 						       &nan_allowed);
-
-	/* Check for Indoor channels */
-	if (wlan_reg_is_freq_indoor(pdev, freq))
+	if (wlan_reg_is_dfs_for_freq(pdev, freq)) {
+		if (enable_nan_on_dfs_channels &&
+		    wmi_service_enabled(wmi_handle,
+					wmi_service_ndp_dfs_channel_support)) {
+			return true;
+		} else
+			return false;
+	} else if (wlan_reg_is_freq_indoor(pdev, freq)) {
 		wlan_mlme_get_indoor_support_for_nan(wlan_pdev_get_psoc(pdev),
 						     &nan_allowed);
-	/*
-	 * Check for dfs only if channel is not indoor,
-	 * Check for passive channels as well
-	 */
-	else if (wlan_reg_is_dfs_for_freq(pdev, freq) ||
-		 wlan_reg_is_passive_for_freq(pdev, freq))
-		nan_allowed = false;
+	} else if (wlan_reg_is_passive_for_freq(pdev, freq)) {
+		return false;
+	}
 
 	return nan_allowed;
+}
+
+bool wlan_get_disable_6g_nan(struct wlan_objmgr_psoc *psoc)
+{
+	struct nan_psoc_priv_obj *nan_obj = nan_get_psoc_priv_obj(psoc);
+
+	if (!nan_obj) {
+		nan_err("nan psoc priv object is NULL");
+		return cfg_default(CFG_DISABLE_6G_NAN);
+	}
+
+	return nan_obj->cfg_param.disable_6g_nan;
 }
 
 #ifdef WLAN_FEATURE_11BE_MLO
@@ -485,6 +537,52 @@ bool wlan_is_mlo_sta_nan_ndi_allowed(struct wlan_objmgr_psoc *psoc)
 	}
 
 	return psoc_nan_obj->nan_caps.mlo_sta_nan_ndi_allowed;
+}
+#endif
+
+#if defined(WLAN_FEATURE_NAN)
+bool wlan_nan_is_sta_sap_nan_allowed(struct wlan_objmgr_psoc *psoc)
+{
+	struct nan_psoc_priv_obj *psoc_priv;
+
+	psoc_priv = nan_get_psoc_priv_obj(psoc);
+	if (!psoc_priv) {
+		nan_err("nan psoc priv object is NULL");
+		return false;
+	}
+
+	return QDF_MIN(psoc_priv->cfg_param.support_sta_sap_ndp,
+		       psoc_priv->nan_caps.sta_sap_ndp_support);
+}
+
+qdf_freq_t wlan_nan_sap_override_freq(struct wlan_objmgr_psoc *psoc,
+				      uint32_t vdev_id,
+				      qdf_freq_t chan_freq)
+{
+	qdf_freq_t nan_freq_2g = 0, sta_freq = 0;
+
+	if (policy_mgr_is_vdev_ll_lt_sap(psoc, vdev_id))
+		return chan_freq;
+
+	nan_freq_2g = policy_mgr_mode_specific_get_channel(psoc,
+							   PM_NAN_DISC_MODE);
+
+	/*
+	 * Override nan freq if 2 GHz legacy STA is present.
+	 * In case of 2 GHz ML STA no need to override,
+	 * As it will get disabled if not SCC
+	 */
+	if (policy_mgr_is_non_ml_sta_present(psoc) &&
+	    !policy_mgr_is_mlo_sta_present(psoc)) {
+		sta_freq = policy_mgr_mode_specific_get_channel(psoc,
+								PM_STA_MODE);
+		if (WLAN_REG_IS_24GHZ_CH_FREQ(sta_freq))
+			nan_freq_2g = sta_freq;
+	}
+
+	if (!nan_freq_2g)
+		return chan_freq;
+	return nan_freq_2g;
 }
 #endif
 

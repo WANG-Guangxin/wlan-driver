@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -43,6 +43,7 @@
 #include "dph_global.h"
 #include "parser_api.h"
 #include "wma_if.h"
+#include "wlan_mlo_link_recfg.h"
 
 #define LINK_TEST_DEFER 1
 
@@ -171,29 +172,7 @@ enum eChannelChangeReasonCodes {
 };
 
 typedef struct sLimMlmStartReq {
-	tSirMacSSid ssId;
-	enum bss_type bssType;
-	tSirMacAddr bssId;
-	tSirMacBeaconInterval beaconPeriod;
-	uint8_t dtimPeriod;
-	tSirMacCfParamSet cfParamSet;
-	uint32_t oper_ch_freq;
-	ePhyChanBondState cbMode;
-	tSirMacRateSet rateSet;
-	uint8_t sessionId;      /* Added For BT-AMP Support */
-
-	/* Parameters reqd for new HAL (message) interface */
-	tSirNwType nwType;
-	uint8_t htCapable;
-	tSirMacHTOperatingMode htOperMode;
-	uint8_t dualCTSProtection;
-	uint8_t txChannelWidthSet;
-	uint8_t ssidHidden;
-	uint8_t wps_state;
-	uint8_t obssProtEnabled;
-	uint16_t beacon_tx_rate;
-	uint32_t cac_duration_ms;
-	uint32_t dfs_regdomain;
+	uint8_t pe_session_id;
 } tLimMlmStartReq, *tpLimMlmStartReq;
 
 typedef struct sLimMlmStartCnf {
@@ -381,7 +360,7 @@ void lim_process_mlm_start_cnf(struct mac_context *mac_ctx, uint32_t *msg_buf);
 
 void lim_get_random_bssid(struct mac_context *mac, uint8_t *data);
 
-/* Function to handle HT and HT IE CFG parameter intializations */
+/* Function to handle HT and HT IE CFG parameter initializations */
 void handle_ht_capabilityand_ht_info(struct mac_context *mac,
 				     struct pe_session *pe_session);
 
@@ -518,6 +497,10 @@ void
 lim_process_ml_reconfig(struct mac_context *mac_ctx,
 			struct pe_session *session,
 			uint8_t *rx_pkt_info);
+
+bool lim_is_same_mld_addr(struct mac_context *mac_ctx,
+			  struct pe_session *session,
+			  struct sSirProbeRespBeacon *bcn_ptr);
 #else
 static inline
 void lim_process_beacon_mlo(struct mac_context *mac_ctx,
@@ -538,6 +521,14 @@ lim_process_ml_reconfig(struct mac_context *mac_ctx,
 			struct pe_session *session,
 			uint8_t *rx_pkt_info)
 {
+}
+
+static inline
+bool lim_is_same_mld_addr(struct mac_context *mac_ctx,
+			  struct pe_session *session,
+			  struct sSirProbeRespBeacon *bcn_ptr)
+{
+	return true;
 }
 #endif
 
@@ -680,11 +671,12 @@ QDF_STATUS lim_send_mlm_assoc_ind(struct mac_context *mac,
  * pe_roam_synch_callback() upon Re/Association Response frame reception or
  * roam synch indication with reassociation response frame is received.
  *
- * Return: None
+ * Return: QDF_STATUS
  */
-void lim_process_assoc_rsp_frame(struct mac_context *mac, uint8_t *rx_pkt_info,
-				 uint32_t reassoc_frame_len, uint8_t subtype,
-				 struct pe_session *pe_session);
+QDF_STATUS
+lim_process_assoc_rsp_frame(struct mac_context *mac, uint8_t *rx_pkt_info,
+			    uint32_t reassoc_frame_len, uint8_t subtype,
+			    struct pe_session *pe_session);
 
 void lim_process_disassoc_frame(struct mac_context *, uint8_t *, struct pe_session *);
 
@@ -746,9 +738,31 @@ void lim_process_action_frame_no_session(struct mac_context *mac, uint8_t *pRxMe
 
 void lim_populate_mac_header(struct mac_context *, uint8_t *, uint8_t, uint8_t,
 				      tSirMacAddr, tSirMacAddr);
-QDF_STATUS lim_send_probe_req_mgmt_frame(struct mac_context *, tSirMacSSid *,
-					 tSirMacAddr, qdf_freq_t, tSirMacAddr,
-					 uint32_t, uint16_t *, uint8_t *);
+
+/**
+ * lim_send_probe_req_mgmt_frame() - send probe request management frame
+ * @mac_ctx: Pointer to Global MAC structure
+ * @pesession: Pointer to session
+ * @additional_ielen: if non-zero, include additional_ie in the Probe Request
+ *                   frame
+ * @additional_ie: if additional_ielen is non zero, include this field in the
+ *                Probe Request frame
+ *
+ * This function is called by various LIM modules to send Probe Request frame
+ * during active scan/learn phase.
+ * Probe request is sent out in the following scenarios:
+ * --heartbeat failure:  session needed
+ * --join req:           session needed
+ * --foreground scan:    no session
+ * --background scan:    no session
+ * --sch_beacon_processing:  to get EDCA parameters:  session needed
+ *
+ * Return: QDF_STATUS (QDF_STATUS_SUCCESS on success and error codes otherwise)
+ */
+QDF_STATUS lim_send_probe_req_mgmt_frame(struct mac_context *mac_ctx,
+					 struct pe_session *pesession,
+					 uint16_t *additional_ielen,
+					 uint8_t *additional_ie);
 
 /**
  * lim_send_probe_rsp_mgmt_frame() - Send probe response
@@ -768,6 +782,57 @@ lim_send_probe_rsp_mgmt_frame(struct mac_context *mac_ctx,
 			      tpAniSSID ssid,
 			      struct pe_session *pe_session,
 			      uint8_t preq_p2pie);
+
+/**
+ * lim_send_channel_usage_req_notif_cap_action_frame() - Send channel usage
+ * request with notify cap mode post CSA
+ * @vdev_id: VDEV ID of P2P entity
+ *
+ * Currently only supports for P2P CLI and after CSA to new channel when
+ * device advertises notifiy_cap_support in extended capability, then
+ * client needs to send channel usage request frame with usage mode set to
+ * notify capability with in 5 beacon intervals on new channel.
+ *
+ * Return: void
+ */
+void lim_send_channel_usage_req_notif_cap_action_frame(uint8_t vdev_id);
+
+/**
+ * lim_send_channel_usage_req_action_frame() - Send channel usage request
+ * action frame.
+ * @mac_ctx; Global MAC context
+ * @session: PE session
+ * @req_chan: Requested channel to send in action frame
+ * @req_op_class: Requested op class to send in action frame
+ *
+ * Prepare and send channel usage request frame to connected BSSID to request
+ * channel switch via non-infra CSA mode and start expected channel switch
+ * timer.
+ *
+ * Return: void
+ */
+void lim_send_channel_usage_req_action_frame(struct mac_context *mac_ctx,
+					     struct pe_session *session,
+					     uint8_t req_chan,
+					     uint8_t req_op_class);
+
+/**
+ * lim_send_channel_usage_resp_action_frame() - Send channel usage response
+ * action frame.
+ * @mac_ctx: Global MAC context
+ * @session: PE session
+ * @peer_addr: Peer address to send the frame
+ *
+ * Prepare and send channel usage response frame to peer pointed by @peer_addr.
+ * If any channel is specified only accept if it is allowed by policy manager
+ * PCL list or else reject. If no channel is sent, pick the first channel from
+ * PCL and send success.
+ *
+ * Return: void
+ */
+void lim_send_channel_usage_resp_action_frame(struct mac_context *mac_ctx,
+					      struct pe_session *session,
+					      tSirMacAddr peer_addr);
 
 void lim_send_auth_mgmt_frame(struct mac_context *, tSirMacAuthFrameBody *, tSirMacAddr,
 			      uint8_t, struct pe_session *);
@@ -895,9 +960,10 @@ void lim_send_mscs_req_action_frame(struct mac_context *mac,
  * @aid: Association ID
  * @peer_addr: Mac address of requesting peer
  * @subtype: Assoc/Reassoc
- * @sta: Pointer to station node
- * @pe_session: PE session id.
+ * @in_sta: Pointer to station node
+ * @in_pe_session: PE session id.
  * @tx_complete: Need tx complete callback or not
+ * @mld_addr: mld address
  *
  * Builds and sends association response frame to the requesting peer.
  *
@@ -907,8 +973,9 @@ void
 lim_send_assoc_rsp_mgmt_frame(
 	struct mac_context *mac_ctx,
 	uint16_t status_code, uint16_t aid, tSirMacAddr peer_addr,
-	uint8_t subtype, tpDphHashNode sta, struct pe_session *pe_session,
-	bool tx_complete);
+	uint8_t subtype, tpDphHashNode in_sta,
+	struct pe_session *in_pe_session,
+	bool tx_complete, struct qdf_mac_addr *mld_addr);
 
 void lim_send_disassoc_mgmt_frame(struct mac_context *, uint16_t, tSirMacAddr,
 				  struct pe_session *, bool waitForAck);
@@ -1023,7 +1090,25 @@ QDF_STATUS lim_process_sme_tdls_del_sta_req(struct mac_context *mac,
 void lim_send_sme_mgmt_tx_completion(struct mac_context *mac, uint32_t vdev_id,
 				     uint32_t txCompleteStatus);
 QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
-				    struct pe_session *session_entry);
+				 struct pe_session *session_entry,
+				 enum wlan_tdls_peer_delete_reason reason);
+
+ /**
+  * lim_send_sme_tdls_add_sta_rsp() - Send TDLS Add STA response to userspace
+  * @mac: Pointer to global mac context
+  * @vdev_id: Vdev Id
+  * @peer_mac: Peer mac address
+  * @update: Flag to indicate if the operation is add sta or update
+  * @sta: Pointer to sta_ds node
+  * @status: Status
+  *
+  * Return: QDF_STATUS
+  */
+QDF_STATUS lim_send_sme_tdls_add_sta_rsp(struct mac_context *mac,
+					 uint8_t vdev_id, tSirMacAddr peer_mac,
+					 uint8_t update, tDphHashNode *sta,
+					 uint8_t status);
+
 QDF_STATUS lim_process_tdls_add_sta_rsp(struct mac_context *mac, void *msg, struct pe_session *);
 void lim_process_tdls_del_sta_rsp(struct mac_context *mac_ctx,
 				  struct scheduler_msg *lim_msg,
@@ -1052,7 +1137,8 @@ void lim_update_tdls_2g_bw(struct pe_session *session);
 
 #else
 static inline QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
-						struct pe_session *session_entry)
+					       struct pe_session *session_entry,
+					       enum wlan_tdls_peer_delete_reason reason)
 {
 	return QDF_STATUS_SUCCESS;
 }
@@ -1069,6 +1155,23 @@ static inline void lim_update_tdls_set_state_for_fw(struct pe_session
 
 static inline void lim_update_tdls_2g_bw(struct pe_session *session)
 {
+}
+
+static inline QDF_STATUS lim_process_tdls_add_sta_rsp(struct mac_context *mac,
+						      void *msg,
+						      struct pe_session *pe_session)
+{
+	return QDF_STATUS_SUCCESS;
+}
+
+static inline QDF_STATUS lim_send_sme_tdls_add_sta_rsp(struct mac_context *mac,
+						       uint8_t vdev_id,
+						       tSirMacAddr peer_mac,
+						       uint8_t update,
+						       tDphHashNode *sta,
+						       uint8_t status)
+{
+	return QDF_STATUS_SUCCESS;
 }
 #endif
 
@@ -1123,7 +1226,25 @@ void lim_process_mlm_add_sta_rsp(struct mac_context *mac,
 				 struct pe_session *pe_session);
 void lim_process_mlm_del_sta_rsp(struct mac_context *mac,
 				 struct scheduler_msg *limMsgQ);
-
+#ifdef DRIVER_PASSTHRU_MODE
+/**
+ * lim_passthru_add_sta_rsp() - Process add sta response in passthru mode
+ * @mac_ctx: Pointer to Global MAC structure
+ * @session: pointer to pe_session
+ * @add_sta_rsp: pointer to add sta response
+ *
+ * Return: None
+ */
+void lim_passthru_add_sta_rsp(struct mac_context *mac_ctx,
+			      struct pe_session *session,
+			      tAddStaParams *add_sta_rsp);
+#else
+static inline
+void lim_passthru_add_sta_rsp(struct mac_context *mac_ctx,
+			      struct pe_session *session,
+			      tAddStaParams *add_sta_rsp)
+{}
+#endif
 QDF_STATUS
 lim_process_mlm_del_all_sta_rsp(struct vdev_mlme_obj *vdev_mlme,
 				struct peer_delete_all_response *rsp);
@@ -1416,7 +1537,8 @@ lim_process_sme_del_all_tdls_peers(struct mac_context *mac, uint32_t *msg_buf);
  *
  * Return: QDF_STATUS
  */
-QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev);
+QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev,
+				     enum wlan_tdls_peer_delete_reason reason);
 #else
 static inline
 QDF_STATUS lim_process_sme_del_all_tdls_peers(struct mac_context *p_mac,
@@ -1426,7 +1548,8 @@ QDF_STATUS lim_process_sme_del_all_tdls_peers(struct mac_context *p_mac,
 }
 
 static inline
-QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev)
+QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev,
+				     enum wlan_tdls_peer_delete_reason reason)
 {
 	return QDF_STATUS_SUCCESS;
 }
@@ -1582,6 +1705,23 @@ QDF_STATUS
 lim_send_epcs_action_teardown_frame(struct wlan_objmgr_vdev *vdev,
 				    uint8_t *peer_mac,
 				    struct wlan_action_frame_args *args);
+
+/**
+ * lim_send_link_recfg_action_req_frame() - Send Link Reconfiguration
+ * action frame
+ * @vdev_id: vdev id
+ * @peer_mac: Peer mac addr
+ * @args: Pointer to action frame args
+ * @req: Link reconfig request
+ *
+ * Return: 0 for success, non-zero for failure
+ */
+QDF_STATUS
+lim_send_link_recfg_action_req_frame(uint8_t vdev_id,
+				     uint8_t *peer_mac,
+				     struct wlan_action_frame_args *args,
+				     struct mlo_link_recfg_state_req *req);
+
 #else
 static inline QDF_STATUS
 lim_send_t2lm_action_rsp_frame(struct mac_context *mac_ctx,
@@ -1601,8 +1741,31 @@ lim_send_t2lm_action_req_frame(struct wlan_objmgr_vdev *vdev,
 {
 	return QDF_STATUS_SUCCESS;
 }
+
+static inline QDF_STATUS
+lim_send_link_recfg_action_req_frame(uint8_t vdev_id,
+				     uint8_t *peer_mac,
+				     struct wlan_action_frame_args *args,
+				     struct mlo_link_recfg_state_req *req)
+{
+	return QDF_STATUS_SUCCESS;
+}
 #endif
 
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * lim_send_ttlm_action_rsp_frame() - Send TTLM Action response frame
+ * @token: TTLM dialog token
+ * @status_code: TTLM response status code
+ * @peer_mac: Peer mac address
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+lim_send_ttlm_action_rsp_frame(uint8_t token,
+			       enum wlan_t2lm_resp_frm_type status_code,
+			       tSirMacAddr peer_mac);
+#endif
 /**
  * lim_process_join_failure_timeout() - This function is called to process
  * JoinFailureTimeout
@@ -1658,6 +1821,15 @@ void lim_process_sae_auth_timeout(struct mac_context *mac_ctx);
  * @Return: None
  */
 void lim_process_rrm_sta_stats_rsp_timeout(struct mac_context *mac_ctx);
+
+/**
+ * lim_process_channel_vacate_timeout() - Process timeout of channel vacate
+ * timer.
+ * @mac_ctx: Pointer to global MAC struct
+ *
+ * Return: None
+ */
+void lim_process_channel_vacate_timeout(struct mac_context *mac_ctx);
 
 /**
  * lim_send_frame() - API to send frame
@@ -1762,6 +1934,15 @@ lim_pasn_peer_del_all_resp_vdev_delete_resume(struct mac_context *mac,
 #endif
 
 /**
+ * lim_continue_bss_peer_create() - Continue bss peer create after
+ * deleting the existing ranging peer.
+ * @req: Peer create request pointer
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS lim_continue_bss_peer_create(struct cm_peer_create_req *req);
+
+/**
  * lim_send_peer_create_resp() -  Send peer create response
  * @mac:     Pointer to MAC context
  * @vdev_id: vdev id
@@ -1860,4 +2041,24 @@ void lim_process_sta_add_bss_rsp_pre_assoc(struct mac_context *mac_ctx,
 					   struct bss_params *add_bss_params,
 					   struct pe_session *session_entry,
 					   QDF_STATUS status);
+
+/**
+ * lim_notify_channel_switch_started() - Notify channel switch started
+ * @mac_ctx:  Pointer to mac context
+ * @session: PE session handle
+ *
+ * Return: None
+ */
+void
+lim_notify_channel_switch_started(struct mac_context *mac_ctx,
+				  struct pe_session *session);
+
+/**
+ *lim_convert_channel_width_enum() - map between two channel width enums
+ *@ch_width: channel width of enum type phy_ch_width
+ *
+ *Return: channel width of enum type tSirMacHTChannelWidth
+ */
+tSirMacHTChannelWidth
+lim_convert_channel_width_enum(enum phy_ch_width ch_width);
 #endif /* __LIM_TYPES_H */

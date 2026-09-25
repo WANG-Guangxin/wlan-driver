@@ -28,10 +28,16 @@
 # define CONKEEPALIVE_INTERVAL_MIN 0
 # define CONKEEPALIVE_INTERVAL_MAX 120
 # define CONKEEPALIVE_INTERVAL_DEFAULT 30
+#define CFG_MLO_PREFER_PERCENTAGE_MIN -29
+#define CFG_MLO_PREFER_PERCENTAGE_MAX 20
+#define CFG_MLO_PREFER_PERCENTAGE_DEFAULT 10
 #else
 # define CONKEEPALIVE_INTERVAL_MIN 0
 # define CONKEEPALIVE_INTERVAL_MAX 1000
 # define CONKEEPALIVE_INTERVAL_DEFAULT 30
+#define CFG_MLO_PREFER_PERCENTAGE_MIN 0
+#define CFG_MLO_PREFER_PERCENTAGE_MAX 30
+#define CFG_MLO_PREFER_PERCENTAGE_DEFAULT 10
 #endif
 /*
  * <ini>
@@ -661,8 +667,8 @@
  * <cfg>
  * RoamCommon_Mlo_TpPrefer - percentage to boost mlo scoring
  *
- * @Min: -20
- * @Max: +20
+ * @Min: 0
+ * @Max: +30
  * @Default: 10
  *
  * This cfg is used to boost/reduce the mlo weightage with configured
@@ -676,9 +682,9 @@
  */
 #define CFG_MLO_PREFER_PERCENTAGE CFG_INI_INT(\
 			"RoamCommon_Mlo_TpPrefer", \
-			-20, \
-			20, \
-			10,\
+			CFG_MLO_PREFER_PERCENTAGE_MIN, \
+			CFG_MLO_PREFER_PERCENTAGE_MAX, \
+			CFG_MLO_PREFER_PERCENTAGE_DEFAULT,\
 			CFG_VALUE_OR_DEFAULT, \
 			"mlo prefer percentage")
 
@@ -716,32 +722,6 @@
 #define CFG_MLO_SAME_LINK_MLD_ADDR_CFG CFG(CFG_MLO_SAME_LINK_MLD_ADDR)
 #else
 #define CFG_MLO_SAME_LINK_MLD_ADDR_CFG
-#endif
-
-/*
- * <ini>
- * eht_disable_punct_in_us_lpi - Flag to Disable eht puncture in US LPI mode
- * @Min: false
- * @Max: true
- * @Default: false
- *
- * Related: None
- *
- * Supported Feature: 802.11be protocol
- *
- * Usage: Internal
- *
- * </ini>
- */
-#define CFG_EHT_DISABLE_PUNCT_IN_US_LPI \
-	CFG_BOOL("eht_disable_punct_in_us_lpi", \
-		 false, \
-		 "Disable eht puncture in US LPI mode")
-
-#ifdef WLAN_FEATURE_11BE
-#define CFG_EHT_DISABLE_PUNCT_IN_US_LPI_CFG CFG(CFG_EHT_DISABLE_PUNCT_IN_US_LPI)
-#else
-#define CFG_EHT_DISABLE_PUNCT_IN_US_LPI_CFG
 #endif
 
 #ifdef WLAN_FEATURE_11BE_MLO
@@ -796,6 +776,84 @@
 #define CFG_MLO_EPCS_SUPPORT_ENABLE_CFG
 #endif
 
+/*
+ * <ini>
+ * gEnableHighBandRoaming - Enable/Disable high band roaming feature
+ * @Min: 0
+ * @Max: 1
+ * @Default: 0
+ *
+ * This INI is used to enable or disable the high band roaming feature.
+ *
+ * Related: gHighBandRoamingThresholdTime, gHighBandRoamingDataThreshold
+ *
+ * Supported Feature: STA Roaming
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_ENABLE_HIGH_BAND_ROAMING CFG_INI_BOOL( \
+	"gEnableHighBandRoaming", \
+	0, \
+	"Enable high band roaming")
+
+/*
+ * <ini>
+ * gHighBandRoamingThresholdTime - High band roaming threshold time in ms
+ * @Min: 0
+ * @Max: 0x7fffffff
+ * @Default: 10000
+ *
+ * This INI is used to set the high band roaming threshold time in ms.
+ * When the STA is roaming to a high band AP, this parameter controls
+ * the minimum time threshold before considering roaming to another band.
+ * This value so be in multiple of 1000, otherwise the decimals value will get
+ * truncated as we are converting it to seconds before sending it to f/w.
+ *
+ * Related: None
+ *
+ * Supported Feature: STA Roaming
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_HIGH_BAND_ROAMING_THRESHOLD_TIME_MS CFG_INI_UINT( \
+	"gHighBandRoamingThresholdTime", \
+	0, \
+	0x7fffffff, \
+	10000, \
+	CFG_VALUE_OR_DEFAULT, \
+	"High band roaming threshold time in milliseconds")
+
+/*
+ * <ini>
+ * gHighBandRoamingDataThreshold - High band roaming data threshold in KBps
+ * @Min: 0
+ * @Max: 102400
+ * @Default: 1024
+ *
+ * This INI is used to set the high band roaming data threshold in KBps.
+ * When the STA is roaming to a high band AP, this parameter controls the data
+ * rate threshold for triggering roaming decisions based on traffic patterns.
+ *
+ * Related: None
+ *
+ * Supported Feature: STA Roaming
+ *
+ * Usage: External
+ *
+ * </ini>
+ */
+#define CFG_HIGH_BAND_ROAMING_DATA_THRESHOLD CFG_INI_UINT( \
+	"gHighBandRoamingDataThreshold", \
+	0, \
+	102400, \
+	1024, \
+	CFG_VALUE_OR_DEFAULT, \
+	"High band roaming data threshold in KBps")
+
 #define CFG_STA_ALL \
 	CFG(CFG_INFRA_STA_KEEP_ALIVE_PERIOD) \
 	CFG(CFG_STA_BSS_MAX_IDLE_PERIOD) \
@@ -822,7 +880,9 @@
 	CFG_MLO_SUPPORT_LINK_BAND_CFG \
 	CFG_MLO_PREFER_PERCENTAGE_CFG \
 	CFG_MLO_SAME_LINK_MLD_ADDR_CFG \
-	CFG_EHT_DISABLE_PUNCT_IN_US_LPI_CFG \
 	CFG_MLO_MLO_5GL_5GH_MLSR_CFG \
-	CFG_MLO_EPCS_SUPPORT_ENABLE_CFG
+	CFG_MLO_EPCS_SUPPORT_ENABLE_CFG \
+	CFG(CFG_ENABLE_HIGH_BAND_ROAMING) \
+	CFG(CFG_HIGH_BAND_ROAMING_THRESHOLD_TIME_MS) \
+	CFG(CFG_HIGH_BAND_ROAMING_DATA_THRESHOLD)
 #endif /* CFG_MLME_STA_H__ */

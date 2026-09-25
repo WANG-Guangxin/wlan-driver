@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -18,6 +18,10 @@
  * DOC: contains ll_lt_sap declarations specific to the bearer
  * switch functionalities
  */
+
+#ifndef TARGET_IF_LL_SAP_H
+#define TARGET_IF_LL_SAP_H
+
 #include "wlan_ll_sap_public_structs.h"
 
 /**
@@ -53,3 +57,29 @@ QDF_STATUS target_if_ll_sap_register_events(struct wlan_objmgr_psoc *psoc);
 QDF_STATUS
 target_if_ll_sap_deregister_events(struct wlan_objmgr_psoc *psoc);
 
+/**
+ * target_if_ll_sap_continue_csa_after_tsf_rsp() - Continue CSA after getting
+ * rsp of tsf stats from fw
+ * @psoc: psoc object
+ * @twt_params: pointer to twt_session_stats_info
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS target_if_ll_sap_continue_csa_after_tsf_rsp(
+				struct wlan_objmgr_psoc *psoc,
+				struct twt_session_stats_info *twt_params);
+
+/**
+ * target_if_ll_sap_is_twt_event_type_query_rsp() - Check if twt event type is
+ * query response or not
+ * @psoc: psoc object
+ * @evt_buf: event buffer:
+ * @params: pointer to twt_session_stats_event_param
+ * @twt_params: pointer to twt_session_stats_info
+ */
+bool target_if_ll_sap_is_twt_event_type_query_rsp(
+				struct wlan_objmgr_psoc *psoc,
+				uint8_t *evt_buf,
+				struct twt_session_stats_event_param *params,
+				struct twt_session_stats_info *twt_params);
+#endif /* TARGET_IF_LL_SAP_H */

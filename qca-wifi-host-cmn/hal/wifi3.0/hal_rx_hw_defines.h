@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021,2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -51,10 +51,19 @@
 #define HAL_REO_ENTRANCE_RING_RXDMA_ERROR_CODE_LSB		2
 #define HAL_REO_ENTRANCE_RING_RXDMA_ERROR_CODE_MASK		0x0000007c
 
+#define HAL_REO_ENTRANCE_RING_PHY_PPDU_ID_OFFSET		0x1c
+#define HAL_REO_ENTRANCE_RING_PHY_PPDU_ID_LSB			0
+#define HAL_REO_ENTRANCE_RING_PHY_PPDU_ID_MASK			0x0000ffff
+
 #define HAL_SW2WBM_RELEASE_RING_RELEASE_SOURCE_MODULE_OFFSET	0x8
 #define HAL_SW2WBM_RELEASE_RING_RELEASE_SOURCE_MODULE_LSB	0
 #define HAL_SW2WBM_RELEASE_RING_RELEASE_SOURCE_MODULE_MASK	0x00000007
 
+#ifdef CONFIG_BORON
+#define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_OFFSET      0x8
+#define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_LSB         3
+#define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_MASK        0x00000038
+#else
 #define HAL_SW2WBM_RELEASE_RING_BM_ACTION_OFFSET		0x8
 #define HAL_SW2WBM_RELEASE_RING_BM_ACTION_LSB			3
 #define HAL_SW2WBM_RELEASE_RING_BM_ACTION_MASK			0x00000038
@@ -62,6 +71,7 @@
 #define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_OFFSET	0x8
 #define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_LSB		6
 #define HAL_SW2WBM_RELEASE_RING_BUFFER_OR_DESC_TYPE_MASK	0x000001c0
+#endif
 
 /* REO CMD entry offsets */
 #define HAL_UNIFORM_REO_CMD_HEADER_REO_CMD_NUMBER_OFFSET	0x0

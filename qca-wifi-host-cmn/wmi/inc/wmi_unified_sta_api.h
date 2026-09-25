@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -219,6 +219,17 @@ QDF_STATUS wmi_extract_vdev_tdls_ev_param(wmi_unified_t wmi_handle,
 #endif /* FEATURE_WLAN_TDLS */
 
 /**
+ * wmi_unified_send_tx_power_per_mcs_cmd() - send tx power per mcs cmd to fw
+ * @wmi_handle: wmi handle
+ * @params: adjust txpower per mcs command params
+ *
+ * Return: QDF_STATUS_SUCCESS on success and QDF_STATUS_E_FAILURE for failure
+ */
+QDF_STATUS wmi_unified_send_tx_power_per_mcs_cmd(
+					wmi_unified_t wmi_handle,
+					struct tx_power_per_mcs_rate *params);
+
+/**
  * wmi_unified_send_sar_limit_cmd() - send sar limit cmd to fw
  * @wmi_handle: wmi handle
  * @params: sar limit command params
@@ -381,7 +392,6 @@ QDF_STATUS wmi_unified_process_ch_avoid_update_cmd(wmi_unified_t wmi_handle);
 QDF_STATUS wmi_unified_pdev_set_pcl_cmd(wmi_unified_t wmi_handle,
 					struct wmi_pcl_chan_weights *msg);
 
-#ifdef WLAN_POLICY_MGR_ENABLE
 /**
  * wmi_unified_pdev_set_dual_mac_config_cmd() - Set dual mac config to FW
  * @wmi_handle: wmi handle
@@ -394,7 +404,6 @@ QDF_STATUS wmi_unified_pdev_set_pcl_cmd(wmi_unified_t wmi_handle,
 QDF_STATUS wmi_unified_pdev_set_dual_mac_config_cmd(
 		wmi_unified_t wmi_handle,
 		struct policy_mgr_dual_mac_config *msg);
-#endif /* WLAN_POLICY_MGR_ENABLE */
 
 /**
  * wmi_unified_send_adapt_dwelltime_params_cmd() - send wmi cmd of

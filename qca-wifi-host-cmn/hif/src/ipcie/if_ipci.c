@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2013-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -552,7 +552,7 @@ const char *hif_ipci_get_irq_name(int irq_no)
 #ifdef FEATURE_IRQ_AFFINITY
 static
 void hif_ipci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
-				    bool perf)
+				    unsigned int cpumask, bool perf)
 {
 	int i, ret;
 	unsigned int cpus;
@@ -560,9 +560,26 @@ void hif_ipci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
 	int package_id;
 	int cpu_cluster = perf ? hif_get_perf_cluster_bitmap() :
 				 BIT(CPU_CLUSTER_TYPE_LITTLE);
+	qdf_cpu_mask new_cpu_mask;
 
 	for (i = 0; i < hif_ext_group->numirq; i++)
 		qdf_cpumask_clear(&hif_ext_group->new_cpu_mask[i]);
+
+	if (perf && cpumask) {
+		qdf_cpumask_clear(&new_cpu_mask);
+		qdf_for_each_online_cpu(cpus) {
+			if (BIT(cpus) & cpumask)
+				qdf_cpumask_set_cpu(i, &new_cpu_mask);
+		}
+
+		if (!qdf_cpumask_empty(&new_cpu_mask)) {
+			for (i = 0; i < hif_ext_group->numirq; i++)
+				qdf_cpumask_copy(&hif_ext_group->new_cpu_mask[i],
+						 &new_cpu_mask);
+			mask_set = true;
+			goto apply_affinity;
+		}
+	}
 
 	for (i = 0; i < hif_ext_group->numirq; i++) {
 		qdf_for_each_online_cpu(cpus) {
@@ -575,6 +592,8 @@ void hif_ipci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
 			}
 		}
 	}
+
+apply_affinity:
 	for (i = 0; i < hif_ext_group->numirq && i < HIF_MAX_GRP_IRQ; i++) {
 		if (mask_set) {
 			ret = hif_affinity_mgr_set_qrg_irq_affinity((struct hif_softc *)hif_ext_group->hif,
@@ -594,7 +613,8 @@ void hif_ipci_irq_set_affinity_hint(struct hif_exec_context *hif_ext_group,
 }
 
 void hif_ipci_set_grp_intr_affinity(struct hif_softc *scn,
-				    uint32_t grp_intr_bitmask, bool perf)
+				    uint32_t grp_intr_bitmask,
+				    uint32_t cpumask, bool perf)
 {
 	int i;
 	struct HIF_CE_state *hif_state = HIF_GET_CE_STATE(scn);
@@ -605,7 +625,7 @@ void hif_ipci_set_grp_intr_affinity(struct hif_softc *scn,
 			continue;
 
 		hif_ext_group = hif_state->hif_ext_group[i];
-		hif_ipci_irq_set_affinity_hint(hif_ext_group, perf);
+		hif_ipci_irq_set_affinity_hint(hif_ext_group, cpumask, perf);
 		qdf_atomic_set(&hif_ext_group->force_napi_complete, -1);
 	}
 }
@@ -620,7 +640,7 @@ static void hif_ipci_ce_irq_set_affinity_hint(struct hif_softc *scn)
 	struct hif_ipci_softc *ipci_sc = HIF_GET_IPCI_SOFTC(scn);
 	struct CE_attr *host_ce_conf;
 	int ce_id;
-	qdf_cpu_mask ce_cpu_mask, updated_mask;
+	qdf_cpu_mask ce_cpu_mask;
 	int perf_cpu_cluster = hif_get_perf_cluster_bitmap();
 	int package_id;
 
@@ -643,13 +663,13 @@ static void hif_ipci_ce_irq_set_affinity_hint(struct hif_softc *scn)
 		if ((host_ce_conf[ce_id].flags & CE_ATTR_DISABLE_INTR) ||
 		    hif_is_datapath_ce(scn->ce_id_to_state[ce_id]))
 			continue;
-		qdf_cpumask_copy(&updated_mask, &ce_cpu_mask);
+
+		qdf_cpumask_copy(&ipci_sc->ce_irq_cpu_mask[ce_id],
+				 &ce_cpu_mask);
+
 		ret = hif_affinity_mgr_set_ce_irq_affinity(scn, ipci_sc->ce_msi_irq_num[ce_id],
 							   ce_id,
-							   &updated_mask);
-		qdf_cpumask_clear(&ipci_sc->ce_irq_cpu_mask[ce_id]);
-		qdf_cpumask_copy(&ipci_sc->ce_irq_cpu_mask[ce_id],
-				 &updated_mask);
+							   &ipci_sc->ce_irq_cpu_mask[ce_id]);
 		if (ret)
 			hif_err_rl("Set affinity %*pbl fails for CE IRQ %d",
 				   qdf_cpumask_pr_args(
@@ -776,6 +796,10 @@ static void hif_ipci_get_soc_info_pld(struct hif_ipci_softc *sc,
 	sc->ce_sc.ol_sc.mem    = info.v_addr;
 	sc->ce_sc.ol_sc.mem_pa = info.p_addr;
 
+	/* dev_mem_info[0] is for CMEM */
+	scn->cmem_start = info.dev_mem_info[0].start;
+	scn->cmem_size = info.dev_mem_info[0].size;
+
 	scn->target_info.target_version = info.soc_id;
 	scn->target_info.target_revision = 0;
 }
@@ -809,6 +833,7 @@ static bool hif_is_pld_based_target(struct hif_ipci_softc *sc,
 	case QCA6750_DEVICE_ID:
 #endif
 	case WCN6450_DEVICE_ID:
+	case WCN7750_DEVICE_ID:
 		return true;
 	}
 	return false;
@@ -891,9 +916,14 @@ bool hif_ipci_needs_bmi(struct hif_softc *scn)
 #ifdef FORCE_WAKE
 int hif_force_wake_request(struct hif_opaque_softc *hif_handle)
 {
-	uint32_t timeout = 0;
 	struct hif_softc *scn = (struct hif_softc *)hif_handle;
 	struct hif_ipci_softc *ipci_scn = HIF_GET_IPCI_SOFTC(scn);
+	uint32_t start_time, curr_time, end_time;
+
+	if (qdf_is_fw_down()) {
+		hif_info("F.W is down failed to send force wake request");
+		return -EINVAL;
+	}
 
 	if (pld_force_wake_request(scn->qdf_dev->dev)) {
 		hif_err_rl("force wake request send failed");
@@ -901,18 +931,24 @@ int hif_force_wake_request(struct hif_opaque_softc *hif_handle)
 	}
 
 	HIF_STATS_INC(ipci_scn, mhi_force_wake_request_vote, 1);
+
+	start_time = curr_time = qdf_system_ticks_to_msecs(qdf_system_ticks());
+	end_time = start_time + FORCE_WAKE_DELAY_TIMEOUT_MS;
+
 	while (!pld_is_device_awake(scn->qdf_dev->dev) &&
-	       timeout <= FORCE_WAKE_DELAY_TIMEOUT_MS) {
+	       ((int)(end_time - curr_time) > 0)) {
 		if (qdf_in_interrupt())
 			qdf_mdelay(FORCE_WAKE_DELAY_MS);
 		else
-			qdf_sleep(FORCE_WAKE_DELAY_MS);
+			qdf_sleep_uninterruptible(FORCE_WAKE_DELAY_MS);
 
-		timeout += FORCE_WAKE_DELAY_MS;
+		curr_time = qdf_system_ticks_to_msecs(qdf_system_ticks());
 	}
 
 	if (pld_is_device_awake(scn->qdf_dev->dev) <= 0) {
-		hif_err("Unable to wake up mhi");
+		hif_err("Unable to wake up mhi, start time %u end time %u current time %u ref count %d",
+			start_time, end_time, curr_time,
+			pld_is_device_awake(scn->qdf_dev->dev));
 		HIF_STATS_INC(ipci_scn, mhi_force_wake_failure, 1);
 		hif_force_wake_release(hif_handle);
 		return -EINVAL;
@@ -929,6 +965,12 @@ int hif_force_wake_release(struct hif_opaque_softc *hif_handle)
 	int ret;
 	struct hif_softc *scn = (struct hif_softc *)hif_handle;
 	struct hif_ipci_softc *ipci_scn = HIF_GET_IPCI_SOFTC(scn);
+
+	if (qdf_is_fw_down()) {
+		HIF_STATS_INC(ipci_scn, mhi_force_wake_release_failure, 1);
+		hif_info("F.W is recovering/down skip successful force_wake_release");
+		return 0;
+	}
 
 	ret = pld_force_wake_release(scn->qdf_dev->dev);
 	if (ret) {
@@ -990,7 +1032,8 @@ int hif_prevent_link_low_power_states(struct hif_opaque_softc *hif)
 			qdf_udelay(EP_VOTE_POLL_TIME_US);
 			count++;
 		} else {
-			qdf_sleep_us(EP_WAKE_RESET_DELAY_US);
+			qdf_usleep_range(EP_WAKE_RESET_DELAY_US - 10,
+					 EP_WAKE_RESET_DELAY_US);
 		}
 		curr_time = qdf_system_ticks_to_msecs(qdf_system_ticks());
 	}
@@ -1017,7 +1060,8 @@ int hif_prevent_link_low_power_states(struct hif_opaque_softc *hif)
 			qdf_udelay(EP_WAKE_RESET_DELAY_US);
 			count++;
 		} else {
-			qdf_sleep_us(EP_WAKE_DELAY_US);
+			qdf_usleep_range(EP_WAKE_DELAY_US - 50,
+					 EP_WAKE_DELAY_US);
 		}
 
 		curr_time = qdf_system_ticks_to_msecs(qdf_system_ticks());
@@ -1077,5 +1121,61 @@ int hif_ipci_disable_grp_irqs(struct hif_softc *scn)
 		ipci_scn->grp_irqs_disabled = true;
 
 	return status;
+}
+#endif
+#ifdef IPA_OPT_WIFI_DP
+int hif_prevent_l1(struct hif_opaque_softc *hif)
+{
+	int status;
+
+	status = hif_force_wake_request(hif);
+	if (status)
+		hif_err("Force wake request error");
+
+	return status;
+}
+
+void hif_allow_l1(struct hif_opaque_softc *hif)
+{
+	int status;
+
+	status = hif_force_wake_release(hif);
+	if (status)
+		hif_err("Force wake release error");
+}
+
+QDF_STATUS hif_disable_rtpm(struct hif_opaque_softc *hif,
+			    uint32_t id)
+{
+	struct hif_softc *hif_softc = (struct hif_softc *)hif;
+	QDF_STATUS ret;
+
+	ret = hif_rtpm_get(HIF_RTPM_GET_SYNC,
+			   id);
+	if (ret == QDF_STATUS_SUCCESS)
+		qdf_atomic_inc(&hif_softc->opt_wifi_dp_rtpm_cnt);
+
+	hif_info("opt_dp: pcie link up count %d",
+		 qdf_atomic_read(&hif_softc->opt_wifi_dp_rtpm_cnt));
+	return ret;
+}
+
+QDF_STATUS hif_enable_rtpm(struct hif_opaque_softc *hif,
+			   uint32_t id)
+{
+	struct hif_softc *hif_softc = (struct hif_softc *)hif;
+	QDF_STATUS ret = QDF_STATUS_SUCCESS;
+
+	if (qdf_atomic_read(&hif_softc->opt_wifi_dp_rtpm_cnt) > 0) {
+		ret = hif_rtpm_put(HIF_RTPM_PUT_ASYNC,
+				   id);
+		if (ret == QDF_STATUS_SUCCESS)
+			qdf_atomic_dec(&hif_softc->opt_wifi_dp_rtpm_cnt);
+	}
+
+	hif_info("opt_dp: pcie link down count %d",
+		 qdf_atomic_read(&hif_softc->opt_wifi_dp_rtpm_cnt));
+
+	return ret;
 }
 #endif

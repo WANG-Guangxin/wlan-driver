@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -35,6 +35,7 @@
 #include <target_if_reg.h>
 #include <target_if_twt.h>
 #include <cdp_txrx_ctrl.h>
+#include <wmi_unified_api.h>
 
 /**
  *  init_deinit_alloc_host_mem_chunk() - allocates chunk of memory requested
@@ -558,6 +559,13 @@ void init_deinit_prepare_send_init_cmd(
 		target_if_twt_set_twt_ack_support(psoc, true);
 	}
 
+	target_if_twt_set_wake_dur_and_wake_intvl(
+		psoc,
+		info->service_ext2_param.twt_wake_dur_and_intvl.min_wake_dur,
+		info->service_ext2_param.twt_wake_dur_and_intvl.max_wake_dur,
+		info->service_ext2_param.twt_wake_dur_and_intvl.min_wake_intvl,
+		info->service_ext2_param.twt_wake_dur_and_intvl.max_wake_intvl);
+
 	info->wlan_res_cfg.target_cap_flags =
 		target_psoc_get_target_cap_flags(tgt_hdl);
 
@@ -582,6 +590,10 @@ void init_deinit_prepare_send_init_cmd(
 		info->wlan_res_cfg.dp_peer_meta_data_ver =
 			target_psoc_get_target_dp_peer_meta_data_ver(tgt_hdl);
 
+	if (!wmi_service_enabled(wmi_handle,
+				 wmi_service_apf_data_offload_support_enabled))
+		info->wlan_res_cfg.apfv6_offload_disabled = 0;
+
 	/* notify DP rx peer metadata version */
 	init_deinit_set_dp_rx_peer_metadata_ver(
 			psoc, info->wlan_res_cfg.dp_peer_meta_data_ver);
@@ -594,7 +606,9 @@ void init_deinit_prepare_send_init_cmd(
 
 	target_if_set_num_max_mlo_link(psoc, info);
 
-	wmi_unified_init_cmd_send(wmi_handle, &init_param);
+	ret_val = wmi_unified_init_cmd_send(wmi_handle, &init_param);
+	if (QDF_IS_STATUS_SUCCESS(ret_val))
+		wmi_set_init_cmd_sent(wmi_handle);
 
 	/* Set Max scans allowed */
 	target_if_scan_set_max_active_scans(psoc,

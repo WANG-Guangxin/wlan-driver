@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -205,7 +205,7 @@ struct csr_roam_connectedinfo {
 /**
  * struct csr_disconnect_stats - Disconnect Stats per session
  * @disconnection_cnt: total no. of disconnections
- * @disconnection_by_app: diconnections triggered by application
+ * @disconnection_by_app: disconnections triggered by application
  * @disassoc_by_peer: disassoc sent by peer
  * @deauth_by_peer: deauth sent by peer
  * @bmiss: disconnect triggered by beacon miss
@@ -407,12 +407,12 @@ struct csr_roamstruct {
  * The function return the min of supported dot11 mode and vdev type dot11mode
  * for given vdev type.
  *
- * Return:csr_cfgdot11mode
+ * Return: mlme_dot11_mode
  */
-enum csr_cfgdot11mode
+enum mlme_dot11_mode
 csr_get_vdev_dot11_mode(struct mac_context *mac,
 			uint8_t vdev_id,
-			enum csr_cfgdot11mode curr_dot11_mode);
+			enum mlme_dot11_mode curr_dot11_mode);
 
 QDF_STATUS csr_get_channel_and_power_list(struct mac_context *mac);
 
@@ -428,17 +428,9 @@ bool csr_is_conn_state_disconnected(struct mac_context *mac,
 				    uint8_t vdev_id);
 bool csr_is_conn_state_connected(struct mac_context *mac,
 					       uint32_t sessionId);
-bool csr_is_conn_state_wds(struct mac_context *mac, uint32_t sessionId);
-bool csr_is_conn_state_connected_wds(struct mac_context *mac,
-						    uint32_t sessionId);
-bool csr_is_conn_state_disconnected_wds(struct mac_context *mac,
-		uint32_t sessionId);
 bool csr_is_any_session_in_connect_state(struct mac_context *mac);
 bool csr_is_all_session_disconnected(struct mac_context *mac);
 
-bool csr_is_infra_ap_started(struct mac_context *mac);
-bool csr_is_conn_state_connected_infra_ap(struct mac_context *mac,
-		uint32_t sessionId);
 QDF_STATUS csr_get_snr(struct mac_context *mac, tCsrSnrCallback callback,
 			  struct qdf_mac_addr bssId, void *pContext);
 QDF_STATUS csr_get_config_param(struct mac_context *mac,
@@ -545,7 +537,9 @@ QDF_STATUS csr_roam_send_chan_sw_ie_request(struct mac_context *mac,
 					    uint32_t target_chan_freq,
 					    uint8_t csaIeReqd,
 					    struct ch_params *ch_params,
-					    uint32_t new_cac_ms);
+					    uint32_t new_cac_ms,
+					    uint8_t beacon_cnt,
+					    uint8_t mode);
 
 QDF_STATUS csr_roam_modify_add_ies(struct mac_context *mac,
 					tSirModifyIE *pModifyIE,
@@ -553,6 +547,19 @@ QDF_STATUS csr_roam_modify_add_ies(struct mac_context *mac,
 QDF_STATUS
 csr_roam_update_add_ies(struct mac_context *mac,
 		tSirUpdateIE *pUpdateIE, eUpdateIEsType updateType);
+
+/*
+ * csr_roam_update_rnr_ies -
+ * This function sends msg to update the RNR IE buffers in PE
+ *
+ * @mac: mac global structure
+ * @updateie: buffer containing rnr IE from hostapd
+ *
+ * Return: QDF_STATUS -  Success or failure
+ */
+QDF_STATUS
+csr_roam_update_rnr_ies(struct mac_context *mac,
+			struct ssirupdaternrie *updateie);
 
 bool csr_nonscan_active_ll_remove_entry(
 			struct mac_context *mac_ctx,

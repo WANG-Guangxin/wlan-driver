@@ -1,15 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2026 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/of.h>
+#include <linux/version.h>
+#include <linux/gpio/consumer.h>
+#if (KERNEL_VERSION(7, 1, 0) > LINUX_VERSION_CODE)
 #include <linux/of_gpio.h>
+#endif
 #include <linux/pinctrl/consumer.h>
+#if IS_ENABLED(CONFIG_PINCTRL_MSM) && !IS_ENABLED(CONFIG_PINCTRL_MSM_NO_EXT)
 #include <linux/pinctrl/qcom-pinctrl.h>
+#endif
 #include <linux/regulator/consumer.h>
 #if IS_ENABLED(CONFIG_QCOM_COMMAND_DB)
 #include <soc/qcom/cmd-db.h>
@@ -19,7 +25,6 @@
 #include "debug.h"
 #include "bus.h"
 #include <linux/soc/qcom/qcom_aoss.h>
-#include "pci_platform.h"
 
 #if IS_ENABLED(CONFIG_ARCH_QCOM)
 static struct cnss_vreg_cfg cnss_vreg_list[] = {
@@ -43,6 +48,7 @@ static struct cnss_vreg_cfg cnss_vreg_list[] = {
 	{"vdd-wlan-rfa3", 1900000, 1900000, 450000, 0, 0},
 	{"alt-sleep-clk", 0, 0, 0, 0, 0},
 	{"vdd-wlan-en", 0, 0, 0, 10, 0},
+	{"vdd-wlan-cx", 892000, 1000000, 0, 0, 0},
 };
 
 static struct cnss_clk_cfg cnss_clk_list[] = {
@@ -69,7 +75,11 @@ static struct cnss_clk_cfg cnss_clk_list[] = {
 #define BT_EN_GPIO			"qcom,bt-en-gpio"
 #define XO_CLK_GPIO			"qcom,xo-clk-gpio"
 #define SW_CTRL_GPIO			"qcom,sw-ctrl-gpio"
+#define SW_CTRL_GPIO_CON_ID		"qcom,sw-ctrl"
 #define WLAN_SW_CTRL_GPIO		"qcom,wlan-sw-ctrl-gpio"
+#define WLAN_SW_CTRL_GPIO_CON_ID	"qcom,wlan-sw-ctrl"
+#define SW_CTRL_DATA_0_GPIO		"qcom,sw-ctrl-data-0-gpio"
+#define SW_CTRL_DATA_1_GPIO		"qcom,sw-ctrl-data-1-gpio"
 #define WLAN_EN_ACTIVE			"wlan_en_active"
 #define WLAN_EN_SLEEP			"wlan_en_sleep"
 #define WLAN_VREGS_PROP			"wlan_vregs"
@@ -79,6 +89,7 @@ static struct cnss_clk_cfg cnss_clk_list[] = {
 #define WLAN_ENABLE_DELAY		1000
 /* unit ms */
 #define WLAN_ENABLE_DELAY_ROME		10
+#define WLAN_ENABLE_DELAY_M2_SUPPLY	50
 
 #define TCS_CMD_DATA_ADDR_OFFSET	0x4
 #define TCS_OFFSET			0xC8
@@ -89,10 +100,14 @@ static struct cnss_clk_cfg cnss_clk_list[] = {
 #define CNSS_MBOX_TIMEOUT_MS 1000
 /* Platform HW config */
 #define CNSS_PMIC_VOLTAGE_STEP 4
-#define CNSS_PMIC_AUTO_HEADROOM 16
-#define CNSS_IR_DROP_WAKE 30
-#define CNSS_IR_DROP_SLEEP 10
+#define CNSS_PMIC_AUTO_HEADROOM_DEFAULT 16
+#define CNSS_PMIC_AUTO_HEADROOM (plat_priv->pmic_auto_headroom)
+#define CNSS_IR_DROP_WAKE_DEFAULT 30
+#define CNSS_IR_DROP_WAKE (plat_priv->wake_voltage_drop_adjustment)
+#define CNSS_IR_DROP_SLEEP_DEFAULT 10
+#define CNSS_IR_DROP_SLEEP (plat_priv->sleep_voltage_drop_adjustment)
 #define VREG_NOTFOUND 1
+#define AON_REG_SLEEP_VOLTAGE 750
 
 /**
  * enum cnss_aop_vreg_param: Voltage regulator TCS param
@@ -429,6 +444,11 @@ static void cnss_put_vreg(struct cnss_plat_data *plat_priv,
 	}
 }
 
+static int cnss_is_cx_rail(struct cnss_vreg_info *vreg)
+{
+	return strcmp(vreg->cfg.name, "vdd-wlan-cx") == 0;
+}
+
 static int cnss_vreg_on(struct cnss_plat_data *plat_priv,
 			struct list_head *vreg_list)
 {
@@ -438,6 +458,10 @@ static int cnss_vreg_on(struct cnss_plat_data *plat_priv,
 	list_for_each_entry(vreg, vreg_list, list) {
 		if (IS_ERR_OR_NULL(vreg->reg))
 			continue;
+		if ((plat_priv->device_id == FIG_DEVICE_ID) &&
+		    cnss_is_cx_rail(vreg)) {
+			continue;
+		}
 		ret = cnss_vreg_on_single(vreg);
 		if (ret)
 			break;
@@ -465,6 +489,10 @@ static int cnss_vreg_off(struct cnss_plat_data *plat_priv,
 		if (IS_ERR_OR_NULL(vreg->reg))
 			continue;
 
+		if ((plat_priv->device_id == FIG_DEVICE_ID) &&
+		    cnss_is_cx_rail(vreg)) {
+			continue;
+		}
 		cnss_vreg_off_single(vreg);
 	}
 
@@ -476,12 +504,17 @@ static int cnss_vreg_unvote(struct cnss_plat_data *plat_priv,
 {
 	struct cnss_vreg_info *vreg;
 
-	if (plat_priv->is_fw_managed_pwr)
+	if (plat_priv->pwr_ctrl_mode != CNSS_POWER_CTRL_HOST)
 		return 0;
 
 	list_for_each_entry_reverse(vreg, vreg_list, list) {
 		if (IS_ERR_OR_NULL(vreg->reg))
 			continue;
+
+		if ((plat_priv->device_id == FIG_DEVICE_ID) &&
+		    cnss_is_cx_rail(vreg)) {
+			continue;
+		}
 
 		if (vreg->cfg.need_unvote)
 			cnss_vreg_unvote_single(vreg);
@@ -783,13 +816,54 @@ static int cnss_clk_off(struct cnss_plat_data *plat_priv,
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_PINCTRL_MSM) && !IS_ENABLED(CONFIG_PINCTRL_MSM_NO_EXT)
+static void cnss_set_wakeup_cap_for_gpios(struct device *dev)
+{
+	int ret;
+	u32 gpio_id, i;
+	int gpio_id_n;
+
+	/* Find out and configure all those GPIOs which need to be setup
+	 * for interrupt wakeup capable
+	 */
+	gpio_id_n = of_property_count_u32_elems(dev->of_node, "mpm_wake_set_gpios");
+	if (gpio_id_n <= 0) {
+		cnss_pr_dbg("No GPIOs to be setup for interrupt wakeup capable\n");
+		return;
+	}
+
+	cnss_pr_dbg("Num of GPIOs to be setup for interrupt wakeup capable: %d\n",
+		    gpio_id_n);
+	for (i = 0; i < gpio_id_n; i++) {
+		ret = of_property_read_u32_index(dev->of_node,
+						 "mpm_wake_set_gpios",
+						 i, &gpio_id);
+		if (ret) {
+			cnss_pr_err("Failed to read gpio_id at index: %d, ret: %d\n", i, ret);
+			continue;
+		}
+
+		ret = msm_gpio_mpm_wake_set(gpio_id, 1);
+		if (ret < 0) {
+			cnss_pr_err("Failed to setup gpio_id: %d as interrupt wakeup capable, ret: %d\n",
+				    gpio_id, ret);
+		} else {
+			cnss_pr_dbg("gpio_id: %d successfully setup for interrupt wakeup capable\n",
+				    gpio_id);
+		}
+	}
+}
+#else
+static inline void cnss_set_wakeup_cap_for_gpios(struct device *dev)
+{
+}
+#endif
+
 int cnss_get_pinctrl(struct cnss_plat_data *plat_priv)
 {
 	int ret = 0;
 	struct device *dev;
 	struct cnss_pinctrl_info *pinctrl_info;
-	u32 gpio_id, i;
-	int gpio_id_n;
 
 	dev = &plat_priv->plat_dev->dev;
 	pinctrl_info = &plat_priv->pinctrl_info;
@@ -797,7 +871,13 @@ int cnss_get_pinctrl(struct cnss_plat_data *plat_priv)
 	pinctrl_info->pinctrl = devm_pinctrl_get(dev);
 	if (IS_ERR_OR_NULL(pinctrl_info->pinctrl)) {
 		ret = PTR_ERR(pinctrl_info->pinctrl);
-		cnss_pr_err("Failed to get pinctrl, err = %d\n", ret);
+		if (ret == -ENODEV) {
+			cnss_pr_info("pinctrl is NOT configured\n");
+			ret = 0;
+		} else {
+			cnss_pr_err("Failed to get pinctrl, err = %d\n", ret);
+		}
+
 		goto out;
 	}
 
@@ -883,6 +963,16 @@ int cnss_get_pinctrl(struct cnss_plat_data *plat_priv)
 		cnss_pr_dbg("Switch control GPIO: %d\n",
 			    pinctrl_info->sw_ctrl_gpio);
 
+		/* Hold reference while in use to ensure GPIO resource
+		 * is not freed by GPIO driver.
+		 */
+		if (IS_ERR_OR_NULL(devm_gpiod_get_optional(dev,
+							   SW_CTRL_GPIO_CON_ID,
+							   GPIOD_IN))) {
+			cnss_pr_dbg("Failed to get sw_ctrl GPIO reference\n");
+			pinctrl_info->sw_ctrl_gpio = -EINVAL;
+		}
+
 		pinctrl_info->sw_ctrl =
 			pinctrl_lookup_state(pinctrl_info->pinctrl,
 					     "sw_ctrl");
@@ -902,6 +992,22 @@ int cnss_get_pinctrl(struct cnss_plat_data *plat_priv)
 	}
 
 	if (of_find_property(dev->of_node, WLAN_SW_CTRL_GPIO, NULL)) {
+		pinctrl_info->wlan_sw_ctrl_gpio = of_get_named_gpio(dev->of_node,
+								    WLAN_SW_CTRL_GPIO,
+								    0);
+		cnss_pr_dbg("WLAN Switch control GPIO: %d\n",
+			    pinctrl_info->wlan_sw_ctrl_gpio);
+
+		/* Hold reference while in use to ensure GPIO resource
+		 * is not freed by GPIO driver.
+		 */
+		if (IS_ERR_OR_NULL(devm_gpiod_get_optional(dev,
+							   WLAN_SW_CTRL_GPIO_CON_ID,
+							   GPIOD_IN))) {
+			cnss_pr_dbg("Failed to get wlan_sw_ctrl GPIO reference\n");
+			pinctrl_info->wlan_sw_ctrl_gpio = -EINVAL;
+		}
+
 		pinctrl_info->sw_ctrl_wl_cx =
 			pinctrl_lookup_state(pinctrl_info->pinctrl,
 					     "sw_ctrl_wl_cx");
@@ -917,37 +1023,31 @@ int cnss_get_pinctrl(struct cnss_plat_data *plat_priv)
 				cnss_pr_err("Failed to select sw_ctrl_wl_cx state, err = %d\n",
 					    ret);
 		}
-	}
-
-	/* Find out and configure all those GPIOs which need to be setup
-	 * for interrupt wakeup capable
-	 */
-	gpio_id_n = of_property_count_u32_elems(dev->of_node, "mpm_wake_set_gpios");
-	if (gpio_id_n > 0) {
-		cnss_pr_dbg("Num of GPIOs to be setup for interrupt wakeup capable: %d\n",
-			    gpio_id_n);
-		for (i = 0; i < gpio_id_n; i++) {
-			ret = of_property_read_u32_index(dev->of_node,
-							 "mpm_wake_set_gpios",
-							 i, &gpio_id);
-			if (ret) {
-				cnss_pr_err("Failed to read gpio_id at index: %d\n", i);
-				continue;
-			}
-
-			ret = msm_gpio_mpm_wake_set(gpio_id, 1);
-			if (ret < 0) {
-				cnss_pr_err("Failed to setup gpio_id: %d as interrupt wakeup capable, ret: %d\n",
-					    ret);
-			} else {
-				cnss_pr_dbg("gpio_id: %d successfully setup for interrupt wakeup capable\n",
-					    gpio_id);
-			}
-		}
 	} else {
-		cnss_pr_dbg("No GPIOs to be setup for interrupt wakeup capable\n");
+		pinctrl_info->wlan_sw_ctrl_gpio = -EINVAL;
 	}
 
+	if (of_find_property(dev->of_node, SW_CTRL_DATA_0_GPIO, NULL)) {
+		pinctrl_info->sw_ctrl_data_0_gpio = of_get_named_gpio(dev->of_node,
+								      SW_CTRL_DATA_0_GPIO,
+								      0);
+		cnss_pr_dbg("Switch control data 0 GPIO: %d\n",
+			    pinctrl_info->sw_ctrl_data_0_gpio);
+	} else {
+		pinctrl_info->sw_ctrl_data_0_gpio = -EINVAL;
+	}
+
+	if (of_find_property(dev->of_node, SW_CTRL_DATA_1_GPIO, NULL)) {
+		pinctrl_info->sw_ctrl_data_1_gpio = of_get_named_gpio(dev->of_node,
+								      SW_CTRL_DATA_1_GPIO,
+								      0);
+		cnss_pr_dbg("Switch control data 1 GPIO: %d\n",
+			    pinctrl_info->sw_ctrl_data_1_gpio);
+	} else {
+		pinctrl_info->sw_ctrl_data_1_gpio = -EINVAL;
+	}
+
+	cnss_set_wakeup_cap_for_gpios(dev);
 	return 0;
 out:
 	return ret;
@@ -1011,8 +1111,8 @@ retry_gpio_req:
 	gpio_free(xo_clk_gpio);
 }
 
-int cnss_select_pinctrl_state(struct cnss_plat_data *plat_priv,
-			      bool state)
+static int cnss_select_pinctrl_state(struct cnss_plat_data *plat_priv,
+				     bool state)
 {
 	int ret = 0;
 	struct cnss_pinctrl_info *pinctrl_info;
@@ -1062,6 +1162,12 @@ int cnss_select_pinctrl_state(struct cnss_plat_data *plat_priv,
 			if (plat_priv->device_id == QCA6174_DEVICE_ID ||
 			    plat_priv->device_id == 0)
 				mdelay(WLAN_ENABLE_DELAY_ROME);
+			/* Apply delay between WLAN device power on
+			 * and PERST De-assertion as per
+			 * PCI_Express_M.2_Spec Test Compliance Requirement.
+			 */
+			else if (plat_priv->m2_supply_detected)
+				msleep(WLAN_ENABLE_DELAY_M2_SUPPLY);
 			else
 				udelay(WLAN_ENABLE_DELAY);
 
@@ -1103,18 +1209,25 @@ out:
  * cnss_select_pinctrl_enable - select WLAN_GPIO for Active pinctrl status
  * @plat_priv: Platform private data structure pointer
  *
- * For QCA6490, PMU requires minimum 100ms delay between BT_EN_GPIO off and
+ * For QCN7605/QCA6490, PMU requires minimum 100ms delay between BT_EN_GPIO off and
  * WLAN_EN_GPIO on. This is done to avoid power up issues.
  *
  * Return: Status of pinctrl select operation. 0 - Success.
  */
-int cnss_select_pinctrl_enable(struct cnss_plat_data *plat_priv)
+static int cnss_select_pinctrl_enable(struct cnss_plat_data *plat_priv)
 {
 	int ret = 0, bt_en_gpio = plat_priv->pinctrl_info.bt_en_gpio;
 	u8 wlan_en_state = 0;
 
-	if (bt_en_gpio < 0 || plat_priv->device_id != QCA6490_DEVICE_ID)
+	if (bt_en_gpio < 0)
 		goto set_wlan_en;
+	switch (plat_priv->device_id) {
+	case QCN7605_DEVICE_ID:
+	case QCA6490_DEVICE_ID:
+		break;
+	default:
+		goto set_wlan_en;
+	}
 
 	if (gpio_get_value(bt_en_gpio)) {
 		cnss_pr_dbg("BT_EN_GPIO State: On\n");
@@ -1163,6 +1276,47 @@ enum domains_t {
 	POWER_GPIO = 1,
 };
 
+static int cnss_pm_notify(struct notifier_block *b,
+			 unsigned long event, void *p)
+{
+	struct cnss_plat_data *plat_priv;
+
+	plat_priv = container_of(b, struct cnss_plat_data, pm_notifier);
+
+	if (!plat_priv)
+		return NOTIFY_STOP;
+
+	cnss_pr_info("system PM event: %lu", event);
+
+	switch (event) {
+	case PM_SUSPEND_PREPARE:
+	case PM_HIBERNATION_PREPARE:
+		plat_priv->pm_suspend_in_progress = true;
+		break;
+	case PM_POST_SUSPEND:
+	case PM_POST_HIBERNATION:
+		plat_priv->pm_suspend_in_progress = false;
+		break;
+	}
+
+	return NOTIFY_DONE;
+}
+
+void cnss_pm_notifier_init(struct cnss_plat_data *plat_priv)
+{
+	if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_SCMI) {
+		plat_priv->pm_notifier.notifier_call = cnss_pm_notify;
+		plat_priv->pm_notifier.priority = 100;
+		register_pm_notifier(&plat_priv->pm_notifier);
+	}
+}
+
+void cnss_pm_notifier_deinit(struct cnss_plat_data *plat_priv)
+{
+	if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_SCMI)
+		unregister_pm_notifier(&plat_priv->pm_notifier);
+}
+
 int
 cnss_fw_managed_power_regulator(struct cnss_plat_data *plat_priv,
 				bool enabled)
@@ -1170,10 +1324,13 @@ cnss_fw_managed_power_regulator(struct cnss_plat_data *plat_priv,
 	struct device *dev = plat_priv->pd_devs[POWER_REGULATOR];
 	int ret;
 
-	if (enabled)
+	if (enabled) {
 		ret = pm_runtime_resume_and_get(dev);
-	else
+	} else {
+		if (!plat_priv->pm_suspend_in_progress)
+			atomic_set(&dev->power.usage_count, 1);
 		ret = pm_runtime_put_sync(dev);
+	}
 
 	if (ret < 0)
 		cnss_pr_err("regulator operation failed with err=%d\n", ret);
@@ -1187,10 +1344,13 @@ cnss_fw_managed_power_gpio(struct cnss_plat_data *plat_priv, bool enabled)
 	struct device *dev = plat_priv->pd_devs[POWER_GPIO];
 	int ret;
 
-	if (enabled)
+	if (enabled) {
 		ret = pm_runtime_resume_and_get(dev);
-	else
+	} else {
+		if (!plat_priv->pm_suspend_in_progress)
+			atomic_set(&dev->power.usage_count, 1);
 		ret = pm_runtime_put_sync(dev);
+	}
 
 	if (ret < 0)
 		cnss_pr_err("gpio operation failed with err=%d\n", ret);
@@ -1225,12 +1385,12 @@ out:
 int cnss_fw_managed_domain_attach(struct cnss_plat_data *plat_priv)
 {
 	struct device *dev = &plat_priv->plat_dev->dev;
-	int i;
+	int i, ret = 0;
 
 	plat_priv->pd_count = of_count_phandle_with_args(
 		dev->of_node, "power-domains", "#power-domain-cells");
 	if (plat_priv->pd_count <= 1)
-		return 0;
+		goto out;
 
 	plat_priv->pd_devs = devm_kcalloc(dev, plat_priv->pd_count,
 					  sizeof(*plat_priv->pd_devs),
@@ -1241,16 +1401,19 @@ int cnss_fw_managed_domain_attach(struct cnss_plat_data *plat_priv)
 	for (i = 0; i < plat_priv->pd_count; i++) {
 		plat_priv->pd_devs[i] = dev_pm_domain_attach_by_id(dev, i);
 		if (IS_ERR(plat_priv->pd_devs[i])) {
+			ret = PTR_ERR(plat_priv->pd_devs[i]);
 			cnss_fw_managed_domain_detach(plat_priv);
-			return PTR_ERR(plat_priv->pd_devs[i]);
+			goto out;
 		}
 	}
 
-	return 0;
+out:
+	return ret;
 }
 
 void cnss_fw_managed_domain_detach(struct cnss_plat_data *plat_priv)
 {
+	struct device *dev = &plat_priv->plat_dev->dev;
 	int i;
 
 	if (plat_priv->pd_count <= 1)
@@ -1260,8 +1423,23 @@ void cnss_fw_managed_domain_detach(struct cnss_plat_data *plat_priv)
 		if (!IS_ERR_OR_NULL(plat_priv->pd_devs[i]))
 			dev_pm_domain_detach(plat_priv->pd_devs[i], true);
 	}
+
+	if (plat_priv->pd_devs) {
+		devm_kfree(dev, plat_priv->pd_devs);
+		plat_priv->pd_devs = NULL;
+	}
 }
 #else
+void cnss_pm_notifier_init(struct cnss_plat_data *plat_priv)
+{
+	return;
+}
+
+void cnss_pm_notifier_deinit(struct cnss_plat_data *plat_priv)
+{
+	return;
+}
+
 static int cnss_scmi_pm_enable(struct cnss_plat_data *plat_priv)
 {
 	return -EOPNOTSUPP;
@@ -1291,87 +1469,69 @@ void cnss_fw_managed_domain_detach(struct cnss_plat_data *plat_priv)
 }
 #endif
 
-int cnss_power_on_device(struct cnss_plat_data *plat_priv, bool reset)
+static int
+cnss_power_on_device_host(struct cnss_plat_data *plat_priv, bool reset)
 {
 	int ret = 0;
-	int dsp_link_status = -1;
 
-	if (plat_priv->powered_on) {
-		cnss_pr_dbg("Already powered up");
-		return 0;
-	}
-
-	cnss_wlan_hw_disable_check(plat_priv);
-	if (test_bit(CNSS_WLAN_HW_DISABLED, &plat_priv->driver_state)) {
-		cnss_pr_dbg("Avoid WLAN Power On. WLAN HW Disbaled");
-		return -EINVAL;
-	}
-
-	/* For PCIe switch platform, disable DSP downstream link before power
-	 * on/off wlan device to avoid uncorrectable AER erro on DSP side.
-	 */
-	cnss_bus_set_dsp_link_status(plat_priv, true);
-	cnss_bus_dsp_link_control(plat_priv, false);
-
-	if (plat_priv->is_fw_managed_pwr) {
-		ret = cnss_scmi_pm_enable(plat_priv);
-		if (ret)
-			goto out;
-	} else {
-		ret = cnss_vreg_on_type(plat_priv, CNSS_VREG_PRIM);
-		if (ret) {
-			cnss_pr_err("Failed to turn on vreg, err = %d\n", ret);
+	if (plat_priv->device_id == FIG_DEVICE_ID) {
+		ret = cnss_set_cx_mode(plat_priv, CX_LEGACY);
+		if (ret < 0) {
+			cnss_pr_err("Failed to set to Legacy Mode\n");
 			goto out;
 		}
 
-		ret = cnss_clk_on(plat_priv, &plat_priv->clk_list);
-		if (ret) {
-			cnss_pr_err("Failed to turn on clocks, err = %d\n", ret);
-			goto vreg_off;
+		cnss_pr_info("setting CX to OFF by default\n");
+		ret = cnss_set_cxpc_power_on_off(plat_priv, CX_OFF);
+		if (ret < 0) {
+			cnss_pr_err("failed to set CX to CX_OFF\n");
+			goto out;
 		}
+	}
 
+	ret = cnss_vreg_on_type(plat_priv, CNSS_VREG_PRIM);
+	if (ret) {
+		cnss_pr_err("Failed to turn on vreg, err = %d\n", ret);
+		goto out;
+	}
+
+	ret = cnss_clk_on(plat_priv, &plat_priv->clk_list);
+	if (ret) {
+		cnss_pr_err("Failed to turn on clocks, err = %d\n", ret);
+		goto vreg_off;
+	}
+
+	if (plat_priv->device_id == FIG_DEVICE_ID) {
+		ret = cnss_set_direct_cx_host_sol_value(plat_priv, 1);
+		if (ret < 0) {
+			cnss_pr_err("Failed to assert Host SOL\n");
+		}
+	}
 #ifdef CONFIG_PULLDOWN_WLANEN
-		if (reset) {
-			/* The default state of wlan_en maybe not low,
-			 * according to datasheet, we should put wlan_en
-			 * to low first, and trigger high.
-			 * And the default delay for qca6390 is at least 4ms,
-			 * for qcn7605/qca6174, it is 10us. For safe, set 5ms delay
-			 * here.
-			 */
-			ret = cnss_select_pinctrl_state(plat_priv, false);
-			if (ret) {
-				cnss_pr_err("Failed to select pinctrl state, err = %d\n",
-					    ret);
-				goto clk_off;
-			}
-
-			usleep_range(4000, 5000);
+	if (reset) {
+		/* The default state of wlan_en maybe not low,
+		 * according to datasheet, we should put wlan_en
+		 * to low first, and trigger high.
+		 * And the default delay for qca6390 is at least 4ms,
+		 * for qcn7605/qca6174, it is 10us. For safe, set 5ms delay
+		 * here.
+		 */
+		ret = cnss_select_pinctrl_state(plat_priv, false);
+		if (ret) {
+			cnss_pr_err("Failed to select pinctrl state, err = %d\n",
+				    ret);
+			goto clk_off;
 		}
+
+		usleep_range(4000, 5000);
+	}
 #endif
 
-		ret = cnss_select_pinctrl_enable(plat_priv);
-		if (ret) {
-			cnss_pr_err("Failed to select pinctrl state, err = %d\n", ret);
-			goto clk_off;
-		}
+	ret = cnss_select_pinctrl_enable(plat_priv);
+	if (ret) {
+		cnss_pr_err("Failed to select pinctrl state, err = %d\n", ret);
+		goto clk_off;
 	}
-
-	/* For PCIe switch platform, wait for link train of DSP<->WLAN complete
-	 */
-	dsp_link_status = cnss_bus_get_dsp_link_status(plat_priv);
-	if (dsp_link_status == PCI_DSP_LINK_DISABLE) {
-		ret = cnss_bus_dsp_link_enable(plat_priv);
-		if (ret) {
-			cnss_pr_err("Failed to enable bus dsp link, err = %d\n", ret);
-			goto clk_off;
-		}
-	}
-
-	plat_priv->powered_on = true;
-	clear_bit(CNSS_POWER_OFF, &plat_priv->driver_state);
-	cnss_enable_dev_sol_irq(plat_priv);
-	cnss_set_host_sol_value(plat_priv, 0);
 
 	return 0;
 
@@ -1381,7 +1541,141 @@ vreg_off:
 	cnss_vreg_off_type(plat_priv, CNSS_VREG_PRIM);
 out:
 	return ret;
+
 }
+
+int cnss_power_on_device(struct cnss_plat_data *plat_priv, bool reset)
+{
+	int ret = 0;
+
+	if (plat_priv->powered_on) {
+		cnss_pr_dbg("Already powered up");
+		return 0;
+	}
+
+	cnss_pr_info("Device id: 0x%lx\n", plat_priv->device_id);
+	cnss_wlan_hw_disable_check(plat_priv);
+	if (test_bit(CNSS_WLAN_HW_DISABLED, &plat_priv->driver_state)) {
+		cnss_pr_dbg("Avoid WLAN Power On. WLAN HW Disbaled");
+		return -EINVAL;
+	}
+
+	set_bit(CNSS_POWERING_ON, &plat_priv->driver_state);
+
+	if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_SCMI) {
+		ret = cnss_scmi_pm_enable(plat_priv);
+	} else if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_HOST) {
+		ret = cnss_power_on_device_host(plat_priv, reset);
+	}
+
+	if (ret) {
+		clear_bit(CNSS_POWERING_ON, &plat_priv->driver_state);
+		return ret;
+	}
+
+	plat_priv->powered_on = true;
+	clear_bit(CNSS_POWER_OFF, &plat_priv->driver_state);
+	clear_bit(CNSS_SHUTDOWN_DEVICE, &plat_priv->driver_state);
+	cnss_enable_dev_sol_irq(plat_priv);
+	cnss_set_host_sol_value(plat_priv, 0);
+
+	return 0;
+}
+
+static int cnss_aop_update_mode(struct cnss_plat_data *plat_priv)
+{
+	struct device *dev = &plat_priv->plat_dev->dev;
+	u32 i;
+	int ret = 0;
+
+	cnss_pr_dbg("Reading PDC Mode Vote table\n");
+
+	/* common DT Entries */
+	plat_priv->pdc_mode_vote_table_len =
+				of_property_count_strings(dev->of_node,
+							  "qcom,pdc_mode_vote_table");
+	if (plat_priv->pdc_mode_vote_table_len > 0) {
+		plat_priv->pdc_mode_vote_table =
+			kcalloc(plat_priv->pdc_mode_vote_table_len,
+				sizeof(char *), GFP_KERNEL);
+		if (plat_priv->pdc_mode_vote_table) {
+			ret = of_property_read_string_array(dev->of_node,
+							    "qcom,pdc_mode_vote_table",
+							    plat_priv->pdc_mode_vote_table,
+							    plat_priv->pdc_mode_vote_table_len);
+			if (ret < 0) {
+				cnss_pr_err("Failed to get PDC Mode Vote Table\n");
+				goto out;
+			}
+		} else {
+			cnss_pr_err("Failed to alloc PDC Mode Vote Table mem\n");
+			ret = -1;
+			goto out;
+		}
+	} else {
+		cnss_pr_dbg("PDC Mode Vote Table not configured\n");
+		ret = -1;
+		goto out;
+	}
+
+	cnss_pr_dbg("Updating PDC mode votes \n");
+
+	for (i = 0; i < plat_priv->pdc_mode_vote_table_len; i++) {
+		char buf[CNSS_MBOX_MSG_MAX_LEN] = {0x00};
+
+		if (strlen(plat_priv->pdc_mode_vote_table[i]) >
+		    CNSS_MBOX_MSG_MAX_LEN) {
+			cnss_pr_err("msg too long: %s\n",
+				    plat_priv->pdc_mode_vote_table[i]);
+			continue;
+		}
+
+		snprintf(buf, CNSS_MBOX_MSG_MAX_LEN,
+			 plat_priv->pdc_mode_vote_table[i]);
+
+		ret = cnss_aop_send_msg(plat_priv, buf);
+		if (ret < 0) {
+			cnss_pr_err("Failed to send QMP message for line %d\n", i);
+			break;
+		}
+	}
+
+	cnss_pr_dbg("Successfully updated regulator modes\n");
+
+out:
+	return ret;
+}
+
+static void cnss_power_off_device_host(struct cnss_plat_data *plat_priv)
+{
+	int ret;
+
+	if (plat_priv->device_id == FIG_DEVICE_ID ||
+	    plat_priv->device_id == PEACH_DEVICE_ID ||
+	    plat_priv->device_id == KIWI_DEVICE_ID)
+		cnss_aop_update_mode(plat_priv);
+
+	if (plat_priv->device_id == FIG_DEVICE_ID) {
+		ret = cnss_set_cxpc_power_on_off(plat_priv, CX_OFF);
+		if (ret < 0)
+			cnss_pr_err("failed to set cx to CX_OFF\n");
+
+		ret = cnss_set_direct_cx_host_sol_value(plat_priv, 0);
+		if (ret < 0)
+			cnss_pr_err("Failed to de-assert Host SOL\n");
+
+		cnss_pr_info("De-asserted Host SOL\n");
+		usleep_range(1000, 2000);
+		if ((cnss_get_cxpc(plat_priv) == CX_RET) &&
+		    test_bit(CNSS_DRIVER_RECOVERY, &plat_priv->driver_state))
+			cnss_pr_info("CX is in RET state\n");
+	}
+
+	cnss_select_pinctrl_state(plat_priv, false);
+	cnss_clk_off(plat_priv, &plat_priv->clk_list);
+	cnss_vreg_off_type(plat_priv, CNSS_VREG_PRIM);
+}
+
 
 void cnss_power_off_device(struct cnss_plat_data *plat_priv)
 {
@@ -1390,19 +1684,17 @@ void cnss_power_off_device(struct cnss_plat_data *plat_priv)
 		return;
 	}
 
-	cnss_bus_dsp_link_control(plat_priv, false);
 	set_bit(CNSS_POWER_OFF, &plat_priv->driver_state);
+	cnss_pr_dbg("Device_id: 0x%lx\n", plat_priv->device_id);
 	cnss_bus_shutdown_cleanup(plat_priv);
 	cnss_disable_dev_sol_irq(plat_priv);
-	if (plat_priv->is_fw_managed_pwr) {
+	if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_SCMI) {
 		cnss_fw_managed_power_gpio(plat_priv, false);
 		cnss_fw_managed_power_regulator(plat_priv, false);
-
-	} else {
-		cnss_select_pinctrl_state(plat_priv, false);
-		cnss_clk_off(plat_priv, &plat_priv->clk_list);
-		cnss_vreg_off_type(plat_priv, CNSS_VREG_PRIM);
+	} else if (plat_priv->pwr_ctrl_mode == CNSS_POWER_CTRL_HOST) {
+		cnss_power_off_device_host(plat_priv);
 	}
+
 	plat_priv->powered_on = false;
 }
 
@@ -1765,11 +2057,59 @@ static inline bool cnss_aop_interface_ready(struct cnss_plat_data *plat_priv)
 	return (plat_priv->mbox_chan || plat_priv->qmp);
 }
 
+#if IS_ENABLED(CONFIG_CNSS2_DIRECT_CX_SDAM)
+static int cnss_aop_pdc_disable_cx(struct cnss_plat_data *plat_priv)
+{
+	char pdc_mode[CNSS_MBOX_MSG_MAX_LEN] = {0x00};
+	char pdc_voltage[CNSS_MBOX_MSG_MAX_LEN] = {0x00};
+	int ret = 0;
+	const char *cx_reg_name = plat_priv->cx_reg_name;
+
+	if (plat_priv->device_id == FIG_DEVICE_ID) {
+		cnss_pr_info("Disabling PDC control of WLAN CX on device: %d\n",
+			     plat_priv->device_id);
+
+		snprintf(pdc_mode, CNSS_MBOX_MSG_MAX_LEN,
+			 "{class: wlan_pdc, ss: bb, res: %s.m, enable: 0}",
+			 cx_reg_name);
+		cnss_pr_vdbg("PDC command: %s\n", pdc_mode);
+		ret = cnss_aop_send_msg(plat_priv, pdc_mode);
+		if (ret < 0)
+			return ret;
+
+		snprintf(pdc_voltage, CNSS_MBOX_MSG_MAX_LEN,
+			 "{class: wlan_pdc, ss: bb, res: %s.v, enable: 0}",
+			 cx_reg_name);
+		cnss_pr_vdbg("PDC command: %s\n", pdc_voltage);
+		ret = cnss_aop_send_msg(plat_priv, pdc_voltage);
+		if (ret < 0)
+			return ret;
+	}
+
+	return 0;
+}
+#else
+static int cnss_aop_pdc_disable_cx(struct cnss_plat_data *plat_priv)
+{
+	return 0;
+}
+#endif
+
 /* cnss_pdc_reconfig: Send PDC init table as configured in DT for wlan device */
 int cnss_aop_pdc_reconfig(struct cnss_plat_data *plat_priv)
 {
 	u32 i;
 	int ret = 0;
+
+	cnss_pr_dbg("PDC init table length: %d\n",
+		    plat_priv->pdc_init_table_len);
+
+	ret = cnss_aop_pdc_disable_cx(plat_priv);
+	if (ret < 0) {
+		cnss_pr_err("Failed to disable PDC control of CX, err = %d\n",
+			    ret);
+		goto out;
+	}
 
 	if (plat_priv->pdc_init_table_len <= 0 || !plat_priv->pdc_init_table)
 		return 0;
@@ -1789,6 +2129,8 @@ int cnss_aop_pdc_reconfig(struct cnss_plat_data *plat_priv)
 		if (ret < 0)
 			break;
 	}
+
+out:
 	return ret;
 }
 
@@ -1905,7 +2247,7 @@ int cnss_aop_ol_cpr_cfg_setup(struct cnss_plat_data *plat_priv,
 			u32 wake_volt = 0, sleep_volt = 0;
 
 			if (plat_vreg_param[j].vreg[0] == '\0')
-				strlcpy(plat_vreg_param[j].vreg, vreg,
+				strscpy(plat_vreg_param[j].vreg, vreg,
 					sizeof(plat_vreg_param[j].vreg));
 			else if (!strnstr(plat_vreg_param[j].vreg, vreg,
 					  strlen(plat_vreg_param[j].vreg)))
@@ -1964,11 +2306,322 @@ end:
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_CNSS2_DIRECT_CX)
+int cnss_ol_cpr_cfg_ext_setup(struct cnss_plat_data *plat_priv,
+			      struct wlfw_pmu_cfg_ext_v01 *fw_pmu_cfg_ext)
+{
+	const char *pmu_pin, *vreg;
+	struct wlfw_pmu_param_ext_v01 *fw_pmu_param_ext;
+	u32 fw_pmu_param_ext_len, i, j, plat_vreg_param_len = 0;
+	int ret = 0;
+	struct platform_vreg_param {
+		char vreg[MAX_PROP_SIZE];
+		u32 wake_volt;
+		u32 sleep_volt;
+		u32 svs_v;
+		u32 lsvs;
+		u32 svsL1_v;
+	} plat_vreg_param[QMI_WLFW_PMU_PARAMS_MAX_V01] = {0};
+	int cx_pin_idx = -1;
+	int mx_pin_idx = -1;
+	static bool config_done;
+
+	if (config_done)
+		return 0;
+
+	if (plat_priv->pmu_vreg_map_len <= 0 ||
+	    !plat_priv->pmu_vreg_map ||
+	    (!plat_priv->mbox_chan && !plat_priv->qmp)) {
+		cnss_pr_dbg("Mbox channel / QMP / PMU VReg Map not configured\n");
+		goto end;
+	}
+
+	if (!fw_pmu_cfg_ext)
+		return -EINVAL;
+
+	fw_pmu_param_ext = fw_pmu_cfg_ext->pmu_param_ext;
+	fw_pmu_param_ext_len = fw_pmu_cfg_ext->pmu_param_ext_len;
+	/* Get PMU Pin name to Platfom Vreg Mapping */
+	for (i = 0; i < fw_pmu_param_ext_len; i++) {
+		cnss_pr_dbg("FW_PMU Data: %s %d %d %d %d %d %d %d %d %d %d\n",
+			    fw_pmu_param_ext[i].pin_name,
+			    fw_pmu_param_ext[i].wake_volt_valid,
+			    fw_pmu_param_ext[i].wake_volt,
+			    fw_pmu_param_ext[i].sleep_volt_valid,
+			    fw_pmu_param_ext[i].sleep_volt,
+			    fw_pmu_param_ext[i].svs_v_valid,
+			    fw_pmu_param_ext[i].svs_v,
+			    fw_pmu_param_ext[i].lsvs_valid,
+			    fw_pmu_param_ext[i].lsvs,
+			    fw_pmu_param_ext[i].svsL1_valid,
+			    fw_pmu_param_ext[i].svsL1_v);
+
+		/* Always process wake_volt and sleep_volt for aggregation,
+		 * regardless of valid bits. Only skip if other voltage types
+		 * are also invalid.
+		 */
+		if (fw_pmu_param_ext[i].wake_volt <= 0 &&
+		    fw_pmu_param_ext[i].sleep_volt <= 0 &&
+		    fw_pmu_param_ext[i].svs_v <= 0 &&
+		    fw_pmu_param_ext[i].lsvs <= 0 &&
+		    fw_pmu_param_ext[i].svsL1_v <= 0)
+			continue;
+
+		vreg = NULL;
+		for (j = 0; j < plat_priv->pmu_vreg_map_len; j += 2) {
+			pmu_pin = plat_priv->pmu_vreg_map[j];
+			if (strcmp(pmu_pin, "VDDD_WLCX_0P9") == 0)
+				cx_pin_idx = j;
+			if (strcmp(pmu_pin, "VDDD_WLMX_0P9") == 0)
+				mx_pin_idx = j;
+			if (strnstr(pmu_pin, fw_pmu_param_ext[i].pin_name,
+				    strlen(pmu_pin))) {
+				vreg = plat_priv->pmu_vreg_map[j + 1];
+				break;
+			}
+		}
+		if (!vreg) {
+			cnss_pr_err("No VREG mapping for %s\n",
+				    fw_pmu_param_ext[i].pin_name);
+			continue;
+		} else {
+			cnss_pr_dbg("%s mapped to %s\n",
+				    fw_pmu_param_ext[i].pin_name, vreg);
+		}
+		for (j = 0; j < QMI_WLFW_PMU_PARAMS_MAX_V01; j++) {
+			u32 wake_volt = 0, sleep_volt = 0,
+				svs_v = 0, lsvs = 0, svsL1_v = 0;
+
+			if (plat_vreg_param[j].vreg[0] == '\0')
+				strscpy(plat_vreg_param[j].vreg, vreg,
+					sizeof(plat_vreg_param[j].vreg));
+			else if (!strnstr(plat_vreg_param[j].vreg, vreg,
+					  strlen(plat_vreg_param[j].vreg)))
+				continue;
+
+			if (fw_pmu_param_ext[i].wake_volt > 0) {
+				wake_volt = roundup(fw_pmu_param_ext[i].wake_volt,
+						    CNSS_PMIC_VOLTAGE_STEP);
+				if (strcmp(fw_pmu_param_ext[i].pin_name, "VDDD_WLCX_0P9") != 0) {
+					wake_volt -= CNSS_PMIC_AUTO_HEADROOM;
+					wake_volt += CNSS_IR_DROP_WAKE_DEFAULT;
+				} else {
+					wake_volt += CNSS_IR_DROP_WAKE;
+				}
+			}
+			if (fw_pmu_param_ext[i].sleep_volt > 0) {
+				sleep_volt = roundup(fw_pmu_param_ext[i].sleep_volt,
+						     CNSS_PMIC_VOLTAGE_STEP);
+				if (strcmp(fw_pmu_param_ext[i].pin_name, "VDDD_WLCX_0P9") != 0) {
+					sleep_volt -= CNSS_PMIC_AUTO_HEADROOM;
+					sleep_volt += CNSS_IR_DROP_SLEEP_DEFAULT;
+				} else {
+					sleep_volt += CNSS_IR_DROP_SLEEP;
+				}
+			}
+			if (fw_pmu_param_ext[i].svs_v > 0) {
+				svs_v = roundup(fw_pmu_param_ext[i].svs_v,
+						CNSS_PMIC_VOLTAGE_STEP);
+				if (strcmp(fw_pmu_param_ext[i].pin_name, "VDDD_WLCX_0P9") != 0) {
+					svs_v -= CNSS_PMIC_AUTO_HEADROOM;
+					svs_v += CNSS_IR_DROP_WAKE_DEFAULT;
+				} else {
+					svs_v += CNSS_IR_DROP_WAKE;
+				}
+			}
+			if (fw_pmu_param_ext[i].svsL1_v > 0) {
+				svsL1_v = roundup(fw_pmu_param_ext[i].svsL1_v,
+						  CNSS_PMIC_VOLTAGE_STEP);
+				if (strcmp(fw_pmu_param_ext[i].pin_name, "VDDD_WLCX_0P9") != 0) {
+					svsL1_v -= CNSS_PMIC_AUTO_HEADROOM;
+					svsL1_v += CNSS_IR_DROP_WAKE_DEFAULT;
+				} else {
+					svsL1_v += CNSS_IR_DROP_WAKE;
+				}
+			}
+
+			plat_vreg_param[j].wake_volt =
+				(wake_volt > plat_vreg_param[j].wake_volt ?
+				 wake_volt : plat_vreg_param[j].wake_volt);
+			plat_vreg_param[j].sleep_volt =
+				(sleep_volt > plat_vreg_param[j].sleep_volt ?
+				 sleep_volt : plat_vreg_param[j].sleep_volt);
+			plat_vreg_param[j].svs_v =
+				(svs_v > plat_vreg_param[j].svs_v ?
+				 svs_v : plat_vreg_param[j].svs_v);
+			plat_vreg_param[j].lsvs =
+				(lsvs > plat_vreg_param[j].lsvs ?
+				 lsvs : plat_vreg_param[j].lsvs);
+			plat_vreg_param[j].svsL1_v =
+				(svsL1_v > plat_vreg_param[j].svsL1_v ?
+				 svsL1_v : plat_vreg_param[j].svsL1_v);
+
+			plat_vreg_param_len = (plat_vreg_param_len > j ?
+					       plat_vreg_param_len : j);
+			cnss_pr_dbg("Plat VReg Data: %s %d %d %d %d %d\n",
+				    plat_vreg_param[j].vreg,
+				    plat_vreg_param[j].wake_volt,
+				    plat_vreg_param[j].sleep_volt,
+				    plat_vreg_param[j].svs_v,
+				    plat_vreg_param[j].lsvs,
+				    plat_vreg_param[j].svsL1_v);
+			break;
+		}
+	}
+
+	for (i = 0; i <= plat_vreg_param_len; i++) {
+		if (plat_vreg_param[i].wake_volt > 0) {
+			if (cx_pin_idx >= 0 &&
+			    strcmp(plat_vreg_param[i].vreg,
+				   plat_priv->pmu_vreg_map[cx_pin_idx + 1]) == 0) {
+				ret = cnss_set_cx_voltage_corner(plat_priv,
+								 CX_NOM,
+								 plat_vreg_param[i].wake_volt);
+			} else {
+				ret =
+				cnss_aop_set_vreg_param(plat_priv,
+							plat_vreg_param[i].vreg,
+							CNSS_VREG_VOLTAGE,
+							CNSS_TCS_UP_SEQ,
+							plat_vreg_param[i].wake_volt);
+			}
+		}
+		if (plat_vreg_param[i].sleep_volt > 0) {
+			if (cx_pin_idx >= 0 &&
+			    strcmp(plat_vreg_param[i].vreg,
+				   plat_priv->pmu_vreg_map[cx_pin_idx + 1]) == 0) {
+				ret = cnss_set_cx_voltage_corner(plat_priv,
+								 CX_RET_V,
+								 plat_vreg_param[i].sleep_volt);
+			} else {
+				u32 dwnval = plat_vreg_param[i].sleep_volt;
+
+				/* For regulator mapped to WLMX rail, set
+				 * sleep_volt equal to wake_volt to 750mV to
+				 * maintain sufficient retention voltage for
+				 * chip state during DRV sleep.
+				 */
+				if (mx_pin_idx >= 0 &&
+				    strcmp(plat_vreg_param[i].vreg,
+					   plat_priv->pmu_vreg_map[mx_pin_idx + 1]) == 0)
+					dwnval = AON_REG_SLEEP_VOLTAGE;
+
+				ret =
+				cnss_aop_set_vreg_param(plat_priv,
+							plat_vreg_param[i].vreg,
+							CNSS_VREG_VOLTAGE,
+							CNSS_TCS_DOWN_SEQ,
+							dwnval);
+			}
+		}
+		if (plat_vreg_param[i].svs_v > 0) {
+			if (cx_pin_idx >= 0 &&
+			    strcmp(plat_vreg_param[i].vreg,
+				   plat_priv->pmu_vreg_map[cx_pin_idx + 1]) == 0) {
+				ret = cnss_set_cx_voltage_corner(plat_priv,
+								 CX_SVS,
+								 plat_vreg_param[i].svs_v);
+			}
+		}
+		if (plat_vreg_param[i].svsL1_v > 0) {
+			if (cx_pin_idx >= 0 &&
+			    strcmp(plat_vreg_param[i].vreg,
+				   plat_priv->pmu_vreg_map[cx_pin_idx + 1]) == 0) {
+				ret = cnss_set_cx_voltage_corner(plat_priv,
+								 CX_SVSL1,
+								 plat_vreg_param[i].svsL1_v);
+			}
+		}
+		if (ret < 0)
+			break;
+	}
+end:
+	config_done = true;
+	return ret;
+}
+#else
+int cnss_ol_cpr_cfg_ext_setup(struct cnss_plat_data *plat_priv,
+			      struct wlfw_pmu_cfg_ext_v01 *fw_pmu_cfg_ext)
+{
+	return 0;
+}
+#endif
+
+/**
+ * cnss_detect_m2_supply - Detect M.2 supply from dt prop
+ * @plat_priv: Platform private data structure pointer
+ */
+static void cnss_detect_m2_supply(struct cnss_plat_data *plat_priv)
+{
+	struct device *dev = &plat_priv->plat_dev->dev;
+
+	if (of_find_property(dev->of_node, "vdd-wlan-m2-supply", NULL)) {
+		plat_priv->m2_supply_detected = true;
+		cnss_pr_info("M.2 supply detected\n");
+	} else {
+		plat_priv->m2_supply_detected = false;
+		cnss_pr_dbg("M.2 supply not present\n");
+	}
+}
+
+/**
+ * cnss_detect_msix_support - Detect MSI-X support from dt prop
+ * @plat_priv: Platform private data structure pointer
+ */
+static void cnss_detect_msix_support(struct cnss_plat_data *plat_priv)
+{
+	struct device *dev = &plat_priv->plat_dev->dev;
+
+	if (of_find_property(dev->of_node, "msix-match-addr", NULL)) {
+		plat_priv->msix_supported = true;
+		cnss_pr_info("MSI-X supported\n");
+	} else {
+		plat_priv->msix_supported = false;
+		cnss_pr_dbg("MSI-X not supported\n");
+	}
+}
+
 void cnss_power_misc_params_init(struct cnss_plat_data *plat_priv)
 {
 	struct device *dev = &plat_priv->plat_dev->dev;
 	int ret;
 	u32 cfg_arr_size = 0, *cfg_arr = NULL;
+
+	/* Read PMIC auto headroom from devicetree, default to 16 if not present */
+	ret = of_property_read_u32(dev->of_node, "qcom,pmic-auto-headroom",
+				   &plat_priv->pmic_auto_headroom);
+	if (ret) {
+		plat_priv->pmic_auto_headroom = CNSS_PMIC_AUTO_HEADROOM_DEFAULT;
+		cnss_pr_info("PMIC auto headroom not set, using default: %d\n",
+			     plat_priv->pmic_auto_headroom);
+	} else {
+		cnss_pr_info("PMIC auto headroom configured: %d\n",
+			     plat_priv->pmic_auto_headroom);
+	}
+
+	ret = of_property_read_u32(dev->of_node,
+				   "qcom,wake-voltage-drop-adjustment",
+				   &plat_priv->wake_voltage_drop_adjustment);
+	if (ret) {
+		plat_priv->wake_voltage_drop_adjustment = CNSS_IR_DROP_WAKE_DEFAULT;
+		cnss_pr_info("Wake voltage drop not set, using default: %d\n",
+			     plat_priv->wake_voltage_drop_adjustment);
+	} else {
+		cnss_pr_info("Wake voltage drop configured: %d\n",
+			     plat_priv->wake_voltage_drop_adjustment);
+	}
+
+	ret = of_property_read_u32(dev->of_node,
+				   "qcom,sleep-voltage-drop-adjustment",
+				   &plat_priv->sleep_voltage_drop_adjustment);
+	if (ret) {
+		plat_priv->sleep_voltage_drop_adjustment = CNSS_IR_DROP_SLEEP_DEFAULT;
+		cnss_pr_info("Sleep voltage drop not set, using default: %d\n",
+			     plat_priv->sleep_voltage_drop_adjustment);
+	} else {
+		cnss_pr_info("Sleep voltage drop configured: %d\n",
+			     plat_priv->sleep_voltage_drop_adjustment);
+	}
 
 	/* common DT Entries */
 	plat_priv->pdc_init_table_len =
@@ -1990,6 +2643,17 @@ void cnss_power_misc_params_init(struct cnss_plat_data *plat_priv)
 		}
 	} else {
 		cnss_pr_dbg("PDC Init Table not configured\n");
+	}
+
+	/* Read cx regulator name from device tree */
+	ret = of_property_read_string(dev->of_node, "cx-reg-name",
+				      &plat_priv->cx_reg_name);
+	if (ret) {
+		cnss_pr_dbg("cx-reg-name not found in device tree, using default\n");
+		plat_priv->cx_reg_name = "S1J1";
+	} else {
+		cnss_pr_dbg("cx-reg-name found in device tree: %s\n",
+			    plat_priv->cx_reg_name);
 	}
 
 	plat_priv->vreg_pdc_map_len =
@@ -2067,6 +2731,9 @@ void cnss_power_misc_params_init(struct cnss_plat_data *plat_priv)
 	} else {
 		cnss_pr_dbg("On chip PMIC device ids not configured\n");
 	}
+
+	cnss_detect_m2_supply(plat_priv);
+	cnss_detect_msix_support(plat_priv);
 }
 
 int cnss_update_cpr_info(struct cnss_plat_data *plat_priv)
@@ -2210,7 +2877,7 @@ int cnss_dev_specific_power_on(struct cnss_plat_data *plat_priv)
 	int ret;
 
 	if (plat_priv->dt_type != CNSS_DTT_MULTIEXCHG ||
-	    plat_priv->is_fw_managed_pwr)
+	    plat_priv->pwr_ctrl_mode != CNSS_POWER_CTRL_HOST)
 		return 0;
 
 	ret = cnss_get_vreg_type(plat_priv, CNSS_VREG_PRIM);
@@ -2219,4 +2886,73 @@ int cnss_dev_specific_power_on(struct cnss_plat_data *plat_priv)
 
 	plat_priv->powered_on = false;
 	return cnss_power_on_device(plat_priv, false);
+}
+
+void cnss_read_gpio_status_on_link_down(struct cnss_plat_data *plat_priv)
+{
+	struct cnss_pinctrl_info *pinctrl_info;
+	int wlan_sw_ctrl_status = -1;
+	int sw_ctrl_status = -1;
+	int sw_ctrl_data_0_status = -1;
+	int sw_ctrl_data_1_status = -1;
+
+	if (!plat_priv) {
+		cnss_pr_err("plat_priv is NULL\n");
+		return;
+	}
+
+	pinctrl_info = &plat_priv->pinctrl_info;
+
+	/* Read wlan-sw-ctrl GPIO status */
+	if (pinctrl_info->wlan_sw_ctrl_gpio >= 0) {
+		wlan_sw_ctrl_status =
+			gpio_get_value(pinctrl_info->wlan_sw_ctrl_gpio);
+		cnss_pr_info("wlan-sw-ctrl GPIO(%d) status = %d\n",
+			     pinctrl_info->wlan_sw_ctrl_gpio,
+			     wlan_sw_ctrl_status);
+	}
+
+	/* Read sw-ctrl GPIO status */
+	if (pinctrl_info->sw_ctrl_gpio >= 0) {
+		sw_ctrl_status = gpio_get_value(pinctrl_info->sw_ctrl_gpio);
+		cnss_pr_info("sw-ctrl GPIO(%d) status = %d\n",
+			     pinctrl_info->sw_ctrl_gpio, sw_ctrl_status);
+	}
+
+	/* Read sw-ctrl-data-0 GPIO status */
+	if (pinctrl_info->sw_ctrl_data_0_gpio >= 0) {
+		sw_ctrl_data_0_status =
+			gpio_get_value(pinctrl_info->sw_ctrl_data_0_gpio);
+		cnss_pr_info("sw-ctrl-data-0 GPIO(%d) status = %d\n",
+			     pinctrl_info->sw_ctrl_data_0_gpio,
+			     sw_ctrl_data_0_status);
+	}
+
+	/* Read sw-ctrl-data-1 GPIO status */
+	if (pinctrl_info->sw_ctrl_data_1_gpio >= 0) {
+		sw_ctrl_data_1_status =
+			gpio_get_value(pinctrl_info->sw_ctrl_data_1_gpio);
+		cnss_pr_info("sw-ctrl-data-1 GPIO(%d) status = %d\n",
+			     pinctrl_info->sw_ctrl_data_1_gpio,
+			     sw_ctrl_data_1_status);
+	}
+}
+
+void cnss_power_ctrl_mode_init(struct cnss_plat_data *plat_priv)
+{
+	int ret;
+
+	ret  = of_property_read_u32(plat_priv->plat_dev->dev.of_node,
+				    "power-ctrl-mode",
+				    &plat_priv->pwr_ctrl_mode);
+	if (ret) {
+		cnss_pr_info("Failed to get power ctrl mode, ret %d\n", ret);
+		plat_priv->pwr_ctrl_mode = CNSS_POWER_CTRL_HOST;
+	} else if (plat_priv->pwr_ctrl_mode >= CNSS_POWER_CTRL_LAST) {
+		cnss_pr_info("Invalid power ctrl mode: %d\n",
+			     plat_priv->pwr_ctrl_mode);
+		plat_priv->pwr_ctrl_mode = CNSS_POWER_CTRL_HOST;
+	}
+
+	cnss_pr_info("Get power ctrl mode: %d\n", plat_priv->pwr_ctrl_mode);
 }

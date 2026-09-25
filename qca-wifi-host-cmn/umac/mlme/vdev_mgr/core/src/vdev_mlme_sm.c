@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -189,8 +189,10 @@ static bool mlme_vdev_state_init_event(void *ctx, uint16_t event,
 		}
 		break;
 
-	case WLAN_VDEV_SM_EV_DOWN_COMPLETE:
 	case WLAN_VDEV_SM_EV_DOWN:
+		mlme_vdev_init_down(vdev_mlme);
+		fallthrough;
+	case WLAN_VDEV_SM_EV_DOWN_COMPLETE:
 	case WLAN_VDEV_SM_EV_START_REQ_FAIL:
 		/* already in down state, notify DOWN command is completed */
 		/* NOTE: Keep this function call always at the end, to allow
@@ -347,6 +349,23 @@ static void mlme_vdev_state_dfs_cac_wait_exit(void *ctx)
 	/* NONE */
 }
 
+static void mlme_vdev_rt_lock_release(struct vdev_mlme_obj *vdev_mlme)
+{
+	struct  wlan_lmac_if_tx_ops *tx_ops;
+	struct wlan_objmgr_psoc *psoc;
+
+	if (!vdev_mlme)
+		mlme_err("vdev is NULL");
+
+	psoc = wlan_vdev_get_psoc(vdev_mlme->vdev);
+	if (!psoc)
+		mlme_err("psoc is NULL");
+
+	tx_ops = wlan_psoc_get_lmac_if_txops(psoc);
+	if (tx_ops && tx_ops->mops.mlme_vdev_rt_lock_release)
+		tx_ops->mops.mlme_vdev_rt_lock_release(vdev_mlme->vdev);
+}
+
 /**
  * mlme_vdev_state_dfs_cac_wait_event() - DFS CAC WAIT State event handler
  * @ctx: VDEV MLME object
@@ -395,6 +414,7 @@ static bool mlme_vdev_state_dfs_cac_wait_event(void *ctx, uint16_t event,
 		break;
 
 	case WLAN_VDEV_SM_EV_RADAR_DETECTED:
+		mlme_vdev_rt_lock_release(vdev_mlme);
 		/* the random channel should have been selected, before issuing
 		 * this event
 		 */
@@ -485,19 +505,23 @@ static bool mlme_vdev_state_up_event(void *ctx, uint16_t event,
 	switch (event) {
 	case WLAN_VDEV_SM_EV_START_SUCCESS:
 		if (wlan_vdev_mlme_is_mlo_ap(vdev) &&
-		    !wlan_vdev_mlme_is_mlo_ap_sync_disabled(vdev))
+		    !wlan_vdev_mlme_is_mlo_ap_sync_disabled(vdev)) {
 			mlme_vdev_sm_transition_to(vdev_mlme,
 						   WLAN_VDEV_SS_MLO_SYNC_WAIT);
-		else
+
+			mlme_vdev_notify_mlo_sync_wait_entry(vdev_mlme);
+		} else {
 			mlme_vdev_sm_transition_to(vdev_mlme,
 						   WLAN_VDEV_SS_UP_ACTIVE);
+		}
+
 		mlme_vdev_sm_deliver_event(vdev_mlme, event,
 					   event_data_len, event_data);
 		status = true;
 		break;
 
 	/**
-	 * Channel switch disabled case, then tansition to up state
+	 * Channel switch disabled case, then transition to up state
 	 * and deliver EV_UP_HOST_RESTART, hand it in up state and
 	 * move to up active state
 	 */
@@ -1724,7 +1748,6 @@ static void mlme_vdev_subst_mlo_sync_wait_entry(void *ctx)
 		QDF_BUG(0);
 
 	mlme_vdev_set_substate(vdev, WLAN_VDEV_SS_MLO_SYNC_WAIT);
-	mlme_vdev_notify_mlo_sync_wait_entry(vdev_mlme);
 }
 
 /**
@@ -1921,7 +1944,12 @@ static bool mlme_vdev_subst_up_active_event(void *ctx, uint16_t event,
 					   event_data_len, event_data);
 		status = true;
 		break;
-
+	case WLAN_VDEV_SM_EV_REMOVAL:
+		mlme_vdev_sm_transition_to(vdev_mlme, WLAN_VDEV_SS_UP_REMOVAL);
+		mlme_vdev_sm_deliver_event(vdev_mlme, event,
+					   event_data_len, event_data);
+		status = true;
+		break;
 	case WLAN_VDEV_SM_EV_RADAR_DETECTED:
 		/* These events are not supported in STA mode */
 		if (mode == QDF_STA_MODE)
@@ -1975,6 +2003,84 @@ static bool mlme_vdev_subst_up_active_event(void *ctx, uint16_t event,
 	return status;
 }
 
+/**
+ * mlme_vdev_subst_up_removal_entry() - Entry API for up removal sub state
+ * @ctx: VDEV MLME object
+ *
+ * API to perform operations on moving to UP-REMOVAL substate
+ *
+ * Return: void
+ */
+static void mlme_vdev_subst_up_removal_entry(void *ctx)
+{
+	struct vdev_mlme_obj *vdev_mlme = (struct vdev_mlme_obj *)ctx;
+	struct wlan_objmgr_vdev *vdev;
+
+	vdev = vdev_mlme->vdev;
+
+	if (wlan_vdev_mlme_get_state(vdev) != WLAN_VDEV_S_UP)
+		QDF_BUG(0);
+
+	mlme_vdev_set_substate(vdev, WLAN_VDEV_SS_UP_REMOVAL);
+}
+
+/**
+ * mlme_vdev_subst_up_removal_exit() - Exit API for up active sub state
+ * @ctx: VDEV MLME object
+ *
+ * API to perform operations on moving out of UP-ACTIVE substate
+ *
+ * Return: void
+ */
+static void mlme_vdev_subst_up_removal_exit(void *ctx)
+{
+	/* NONE */
+}
+
+/**
+ * mlme_vdev_subst_up_removal_event() - Event handler for up removal substate
+ * @ctx: VDEV MLME object
+ * @event: MLME event
+ * @event_data_len: data size
+ * @event_data: event data
+ *
+ * API to handle events in UP-REMOVAL substate
+ *
+ * Return: SUCCESS: on handling event
+ *         FAILURE: on ignoring the event
+ */
+static bool mlme_vdev_subst_up_removal_event(void *ctx, uint16_t event,
+					     uint16_t event_data_len,
+					     void *event_data)
+{
+	struct vdev_mlme_obj *vdev_mlme = (struct vdev_mlme_obj *)ctx;
+	enum QDF_OPMODE mode;
+	struct wlan_objmgr_vdev *vdev;
+	bool status;
+
+	vdev = vdev_mlme->vdev;
+	mode = wlan_vdev_mlme_get_opmode(vdev);
+
+	switch (event) {
+	case WLAN_VDEV_SM_EV_DOWN:
+		mlme_vdev_sm_transition_to(vdev_mlme, WLAN_VDEV_S_SUSPEND);
+		mlme_vdev_sm_deliver_event(vdev_mlme, event,
+					   event_data_len, event_data);
+		status = true;
+		break;
+
+	case WLAN_VDEV_SM_EV_REMOVAL:
+		mlme_vdev_link_reconfig_remove(vdev_mlme, event_data_len,
+					       event_data);
+		status = true;
+		break;
+	default:
+		status = false;
+		break;
+	}
+
+	return status;
+}
 
 static const char *vdev_sm_event_names[] = {
 	"EV_START",
@@ -2009,7 +2115,8 @@ static const char *vdev_sm_event_names[] = {
 	"EV_STOP_REQ",
 	"EV_CHAN_SWITCH_DISABLED",
 	"EV_MLO_SYNC_COMPLETE",
-	"EV_SUSPEND_CSA_RESTART"
+	"EV_SUSPEND_CSA_RESTART",
+	"EV_AP_LINK_REMOVAL"
 };
 
 struct wlan_sm_state_info sm_info[] = {
@@ -2214,6 +2321,16 @@ struct wlan_sm_state_info sm_info[] = {
 		mlme_vdev_subst_up_active_event
 	},
 	{
+		(uint8_t)WLAN_VDEV_SS_UP_REMOVAL,
+		(uint8_t)WLAN_VDEV_S_UP,
+		(uint8_t)WLAN_SM_ENGINE_STATE_NONE,
+		false,
+		"UP-UP_REMOVAL",
+		mlme_vdev_subst_up_removal_entry,
+		mlme_vdev_subst_up_removal_exit,
+		mlme_vdev_subst_up_removal_event
+	},
+	{
 		(uint8_t)WLAN_VDEV_SS_MAX,
 		(uint8_t)WLAN_SM_ENGINE_STATE_NONE,
 		(uint8_t)WLAN_SM_ENGINE_STATE_NONE,
@@ -2233,38 +2350,6 @@ QDF_STATUS mlme_vdev_sm_deliver_event(struct vdev_mlme_obj *vdev_mlme,
 				event_data_len, event_data);
 }
 
-void mlme_vdev_sm_print_state_event(struct vdev_mlme_obj *vdev_mlme,
-				    enum wlan_vdev_sm_evt event)
-{
-	enum wlan_vdev_state state;
-	enum wlan_vdev_state substate;
-	struct wlan_objmgr_vdev *vdev;
-
-	vdev = vdev_mlme->vdev;
-
-	state = wlan_vdev_mlme_get_state(vdev);
-	substate = wlan_vdev_mlme_get_substate(vdev);
-
-	mlme_nofl_debug("[%s]%s - %s, %s", vdev_mlme->sm_hdl->name,
-			sm_info[state].name, sm_info[substate].name,
-			vdev_sm_event_names[event]);
-}
-
-void mlme_vdev_sm_print_state(struct vdev_mlme_obj *vdev_mlme)
-{
-	enum wlan_vdev_state state;
-	enum wlan_vdev_state substate;
-	struct wlan_objmgr_vdev *vdev;
-
-	vdev = vdev_mlme->vdev;
-
-	state = wlan_vdev_mlme_get_state(vdev);
-	substate = wlan_vdev_mlme_get_substate(vdev);
-
-	mlme_nofl_debug("[%s]%s - %s", vdev_mlme->sm_hdl->name,
-			sm_info[state].name, sm_info[substate].name);
-}
-
 #ifdef SM_ENG_HIST_ENABLE
 void mlme_vdev_sm_history_print(struct vdev_mlme_obj *vdev_mlme)
 {
@@ -2278,9 +2363,7 @@ QDF_STATUS mlme_vdev_sm_create(struct vdev_mlme_obj *vdev_mlme)
 	uint8_t name[WLAN_SM_ENGINE_MAX_NAME];
 	struct wlan_objmgr_vdev *vdev = vdev_mlme->vdev;
 
-	qdf_scnprintf(name, sizeof(name), "VM-PS_%d-VD_%d",
-		      wlan_psoc_get_id(wlan_vdev_get_psoc(vdev)),
-		      wlan_vdev_get_id(vdev));
+	qdf_scnprintf(name, sizeof(name), "VM-%d", wlan_vdev_get_id(vdev));
 	sm = wlan_sm_create(name, vdev_mlme,
 			    WLAN_VDEV_S_INIT,
 			    sm_info,

@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -287,6 +287,10 @@ static inline void __qdf_trace_hexdump_dummy(QDF_MODULE_ID module,
 
 #define QDF_ENABLE_TRACING
 #define qdf_scnprintf scnprintf
+#define qdf_vscnprintf vscnprintf
+#define qdf_va_list va_list
+#define qdf_va_start va_start
+#define qdf_va_end va_end
 
 #ifdef QDF_ENABLE_TRACING
 
@@ -440,6 +444,8 @@ static inline void __qdf_bug(void)
 		} \
 	} while (0)
 
+#define __QDF_ASSERT_MSG "Assertion failed! %s:%s %s:%d\n"
+
 #define QDF_BUG_ON_ASSERT(_condition) \
 	do { \
 		if (!(_condition)) { \
@@ -465,6 +471,8 @@ static inline void __qdf_bug(void)
 			/* no-op */ \
 		} \
 	} while (0)
+
+#define __QDF_ASSERT_MSG "WARNING!! %s:%s %s:%d\n"
 
 #define QDF_BUG_ON_ASSERT(_condition) \
 	do { \
@@ -510,7 +518,7 @@ __qdf_minidump_remove(void *addr, size_t size, const char *name)
 }
 
 #elif defined(WLAN_QCOM_MINIDUMP)
-#define MAX_WLAN_MINIDUMP_ENTRIES 5
+#define MAX_WLAN_MINIDUMP_ENTRIES 6
 
 enum minidump_log_type {
 	MD_HTC_CREDIT = 0,
@@ -518,6 +526,7 @@ enum minidump_log_type {
 	MD_WMI_TX_CMP,
 	MD_HAL_SOC,
 	MD_GWLAN_LOGS,
+	MD_PSOC_REG_LOGS,
 };
 
 static const char *minidump_table[MAX_WLAN_MINIDUMP_ENTRIES];
@@ -530,7 +539,8 @@ static int qdf_get_name_idx(const char *name)
 		[MD_WLAN_LOGS] = "wlan_logs",
 		[MD_WMI_TX_CMP] = "wmi_tx_cmp",
 		[MD_HAL_SOC] = "hal_soc",
-		[MD_GWLAN_LOGS] = "gwlan_logging"
+		[MD_GWLAN_LOGS] = "gwlan_logging",
+		[MD_PSOC_REG_LOGS] = "psoc_regulatory"
 	};
 
 	for (i = 0; i < ARRAY_SIZE(wlan_str); i++) {

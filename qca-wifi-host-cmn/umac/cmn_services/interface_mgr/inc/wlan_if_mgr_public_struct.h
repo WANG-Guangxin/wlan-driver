@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -52,6 +52,10 @@
  * @WLAN_IF_MGR_EV_AP_CSA_COMPLETE: Event to handle csa complete
  * @WLAN_IF_MGR_EV_STA_CSA_COMPLETE: Event to handle STA/P2P_CLI CSA completion
  * @WLAN_IF_MGR_EV_CONNECT_ACTIVE:Event to handle connect active request
+ * @WLAN_IF_MGR_EV_NAN_PRE_ENABLE: nan pre enable
+ * @WLAN_IF_MGR_EV_NAN_POST_ENABLE: nan post enable
+ * @WLAN_IF_MGR_EV_NAN_POST_DISABLE: nan post disable
+ * @WLAN_IF_MGR_EV_AP_CHANNEL_SELECTED: AP channel has been selected
  * @WLAN_IF_MGR_EV_MAX: Max event
  */
 enum wlan_if_mgr_evt {
@@ -76,7 +80,11 @@ enum wlan_if_mgr_evt {
 	WLAN_IF_MGR_EV_AP_CSA_COMPLETE = 18,
 	WLAN_IF_MGR_EV_STA_CSA_COMPLETE = 19,
 	WLAN_IF_MGR_EV_CONNECT_ACTIVE = 20,
-	WLAN_IF_MGR_EV_MAX = 21,
+	WLAN_IF_MGR_EV_NAN_PRE_ENABLE = 21,
+	WLAN_IF_MGR_EV_NAN_POST_ENABLE = 22,
+	WLAN_IF_MGR_EV_NAN_POST_DISABLE = 23,
+	WLAN_IF_MGR_EV_AP_CHANNEL_SELECTED = 24,
+	WLAN_IF_MGR_EV_MAX,
 };
 
 /**
@@ -91,10 +99,18 @@ struct validate_bss_data {
 	struct qdf_mac_addr peer_addr;
 	qdf_freq_t chan_freq;
 	uint16_t beacon_interval;
+	struct scan_cache_entry *scan_entry;
 #ifdef WLAN_FEATURE_11BE_MLO
 	bool is_mlo;
-	struct scan_cache_entry *scan_entry;
 #endif
+};
+
+/**
+ * struct if_mgr_ap_info- AP related interface manager data
+ * @ap_freq: SAP frequency
+ */
+struct if_mgr_ap_info {
+	qdf_freq_t ap_freq;
 };
 
 /**
@@ -102,11 +118,13 @@ struct validate_bss_data {
  * @status: qdf status used to indicate if connect,disconnect,
  *	    start bss,stop bss event is success/failure.
  * @validate_bss_info: struct to hold the validate candidate information
+ * @ap_info: struct to hold AP related if_mgr information
  * @data: event data
  */
 struct if_mgr_event_data {
 	QDF_STATUS status;
 	struct validate_bss_data validate_bss_info;
+	struct if_mgr_ap_info ap_info;
 	void *data;
 };
 

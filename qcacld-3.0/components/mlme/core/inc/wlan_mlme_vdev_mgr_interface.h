@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -84,6 +84,15 @@ QDF_STATUS mlme_unregister_vdev_mgr_ops(struct vdev_mlme_obj *vdev_mlme);
 QDF_STATUS mlme_set_chan_switch_in_progress(struct wlan_objmgr_vdev *vdev,
 					       bool val);
 
+/**
+ * mlme_set_is_acs_sap() - set mlme priv is_acs_sap
+ * @vdev: vdev pointer
+ * @val: value to be set
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS mlme_set_is_acs_sap(struct wlan_objmgr_vdev *vdev, bool val);
+
 #ifdef WLAN_FEATURE_MSCS
 /**
  * mlme_set_is_mscs_req_sent() - set mscs frame req flag
@@ -122,6 +131,14 @@ bool mlme_get_is_mscs_req_sent(struct wlan_objmgr_vdev *vdev)
  * Return: value of mlme priv restart in progress
  */
 bool mlme_is_chan_switch_in_progress(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * mlme_is_acs_sap() - get mlme priv is_acs_sap
+ * @vdev: vdev pointer
+ *
+ * Return: value of mlme priv is_acs_sap
+ */
+bool mlme_is_acs_sap(struct wlan_objmgr_vdev *vdev);
 
 /**
  * ap_mlme_set_hidden_ssid_restart_in_progress() - set mlme priv hidden ssid
@@ -323,16 +340,6 @@ mlme_set_cac_required(struct wlan_objmgr_vdev *vdev, bool val);
 QDF_STATUS
 mlme_set_mbssid_info(struct wlan_objmgr_vdev *vdev,
 		     struct scan_mbssid_info *mbssid_info, qdf_freq_t freq);
-
-/**
- * mlme_get_mbssid_info() - get mbssid info
- * @vdev: vdev pointer
- * @mbss_11ax: mbss 11ax info
- *
- * Return: None
- */
-void mlme_get_mbssid_info(struct wlan_objmgr_vdev *vdev,
-			  struct vdev_mlme_mbss_11ax *mbss_11ax);
 
 /**
  * mlme_set_tx_power() - set tx power
@@ -575,6 +582,24 @@ wlan_handle_emlsr_sta_concurrency(struct wlan_objmgr_psoc *psoc,
 }
 #endif
 
+/**
+ * wlan_sap_get_acs_weight_adjustable() - get channel weight
+ * @cur_bw: bandwidth
+ *
+ * Return: channel weight
+ */
+uint32_t wlan_sap_get_acs_weight_adjustable(enum phy_ch_width cur_bw);
+
+/**
+ * wlan_sap_is_ch_non_overlap() - check if channel is overlapping
+ * @vdev_id: vdev id
+ * @freq: freq
+ *
+ * Return: true if channel is non overlapping
+ */
+bool
+wlan_sap_is_ch_non_overlap(uint8_t vdev_id, qdf_freq_t freq);
+
 #ifdef WLAN_FEATURE_LL_LT_SAP
 /**
  * wlan_ll_sap_sort_channel_list() - Sort channel list
@@ -606,6 +631,61 @@ void wlan_ll_sap_free_chan_info(struct sap_sel_ch_info *ch_param);
  */
 bool wlan_ll_sap_freq_present_in_pcl(struct policy_mgr_pcl_list *pcl,
 				     qdf_freq_t freq);
+
+/**
+ * wlan_ll_sap_send_continue_vdev_restart() - Continue vdev restart
+ * @vdev: pointer to vdev object
+ *
+ * Return: None
+ */
+void wlan_ll_sap_send_continue_vdev_restart(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * wlan_ll_sap_send_action_frame() - Send csa param via action frame
+ * @vdev: pointer to vdev object
+ * @macaddr: peer mac addr
+ *
+ * Return: None
+ */
+void wlan_ll_sap_send_action_frame(struct wlan_objmgr_vdev *vdev,
+				   uint8_t *macaddr);
+
+/**
+ * wlan_ll_sap_notify_chan_switch_started() - Notify channel switch started
+ * @vdev: pointer to vdev object
+ *
+ * Return: None
+ */
+void wlan_ll_sap_notify_chan_switch_started(struct wlan_objmgr_vdev *vdev);
+
+/**
+ * wlan_ll_sap_csa_bearer_switch_rsp() - LL_LT_SAP csa bearer switch rsp
+ * @vdev_id: vdev id
+ *
+ * Return: None
+ */
+void wlan_ll_sap_csa_bearer_switch_rsp(uint8_t vdev_id);
+#else
+static inline
+void wlan_ll_sap_send_continue_vdev_restart(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+void wlan_ll_sap_send_action_frame(struct wlan_objmgr_vdev *vdev,
+				   uint8_t *macaddr)
+{
+}
+
+static inline
+void wlan_ll_sap_notify_chan_switch_started(struct wlan_objmgr_vdev *vdev)
+{
+}
+
+static inline
+void wlan_ll_sap_csa_bearer_switch_rsp(uint8_t vdev_id)
+{
+}
 #endif
 
 /**
@@ -613,10 +693,10 @@ bool wlan_ll_sap_freq_present_in_pcl(struct policy_mgr_pcl_list *pcl,
  * @vdev_id: Vdev Id
  * @filter: Filter to apply to get scan result
  *
- * Return: None
+ * Return: QDF_STATUS
  *
  */
-void
+QDF_STATUS
 wlan_sap_get_user_config_acs_ch_list(uint8_t vdev_id,
 				     struct scan_filter *filter);
 #endif

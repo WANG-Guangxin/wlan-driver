@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -60,6 +60,9 @@
 #define mgmttxrx_nofl_debug(params...) \
 	QDF_TRACE_DEBUG_NO_FL(QDF_MODULE_ID_MGMT_TXRX, params)
 
+#define MAX_LINK_RECFG_CMD_ALLOWED 15
+
+#define WLAN_MAX_ML_RECFG_LINK 15
 /**
  * mgmt_txrx_frame_hex_dump() - Print the type and dump the rx tx frame
  * @frame_data: The base address of the mgmt frame data to be logged.
@@ -342,6 +345,16 @@ enum protected_dual_actioncode {
 };
 
 /**
+ * enum chan_usage_mode - Channel usage mode types
+ * @CHAN_USAGE_AIDABLE_BSS_CSA_REQ: Channel usage aided BSS CSA request.
+ * @CHAN_USAGE_CAPABILITY_NOTIFY: Channel usage capability notification.
+ */
+enum chan_usage_mode {
+	CHAN_USAGE_AIDABLE_BSS_CSA_REQ = 4,
+	CHAN_USAGE_CAPABILITY_NOTIFY = 5,
+};
+
+/**
  * enum wnm_actioncode - wnm action frames
  * @WNM_BSS_TM_QUERY: wnm bss tm query frame
  * @WNM_BSS_TM_REQUEST: wnm bss tm request frame
@@ -355,6 +368,8 @@ enum protected_dual_actioncode {
  * @WNM_SLEEP_RESP: wnm sleep response frame
  * @WNM_TIM_REQ: wnm Tim broadcast request frame
  * @WNM_TIM_RESP: wnm Tim broadcast response frame
+ * @WNM_CHAN_USAGE_REQ: wnm channel usage request frame
+ * @WNM_CHAN_USAGE_RESP: wnm channel usage response frame
  * @WNM_NOTIF_REQUEST: wnm notify request frame
  * @WNM_NOTIF_RESPONSE: wnm notify response frame
  */
@@ -371,6 +386,8 @@ enum wnm_actioncode {
 	WNM_SLEEP_RESP = 17,
 	WNM_TIM_REQ = 18,
 	WNM_TIM_RESP = 19,
+	WNM_CHAN_USAGE_REQ = 21,
+	WNM_CHAN_USAGE_RESP = 22,
 	WNM_NOTIF_REQUEST = 26,
 	WNM_NOTIF_RESPONSE = 27,
 };
@@ -534,6 +551,9 @@ enum twt_actioncode {
  * @EHT_EPCS_REQUEST: EPCS request action frame
  * @EHT_EPCS_RESPONSE: EPCS response action frame
  * @EHT_EPCS_TEARDOWN: EPCS teardown action frame
+ * @EHT_LINK_RECONFIG_NOTIFY: Link Reconfiguration Notify action Frame
+ * @EHT_LINK_RECONFIG_REQUEST: Link Reconfiguration Request action Frame
+ * @EHT_LINK_RECONFIG_RESPONSE: Link Reconfiguration Response action Frame
  */
 enum eht_actioncode {
 	EHT_T2LM_REQUEST = 0,
@@ -542,6 +562,9 @@ enum eht_actioncode {
 	EHT_EPCS_REQUEST = 3,
 	EHT_EPCS_RESPONSE = 4,
 	EHT_EPCS_TEARDOWN = 5,
+	EHT_LINK_RECONFIG_NOTIFY = 10,
+	EHT_LINK_RECONFIG_REQUEST = 11,
+	EHT_LINK_RECONFIG_RESPONSE = 12,
 };
 
 /**
@@ -629,6 +652,8 @@ struct action_frm_hdr {
  * @MGMT_ACTION_WNM_SLEEP_RESP: wnm sleep response frame
  * @MGMT_ACTION_WNM_TIM_REQ:    wnm Tim broadcast request frame
  * @MGMT_ACTION_WNM_TIM_RESP:   wnm Tim broadcast response frame
+ * @MGMT_ACTION_WNM_CHAN_USAGE_REQ: wnm channel usage request frame
+ * @MGMT_ACTION_WNM_CHAN_USAGE_RESP: wnm channel usage response frame
  * @MGMT_ACTION_TDLS_SETUP_REQ:     tdls setup request action frame
  * @MGMT_ACTION_TDLS_SETUP_RSP:     tdls setup response frame
  * @MGMT_ACTION_TDLS_SETUP_CNF:     tdls setup confirm frame
@@ -692,6 +717,9 @@ struct action_frm_hdr {
  * @MGMT_ACTION_FTM_REQUEST: FTM request frame
  * @MGMT_ACTION_FTM_RESPONSE: FTM response frame
  * @MGMT_ACTION_FILS_DISCOVERY: FILS Discovery frame
+ * @MGMT_ACTION_EHT_LINK_RECONFIG_NOTIFY: Link reconfig notify frame
+ * @MGMT_ACTION_EHT_LINK_RECONFIG_REQUEST: Link reconfig request frame
+ * @MGMT_ACTION_EHT_LINK_RECONFIG_RESPONSE: Link reconfig response frame
  * @MGMT_MAX_FRAME_TYPE:         max. mgmt frame types
  */
 enum mgmt_frame_type {
@@ -767,6 +795,8 @@ enum mgmt_frame_type {
 	MGMT_ACTION_WNM_SLEEP_RESP,
 	MGMT_ACTION_WNM_TIM_REQ,
 	MGMT_ACTION_WNM_TIM_RESP,
+	MGMT_ACTION_WNM_CHAN_USAGE_REQ,
+	MGMT_ACTION_WNM_CHAN_USAGE_RESP,
 	MGMT_ACTION_TDLS_SETUP_REQ,
 	MGMT_ACTION_TDLS_SETUP_RSP,
 	MGMT_ACTION_TDLS_SETUP_CNF,
@@ -830,6 +860,9 @@ enum mgmt_frame_type {
 	MGMT_ACTION_FTM_REQUEST,
 	MGMT_ACTION_FTM_RESPONSE,
 	MGMT_ACTION_FILS_DISCOVERY,
+	MGMT_ACTION_EHT_LINK_RECONFIG_NOTIFY,
+	MGMT_ACTION_EHT_LINK_RECONFIG_REQUEST,
+	MGMT_ACTION_EHT_LINK_RECONFIG_RESPONSE,
 	MGMT_MAX_FRAME_TYPE,
 };
 
@@ -895,6 +928,20 @@ struct mgmt_rx_event_ext_params {
 	} u;
 };
 
+/**
+ * enum mlo_vdev_pause_type - pause type
+ * @MLO_VDEV_PAUSE_TYPE_UNKNOWN: invalid type
+ * @MLO_VDEV_PAUSE_TYPE_MLO_LINK: pause by qos null pm = 1 to ap
+ * @MLO_VDEV_PAUSE_TYPE_TX: pause tx without qos null
+ * @MLO_VDEV_PAUSE_TYPE_TX_DATA: pause data frame without qos null
+ */
+enum mlo_vdev_pause_type {
+	MLO_VDEV_PAUSE_TYPE_UNKNOWN = 0,
+	MLO_VDEV_PAUSE_TYPE_MLO_LINK = 1,
+	MLO_VDEV_PAUSE_TYPE_TX = 2,
+	MLO_VDEV_PAUSE_TYPE_TX_DATA = 3,
+};
+
 #ifdef WLAN_FEATURE_11BE_MLO
 #define CU_VDEV_MAP_MASK 0xFFFF
 /*
@@ -940,12 +987,47 @@ struct mlo_bcast_t2lm_info {
  * struct mlo_vdev_pause - ML vdev pause info
  * @vdev_id: vdev id of vdev to be paused
  * @vdev_pause_duration: vdev pause duration
+ * @type: pause type
  */
 struct mlo_vdev_pause {
 	uint16_t vdev_id;
 	uint32_t vdev_pause_duration;
+	enum mlo_vdev_pause_type type;
 };
 #endif
+
+/**
+ * struct mlo_link_reconfig_param - MLO reconfig param
+ * @link_id: link id
+ * @link_addr: link addr
+ * @vdev_id: vdev id only in case of add link
+ * @bss: BSS pointer
+ */
+struct mlo_link_reconfig_param {
+	uint8_t link_id;
+	uint8_t link_addr[QDF_MAC_ADDR_SIZE];
+/** which vdev to repurpose on with del link_id if it's not 0xff **/
+	uint8_t vdev_id;
+	void *bss;
+};
+
+/**
+ * struct mlo_link_recfg_user_req_params - MLO reconfig user req param
+ * @vdev_id: vdev id on which user command triggered
+ * @mld_addr: mld address
+ * @add_link: add link array of structures
+ * @num_link_add_param: no of add link requested
+ * @del_link: delete link array of structures
+ * @num_link_del_param: no of delete link requested
+ */
+struct mlo_link_recfg_user_req_params {
+	uint8_t vdev_id;
+	uint8_t mld_addr[QDF_MAC_ADDR_SIZE];
+	struct mlo_link_reconfig_param add_link[MAX_LINK_RECFG_CMD_ALLOWED];
+	uint32_t num_link_add_param;
+	struct mlo_link_reconfig_param del_link[MAX_LINK_RECFG_CMD_ALLOWED];
+	uint32_t num_link_del_param;
+};
 
 /**
  * struct mgmt_rx_event_params - host mgmt header params
@@ -1000,6 +1082,22 @@ struct mgmt_rx_event_params {
 	struct frame_pn_params pn_params;
 	struct mgmt_rx_event_ext_params *ext_params;
 	struct frm_conn_ap is_conn_ap;
+#ifdef WLAN_FEATURE_11BE_MLO
+	struct mlo_mgmt_ml_info cu_params;
+	struct mgmt_rx_mlo_link_removal_info *link_removal_info;
+	int num_link_removal_info;
+	struct mlo_bcast_t2lm_info t2lm_params;
+#endif
+};
+
+/**
+ * struct mgmt_mlo_link_info_sync_params - host mgmt mlo link info header params
+ * @cu_params: MLO MGMT Critical Update params
+ * @link_removal_info: MLO link removal information array
+ * @num_link_removal_info: Number of elements in @link_removal_info
+ * @t2lm_params: T2LM related info received from FW
+ */
+struct mgmt_mlo_link_info_sync_params {
 #ifdef WLAN_FEATURE_11BE_MLO
 	struct mlo_mgmt_ml_info cu_params;
 	struct mgmt_rx_mlo_link_removal_info *link_removal_info;

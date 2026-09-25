@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -153,6 +154,41 @@ void target_if_mlo_register_vdev_tid_to_link_map_event(
  */
 void target_if_mlo_unregister_vdev_tid_to_link_map_event(
 		struct wmi_unified *wmi_handle);
+
+#ifdef WLAN_FEATURE_11BE_MLO_ADV_FEATURE
+/**
+ * target_if_send_link_reconfig_req_cmd() - Send user initiated link reconfig
+ * command handler
+ * @psoc: psoc object
+ * @recfg_req: reconfig request
+ *
+ * Return: None
+ */
+QDF_STATUS
+target_if_send_link_reconfig_req_cmd(struct wlan_objmgr_psoc *psoc,
+				     struct wlan_mlo_link_recfg_req *recfg_req);
+
+/**
+ * target_if_mlo_register_trace_link_set_active_cb() - register/Unregister trace
+ * set link cmd/evt callback
+ * @psoc: psoc object
+ * @trace_link_set_active_cb: callback to trace set link cmd/evt
+ *
+ * Return: None
+ */
+void
+target_if_mlo_register_trace_link_set_active_cb(
+		struct wlan_objmgr_psoc *psoc,
+		trace_link_set_active_cb_type trace_link_set_active_cb);
+#else
+static inline QDF_STATUS
+target_if_send_link_reconfig_req_cmd(struct wlan_objmgr_psoc *psoc,
+				     struct wlan_mlo_link_recfg_req *recfg_req)
+
+{
+	return QDF_STATUS_SUCCESS;
+}
+#endif
 #else
 static inline QDF_STATUS
 target_if_extract_mlo_link_removal_info_mgmt_rx(
@@ -174,5 +210,19 @@ void target_if_mlo_unregister_vdev_tid_to_link_map_event(
 		struct wmi_unified *wmi_handle)
 {
 }
+#endif
+
+#ifdef WLAN_FEATURE_MLO_SAP_LINK_REMOVAL
+/**
+ * target_if_mlo_sap_link_removal_offload_support() - link removal offload
+ * service bit support
+ * @psoc: PSOC object
+ *
+ * API to get service bit of link removal offload support
+ *
+ * Return: true if support, false if not support
+ */
+bool
+target_if_mlo_sap_link_removal_offload_support(struct wlan_objmgr_psoc *psoc);
 #endif
 #endif /* __TARGET_IF_MLO_MGR_H__ */

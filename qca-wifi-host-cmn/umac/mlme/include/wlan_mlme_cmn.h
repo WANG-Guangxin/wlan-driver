@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -90,6 +90,12 @@
  * @roam_stats_event: roam_stats_event pointer
  * @idx: TLV idx for roam_stats_event
  *
+ * @mlme_cm_roam_connect_complete_cb: Roam complete cb
+ * @vdev: vdev object
+ *
+ * @mlme_cm_reset_scan_reject_params_cb: Reset scan reject params cb
+ * @vdev: vdev pointer
+ *
  * @mlme_cm_ft_preauth_cmpl_cb: Roam ft preauth complete cb
  * @vdev: vdev pointer
  * @rsp: preauth response pointer
@@ -104,6 +110,17 @@
  * @vendor_handoff_context: vendor handoff context
  *
  * @mlme_cm_perfd_reset_cpufreq_ctrl_cb: callback to reset CPU min freq
+ *
+ * @mlme_cm_link_reconfig_status_cb: send link reconfig status to userspace
+ * @ctx: link recfg done data
+ *
+ * @mlme_cm_populate_link_recfg_done_data: callback to populate link recfg
+ * done data from os if
+ * @vdev: vdev obj
+ *
+ * @mlme_cm_free_link_reconfig_done_data: callback to free link recfg
+ * done data
+ * @ctx: link recfg done data
  */
 struct mlme_cm_ops {
 	void (*mlme_cm_connect_active_notify_cb)(uint8_t vdev_id);
@@ -123,7 +140,6 @@ struct mlme_cm_ops {
 	QDF_STATUS (*mlme_cm_disconnect_start_cb)(
 					struct wlan_objmgr_vdev *vdev,
 					enum wlan_cm_source source);
-#ifdef CONN_MGR_ADV_FEATURE
 	QDF_STATUS (*mlme_cm_roam_sync_cb)(struct wlan_objmgr_vdev *vdev);
 	QDF_STATUS (*mlme_cm_pmksa_candidate_notify_cb)(
 						struct wlan_objmgr_vdev *vdev,
@@ -134,7 +150,6 @@ struct mlme_cm_ops {
 					   enum wlan_crypto_cipher_type cipher_type);
 	QDF_STATUS (*mlme_cm_link_reconfig_notify_cb)(
 					struct wlan_objmgr_vdev *vdev);
-#endif
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 	QDF_STATUS (*mlme_cm_roam_start_cb)(struct wlan_objmgr_vdev *vdev);
 	QDF_STATUS (*mlme_cm_roam_abort_cb)(struct wlan_objmgr_vdev *vdev);
@@ -144,6 +159,9 @@ struct mlme_cm_ops {
 				enum dot11_mode_filter *dot11mode_filter);
 	void (*mlme_cm_roam_rt_stats_cb)(struct roam_stats_event *roam_stats,
 					 uint8_t idx);
+	QDF_STATUS (*mlme_cm_roam_connect_complete_cb)
+					(struct wlan_objmgr_vdev *vdev);
+	QDF_STATUS (*mlme_cm_reset_scan_reject_params_cb)(struct wlan_objmgr_vdev *vdev);
 #endif
 #ifdef WLAN_FEATURE_PREAUTH_ENABLE
 	QDF_STATUS (*mlme_cm_ft_preauth_cmpl_cb)(
@@ -162,6 +180,12 @@ struct mlme_cm_ops {
 #endif
 #ifdef WLAN_BOOST_CPU_FREQ_IN_ROAM
 	void (*mlme_cm_perfd_reset_cpufreq_ctrl_cb)(void);
+#endif
+#ifdef WLAN_FEATURE_11BE_MLO
+	QDF_STATUS (*mlme_cm_link_reconfig_status_cb)(void *ctx);
+	void * (*mlme_cm_populate_link_recfg_done_data)(
+					struct wlan_objmgr_vdev *vdev);
+	void (*mlme_cm_free_link_reconfig_done_data)(void *ctx);
 #endif
 };
 
@@ -319,6 +343,7 @@ struct mlme_twt_ops {
  * @mlme_cm_ext_disconnect_req_cb:          callback to disconnect req to
  *                                          VDEV/PEER SM
  * @mlme_cm_ext_bss_peer_delete_req_cb:     callback to bss peer delete request
+ * @mlme_cm_ext_force_bss_peer_delete_req_cb: callback to force bss peer delete request
  * @mlme_cm_ext_disconnect_complete_ind_cb: callback to indicate disconnect
  *                                          complete
  * @mlme_cm_ext_vdev_down_req_cb:           callback to send vdev down to FW
@@ -390,6 +415,8 @@ struct mlme_ext_ops {
 			(struct wlan_objmgr_vdev *vdev,
 			struct wlan_cm_vdev_discon_req *req);
 	QDF_STATUS (*mlme_cm_ext_bss_peer_delete_req_cb)(
+			struct wlan_objmgr_vdev *vdev);
+	QDF_STATUS (*mlme_cm_ext_force_bss_peer_delete_req_cb)(
 			struct wlan_objmgr_vdev *vdev);
 	QDF_STATUS (*mlme_cm_ext_disconnect_complete_ind_cb)(
 				struct wlan_objmgr_vdev *vdev,
@@ -736,7 +763,6 @@ QDF_STATUS mlme_cm_bss_peer_create_req(struct wlan_objmgr_vdev *vdev,
 QDF_STATUS mlme_cm_connect_req(struct wlan_objmgr_vdev *vdev,
 			       struct wlan_cm_vdev_connect_req *req);
 
-#ifdef CONN_MGR_ADV_FEATURE
 /**
  * mlme_cm_osif_connect_active_notify() - CNX manager ext connect active
  * notification.
@@ -745,11 +771,6 @@ QDF_STATUS mlme_cm_connect_req(struct wlan_objmgr_vdev *vdev,
  * Return: void
  */
 void mlme_cm_osif_connect_active_notify(uint8_t vdev_id);
-#else
-static inline void mlme_cm_osif_connect_active_notify(uint8_t vdev_id)
-{
-}
-#endif
 
 /**
  * mlme_cm_connect_complete_ind() - Connection manager ext connect complete
@@ -826,6 +847,16 @@ QDF_STATUS
 mlme_cm_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev);
 
 /**
+ * mlme_cm_force_bss_peer_delete_req() - Connection manager ext force bss peer
+ * delete request
+ * @vdev: VDEV object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS
+mlme_cm_force_bss_peer_delete_req(struct wlan_objmgr_vdev *vdev);
+
+/**
  * mlme_cm_disconnect_complete_ind() - Connection manager ext disconnect
  * complete indication
  * @vdev: VDEV object
@@ -862,6 +893,14 @@ QDF_STATUS mlme_ext_hdl_get_acs_in_progress(struct wlan_objmgr_vdev *vdev,
  */
 QDF_STATUS mlme_cm_osif_connect_complete(struct wlan_objmgr_vdev *vdev,
 					 struct wlan_cm_connect_resp *rsp);
+
+/*
+ * mlme_cm_osif_roam_connect_complete() - Roaming complete resp to osif
+ * @vdev: pointer to vdev object
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS mlme_cm_osif_roam_connect_complete(struct wlan_objmgr_vdev *vdev);
 
 /**
  * mlme_cm_osif_failed_candidate_ind() - Failed Candidate indication to osif
@@ -920,7 +959,6 @@ QDF_STATUS mlme_cm_osif_get_vendor_handoff_params(struct wlan_objmgr_psoc *psoc,
 						  void *vendor_handoff_context);
 #endif
 
-#ifdef CONN_MGR_ADV_FEATURE
 /**
  * mlme_cm_osif_roam_sync_ind() - osif Roam sync indication
  * @vdev: vdev pointer
@@ -961,27 +999,6 @@ QDF_STATUS mlme_cm_osif_send_keys(struct wlan_objmgr_vdev *vdev,
  * Return: QDF_STATUS
  */
 QDF_STATUS mlme_cm_osif_link_reconfig_notify(struct wlan_objmgr_vdev *vdev);
-#else
-static inline
-QDF_STATUS mlme_cm_osif_roam_sync_ind(struct wlan_objmgr_vdev *vdev)
-{
-	return QDF_STATUS_SUCCESS;
-}
-
-static inline
-QDF_STATUS mlme_cm_osif_send_keys(struct wlan_objmgr_vdev *vdev,
-				  uint8_t key_index, bool pairwise,
-				  enum wlan_crypto_cipher_type cipher_type)
-{
-	return QDF_STATUS_SUCCESS;
-}
-
-static inline
-QDF_STATUS mlme_cm_osif_link_reconfig_notify(struct wlan_objmgr_vdev *vdev)
-{
-	return QDF_STATUS_SUCCESS;
-}
-#endif
 
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
 /**
@@ -1030,6 +1047,14 @@ QDF_STATUS
 mlme_cm_osif_roam_get_scan_params(struct wlan_objmgr_vdev *vdev,
 				  struct element_info *scan_ie,
 				  enum dot11_mode_filter *dot11mode_filter);
+
+/**
+ * mlme_cm_osif_reset_scan_reject_params - osif reset scan reject params
+ * @vdev: vdev pointer
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS mlme_cm_osif_reset_scan_reject_params(struct wlan_objmgr_vdev *vdev);
 #endif
 
 #ifdef WLAN_FEATURE_PREAUTH_ENABLE

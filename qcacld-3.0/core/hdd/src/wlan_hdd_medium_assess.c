@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -395,6 +395,11 @@ void hdd_medium_assess_stop_timer(uint8_t pdev_id, struct hdd_context *hdd_ctx)
 	if (ssr_flag)
 		return;
 
+	if (pdev_id >= WLAN_UMAC_MAX_RP_PID) {
+		hdd_err("pdev_id (%u) out of range in hdd_medium_assess_stop_timer", pdev_id);
+		return;
+	}
+
 	medium_assess_info[pdev_id].config.threshold = MAX_CONGESTION_THRESHOLD;
 	medium_assess_info[pdev_id].config.interval = 0;
 	medium_assess_info[pdev_id].index = 0;
@@ -545,7 +550,7 @@ static void hdd_medium_assess_expire_handler(void *arg)
 			pdev_id = medium_assess_info[i].pdev_id;
 			hdd_congestion_notification_report_multi(pdev_id);
 
-			/* ensure events are reveived at the 'same' time */
+			/* ensure events are received at the 'same' time */
 			index = medium_assess_info[i].index;
 			medium_assess_info[i].data[index].part1_valid = false;
 			medium_assess_info[i].data[index].part2_valid = false;

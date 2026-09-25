@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -180,6 +180,7 @@ typedef QDF_STATUS (*wlan_ser_umac_cmd_cb)(void *umac_cmd);
  * @WLAN_SER_CMD_NDP_RESP_REQ: NDP response to request cmd
  * @WLAN_SER_CMD_NDP_DATA_END_INIT_REQ: NDP data end init request
  * @WLAN_SER_CMD_NDP_END_ALL_REQ: NDP close all request
+ * @WLAN_SER_CMD_NDP_UPDATE_CONFIG_REQ: NDP update config request
  * @WLAN_SER_CMD_ADDTS: ADD Ts cmd
  * @WLAN_SER_CMD_DELTS: Del Ts cmd
  * @WLAN_SER_CMD_TDLS_SEND_MGMT: TDLS mgmt send cmd
@@ -201,6 +202,9 @@ typedef QDF_STATUS (*wlan_ser_umac_cmd_cb)(void *umac_cmd);
  * @WLAN_SER_CMD_SET_MLO_LINK: Cmd to force mlo link active/inactive
  * @WLAN_SER_CMD_MLO_VDEV_LINK_SWITCH: Cmd to serialize link switch operation
  * @WLAN_SER_CMD_SAP_BW_UPDATE: Cmd to serialize SAP BW update operation
+ * @WLAN_SER_CMD_HIGH_AP_AVAILABILITY: Cmd to serialize high ap availability
+ * operation
+ * @WLAN_SER_CMD_LINK_RECFG: Cmd to serialize Link recfg operation
  * @WLAN_SER_CMD_MAX: Max enumeration
  */
 enum wlan_serialization_cmd_type {
@@ -216,6 +220,7 @@ enum wlan_serialization_cmd_type {
 	WLAN_SER_CMD_NDP_RESP_REQ,
 	WLAN_SER_CMD_NDP_DATA_END_INIT_REQ,
 	WLAN_SER_CMD_NDP_END_ALL_REQ,
+	WLAN_SER_CMD_NDP_UPDATE_CONFIG_REQ,
 	WLAN_SER_CMD_ADDTS,
 	WLAN_SER_CMD_DELTS,
 	WLAN_SER_CMD_TDLS_SEND_MGMT,
@@ -237,6 +242,8 @@ enum wlan_serialization_cmd_type {
 	WLAN_SER_CMD_SET_MLO_LINK,
 	WLAN_SER_CMD_MLO_VDEV_LINK_SWITCH,
 	WLAN_SER_CMD_SAP_BW_UPDATE,
+	WLAN_SER_CMD_HIGH_AP_AVAILABILITY,
+	WLAN_SER_CMD_LINK_RECFG,
 	WLAN_SER_CMD_MAX
 };
 

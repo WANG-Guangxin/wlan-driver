@@ -37,9 +37,6 @@
 #include "dp_types.h"
 #include "hal_api_mon.h"
 #include "phyrx_other_receive_info_ru_details.h"
-#if (defined(WLAN_SA_API_ENABLE)) && (defined(QCA_WIFI_QCA9574))
-#include "phyrx_other_receive_info_evm_details.h"
-#endif /* WLAN_SA_API_ENABLE && QCA_WIFI_QCA9574 */
 
 #include "phyrx_other_receive_info_all_sigb_details.h"
 

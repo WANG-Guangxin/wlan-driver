@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -117,6 +117,15 @@
 /* Length of AID field */
 #define WLAN_AID_LEN               2
 
+/* Length of dtim count field */
+#define WLAN_DTIMCOUNT_LEN         1
+
+/* Length of dtim period field */
+#define WLAN_DTIMPERIOD_LEN        1
+
+/* Length of Action fields */
+#define WLAN_ACTION_LEN            3
+
 /* Assoc resp IE offset Capability(2) + Status Code(2) + AID(2) */
 #define WLAN_ASSOC_RSP_IES_OFFSET \
 	(WLAN_CAPABILITYINFO_LEN  + WLAN_STATUSCODE_LEN + WLAN_AID_LEN)
@@ -136,6 +145,10 @@
 /* Beacon IE offset - timestamp(8) + Beacon Int(2) + Cap info(2) */
 #define WLAN_BEACON_IES_OFFSET \
 	(WLAN_TIMESTAMP_LEN + WLAN_BEACONINTERVAL_LEN + WLAN_CAPABILITYINFO_LEN)
+
+/* Action IE offset - Category(1) + Action Code(1) + Dialog token(1) */
+#define WLAN_ACTION_IES_OFFSET \
+	(WLAN_ACTION_LEN)
 
 /* Length (in bytes) of MAC header in 3 address format */
 #define WLAN_MAC_HDR_LEN_3A 24
@@ -212,6 +225,7 @@
  * @QCN_ATTRIB_EDCA_PIFS_PARAM: EDCA PIFS param
  * @QCN_ATTRIB_ECSA_TARGET_TSF_INFO: ECSA Target TSF information
  * @QCN_ATTRIB_MAX: Maximum attribute
+ * @QCN_ATTRIB_5G_CCK_RX_TX_SUPP: 5 GHz CCK RX/TX support
  */
 enum qcn_attribute_id {
 	QCN_ATTRIB_VERSION                  = 0x01,
@@ -228,7 +242,8 @@ enum qcn_attribute_id {
 	QCN_ATTRIB_ECSA_SUPP                = 0X0C,
 	QCN_ATTRIB_EDCA_PIFS_PARAM          = 0X0D,
 	QCN_ATTRIB_ECSA_TARGET_TSF_INFO     = 0x0E,
-	QCN_ATTRIB_MAX                      = 0x0F
+	QCN_ATTRIB_5G_CCK_RX_TX_SUPP	    = 0x0F,
+	QCN_ATTRIB_MAX,
 };
 
 /* Extender vendor specific IE */
@@ -272,6 +287,38 @@ enum qcn_attribute_id {
 #define ATH_HE_CAP_SUBTYPE          0x01
 #define ATH_HE_OP_SUBTYPE           0x02
 
+/*
+ * Multi RSNO OUI definitions:
+ * The below OUI definitions are defined under section 14.4 "Information
+ * elements for RSN overriding" of WPA3-Personal compatibility mode
+ * (Multi-RSNO) WFA specification.
+ */
+#define RSN_OVERRIDE_OUI       0x9a6f50
+#define RSNO_SUBTYPE_WIFI6_RSN 0x29
+#define RSNO_SUBTYPE_WIFI7_RSN 0x2a
+#define RSNO_SUBTYPE_RSNXE     0x2b
+#define RSNO_SUBTYPE_SELECTION 0x2c
+#define RSNO_OUI_WIFI6_RSN     "\x50\x6f\x9a\x29"
+#define RSNO_OUI_WIFI7_RSN     "\x50\x6f\x9a\x2a"
+#define RSNO_OUI_RSNXE         "\x50\x6f\x9a\x2b"
+#define RSNO_OUI_SELECTION     "\x50\x6f\x9a\x2c"
+#define RSNO_OUI_SIZE          4
+#define RSN_SEL_ID_OFFSET      6
+/*
+ * enum rsn_element_identifier : Identifier for the type of RSN IE being used
+ * @RSN_LEGACY     : Denotes the IEEE 80211 spec defined RSN IE EID
+ * @RSNO_GEN_WIFI6 : Denotes the WFA spec defined MRSNO OUI RSNO_OUI_WIFI6_RSN
+ * @RSNO_GEN_WIFI7 : Denotes the WFA spec defined MRSNO OUI RSNO_OUI_WIFI7_RSN
+ * @RSNO_GEN_MAX   : Max supported RSNO GEN
+ */
+enum rsn_element_identifier {
+	RSN_LEGACY = 1,
+	RSNO_GEN_WIFI6 = 2,
+	RSNO_GEN_WIFI7 = 3,
+	/* Set max to the last element */
+	RSNO_GEN_MAX = RSNO_GEN_WIFI7
+};
+
 /* EPR information element flags */
 #define ERP_NON_ERP_PRESENT   0x01
 #define ERP_USE_PROTECTION    0x02
@@ -296,7 +343,7 @@ enum qcn_attribute_id {
 #define WLAN_SECCHANOFF_IE_MAX_LEN               1
 #define WLAN_EXT_SUPPORTED_RATES_IE_MAX_LEN      12
 
-#define WLAN_EXTCAP_IE_MAX_LEN                   15
+#define WLAN_EXTCAP_IE_MAX_LEN                   255
 #define WLAN_FILS_INDICATION_IE_MIN_LEN          2
 #define WLAN_MOBILITY_DOMAIN_IE_MAX_LEN          3
 #define WLAN_OPMODE_IE_MAX_LEN                   1
@@ -308,6 +355,13 @@ enum qcn_attribute_id {
 #define WLAN_RNR_TBTT_OFFSET_INVALID             255
 #define WLAN_TPE_IE_MIN_LEN                      2
 #define WLAN_MAX_NUM_TPE_IE                      8
+/* Number of max TX power elements supported plus size of Transmit Power
+ * Information element.
+ * For 320 MHz, the maximum number of subchannels is 16.
+ * And 2 extra octets for (1) Transmit Power Information Field and
+ * (2) Extension Transmit PSD Information Field
+ */
+#define WLAN_TPE_IE_MAX_LEN                      18
 
 /* BSS Parameters subield of RNR IE */
 
@@ -328,11 +382,6 @@ enum qcn_attribute_id {
 
 /* Wide band channel switch IE length */
 #define WLAN_WIDE_BW_CHAN_SWITCH_IE_LEN          3
-
-/* Number of max TX power elements supported plus size of Transmit Power
- * Information element.
- */
-#define WLAN_TPE_IE_MAX_LEN                      9
 
 #ifdef WLAN_FEATURE_11BE
 /* Bandwidth indication element IE maximum length */
@@ -357,10 +406,10 @@ enum qcn_attribute_id {
 #define WLAN_MAX_CHAN_SWITCH_TIME_IE_LEN         4
 
 #define WLAN_MAX_SRP_IE_LEN                      21
-#define WLAN_MAX_MUEDCA_IE_LEN                   14
+#define WLAN_MAX_MUEDCA_IE_LEN                   255
 #define WLAN_MIN_HECAP_IE_LEN                    22
 #define WLAN_MAX_HECAP_IE_LEN                    55
-#define WLAN_MAX_HE_6G_CAP_IE_LEN                3
+#define WLAN_MAX_HE_6G_CAP_IE_LEN                7
 #define WLAN_MAX_HEOP_IE_LEN                     16
 #define WLAN_HEOP_OUI_TYPE                       "\x24"
 #define WLAN_HEOP_OUI_SIZE                       1
@@ -852,6 +901,7 @@ enum extn_element_ie {
  * REASON_PROP_START and decrease the value of REASON_PROP_START
  * accordingly.
  *
+ * @REASON_KEY_FAIL_TO_INSTALL: key fail to install reason code
  * @REASON_PROP_START: Start of prop reason code
  * @REASON_FW_TRIGGERED_LINK_SWITCH: Link Switch from active to standby link
  * @REASON_HOST_TRIGGERED_LINK_DELETE: Dynamic link removal
@@ -946,6 +996,7 @@ enum wlan_reason_code {
 	 * REASON_PROP_START and decrease the value of REASON_PROP_START
 	 * accordingly.
 	 */
+	REASON_KEY_FAIL_TO_INSTALL = 65514,
 	REASON_PROP_START = 65515,
 	REASON_FW_TRIGGERED_LINK_SWITCH = 65516,
 	REASON_HOST_TRIGGERED_LINK_DELETE = 65517,
@@ -2021,6 +2072,8 @@ struct subelem_header {
 #define EHTOP_GRP_ADDRESSED_BU_IND_LIMIT_BITS            1
 #define EHTOP_GRP_ADDRESSED_BU_IND_EXPONENT_IDX          4
 #define EHTOP_GRP_ADDRESSED_BU_IND_EXPONENT_BITS         2
+#define EHTOP_MCS15_DISABLE_IDX                          6
+#define EHTOP_MCS15_DISABLE_BITS                         1
 
 #define EHTOP_INFO_CHAN_WIDTH_IDX          0
 #define EHTOP_INFO_CHAN_WIDTH_BITS         3
@@ -2505,6 +2558,9 @@ enum wlan_ml_bv_cinfo_emlcap_transtimeout {
 /* AAR Support */
 #define WLAN_ML_BV_CINFO_MLDCAPANDOP_AARSUPPORT_IDX                      12
 #define WLAN_ML_BV_CINFO_MLDCAPANDOP_AARSUPPORT_BITS                     1
+/* Link Reconfig Support */
+#define WLAN_ML_BV_CINFO_MLDCAPANDOP_LINK_RECONFIG_IDX                   13
+#define WLAN_ML_BV_CINFO_MLDCAPANDOP_LINK_RECONFIG_BITS                  1
 
 /* Size in octets of MLD ID subfield in Basic variant Multi-Link
  * element Common Info field.
@@ -2526,6 +2582,12 @@ enum wlan_ml_bv_cinfo_emlcap_transtimeout {
 /* Recommended Max Simultaneous Links */
 #define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_RECOM_MAX_SIMULT_LINKS_IDX        1
 #define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_RECOM_MAX_SIMULT_LINKS_BITS       4
+/* EMLSR Enablement On One Link Support */
+#define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_EMLSR_ENABLE_ONE_LINK_IDX         6
+#define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_EMLSR_ENABLE_ONE_LINK_BITS        1
+/* BTM MLD Recommendation For Multiple APs Support */
+#define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_BTM_MLD_RECOM_MULTI_AP_IDX        7
+#define WLAN_ML_BV_CINFO_EXTMLDCAPINFO_BTM_MLD_RECOM_MULTI_AP_BITS       1
 
 /* Max value in octets of Common Info Length subfield of Common Info field in
  * Basic variant Multi-Link element
@@ -2736,7 +2798,7 @@ struct wlan_ml_prv_linfo_perstaprof {
 /* End of definitions related to Probe Request variant Multi-Link element. */
 
 /* Definitions related to Reconfiguration variant Multi-Link element (per
- * IEEE802.11be D3.0)
+ * IEEE802.11be D7.0)
  */
 
 /* Definitions for bits in the Presence Bitmap subfield in Reconfiguration
@@ -2744,6 +2806,12 @@ struct wlan_ml_prv_linfo_perstaprof {
  */
 /* MLD MAC Address Present */
 #define WLAN_ML_RV_CTRL_PBM_MLDMACADDR_P               ((uint16_t)BIT(0))
+/* EML Capabilities Present */
+#define WLAN_ML_RV_CTRL_PBM_EMLCAP_P                   ((uint16_t)BIT(1))
+/* MLD Capabilities And Operations Present */
+#define WLAN_ML_RV_CTRL_PBM_MLDCAPANDOP_P              ((uint16_t)BIT(2))
+/* Extended MLD Capabilities And Operations Present */
+#define WLAN_ML_RV_CTRL_PBM_EXT_MLDCAPANDOP_P          ((uint16_t)BIT(3))
 
 /* Definitions related to Reconfiguration variant Multi-Link element Common Info
  * field.
@@ -2753,13 +2821,50 @@ struct wlan_ml_prv_linfo_perstaprof {
  * Reconfiguration variant Multi-Link element.
  */
 #define WLAN_ML_RV_CINFO_LENGTH_SIZE                               1
+#define WLAN_ML_RV_CINFO_MLDCAPANDOP_SIZE                          2
+#define WLAN_ML_RV_CINFO_EMLCAP_SIZE                               2
+#define WLAN_ML_RV_CINFO_EXT_MLDCAPANDOP_SIZE                      2
+#define WLAN_ML_RV_CINFO_EXT_MLDCAPANDOP_SIZE                      2
 
-/* Max value in octets of Common Info Length subfield of Common Info field in
- * Reconfiguration variant Multi-Link element
+/* Definitions related to the EML Capabilities subfield of the Common Info field
+ * of the Reconfiguration variant Multi-Link element:
+ *
+ * As per the IEEE802.11be specification, this subfield has the same definition
+ * as the EML Capabilities subfield of the Common Info field of the Basic
+ * variant Multi-Link element. Hence the definitions related to the EML
+ * Capabilities subfield of the Common Info field of the Basic variant
+ * Multi-Link element should be re-used here.
+ */
+
+/* Definitions related to the MLD Capabilities And Operations subfield of the
+ * Common Info field of the Reconfiguration variant Multi-Link element:
+ *
+ * As per the IEEE802.11be specification, this subfield has the same definition
+ * as the MLD Capabilities And Operations subfield of the Common Info field of
+ * the Basic variant Multi-Link element. Hence the definitions related to the
+ * MLD Capabilities And Operations subfield of the Common Info field of the
+ * Basic variant Multi-Link element should be re-used here.
+ */
+
+/* Definitions related to the Extended MLD Capabilities And Operations subfield
+ * of the Common Info field of the Reconfiguration variant Multi-Link element:
+ *
+ * As per the IEEE802.11be specification, this subfield has the same definition
+ * as the Extended MLD Capabilities And Operations subfield of the Common Info
+ * field of the Basic variant Multi-Link element. Hence the definitions related
+ * to the Extended MLD Capabilities And Operations subfield of the Common Info
+ * field of the Basic Multi-Link variant element should be re-used here.
+ */
+
+/* Max recognized value in octets of Common Info Length subfield of Common Info
+ * field in Reconfiguration variant Multi-Link element.
  */
 #define WLAN_ML_RV_CINFO_LENGTH_MAX \
 	(WLAN_ML_RV_CINFO_LENGTH_SIZE + \
-	 QDF_MAC_ADDR_SIZE)
+	 QDF_MAC_ADDR_SIZE + \
+	 WLAN_ML_BV_CINFO_EMLCAP_SIZE +\
+	 WLAN_ML_BV_CINFO_MLDCAPANDOP_SIZE +\
+	 WLAN_ML_BV_CINFO_EXT_MLDCAPANDOP_SIZE)
 
 /* End of definitions related to Reconfiguration variant Multi-Link element
  * Common Info field.
@@ -2784,6 +2889,7 @@ struct wlan_ml_rv_linfo_perstaprof {
 
 /* The above fixed fields may be followed by:
  * STA Info (variable size)
+ * STA Profile (variable size)
  */
 
 /* Size in octets of STA Control field of Per-STA Profile subelement in
@@ -2807,25 +2913,59 @@ struct wlan_ml_rv_linfo_perstaprof {
 /* AP Removal Timer Present */
 #define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_APREMOVALTIMERP_IDX     6
 #define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_APREMOVALTIMERP_BITS    1
-/* Operation Update Type */
-#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_OPUPDATETYPE_IDX        7
-#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_OPUPDATETYPE_BITS       4
+/* Reconfiguration Operation Type */
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_IDX        7
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_BITS       4
 /* Operation Parameters Present */
 #define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_OPPARAMSP_IDX           11
 #define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_OPPARAMSP_BITS          1
+/* NSTR Bitmap Size */
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_IDX            12
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_BITS           1
+/* NSTR Indication Bitmap Present */
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRINDBMP_IDX          13
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRINDBMP_BITS         1
 
 /**
- * enum wlan_ml_operation_update_type - Encoding for the Operation Update Type
- * subfield in STA Control field of Per-STA Profile subelement in
- * Reconfiguration variant Multi-Link element Link Info field. Note: In case of
- * future holes in the enumeration, scheme for reserved value determination
- * should be changed.
- * @WLAN_ML_OPERATION_UPDATE_TYPE_OPPARAMUPDATE: Operation Parameter Update
- * @WLAN_ML_OPERATION_UPDATE_TYPE_RESERVEDSTART: Start of reserved value range
+ * enum wlan_ml_rv_linfo_perstaprof_stactrl_reconfoptype - Encoding for the
+ * Reconfiguration Operation Type subfield in STA Control field of Per-STA
+ * Profile subelement in Reconfiguration variant Multi-Link element Link Info
+ * field. Note: In case of future holes in the enumeration, scheme for reserved
+ * value determination should be changed.
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_APREMOVAL: AP Removal
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_OPPARAMUPDATE: Operation
+ * Parameter Update
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_ADDLINK: Add Link
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_DELETELINK: Delete Link
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_NSTRSTATUSUPDATE: NSTR
+ * Status Update
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_RESERVEDSTART: Start of
+ * reserved value range
  */
-enum wlan_ml_operation_update_type {
-	WLAN_ML_OPERATION_UPDATE_TYPE_OPPARAMUPDATE = 0,
-	WLAN_ML_OPERATION_UPDATE_TYPE_RESERVEDSTART,
+enum wlan_ml_rv_linfo_perstaprof_stactrl_reconfoptype {
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_APREMOVAL = 0,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_OPPARAMUPDATE = 1,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_ADDLINK = 2,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_DELETELINK = 3,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_NSTRSTATUSUPDATE = 4,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_RECONFOPTYPE_RESERVEDSTART,
+};
+
+/**
+ * enum wlan_ml_rv_linfo_perstaprof_stactrl_nstrbmsz - Encoding for
+ * NSTR Bitmap Size in STA Control field of Per-STA Profile subelement
+ * in Reconfiguration variant Multi-Link element Link Info field.
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_1_OCTET: NSTR Indication
+ * Bitmap size of 1 octet
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_2_OCTETS: NSTR Indication
+ * Bitmap size of 2 octets
+ * @WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_INVALIDSTART: Start of invalid
+ * value range
+ */
+enum wlan_ml_rv_linfo_perstaprof_stactrl_nstrbmsz {
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_1_OCTET = 0,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_2_OCTETS = 1,
+	WLAN_ML_RV_LINFO_PERSTAPROF_STACTRL_NSTRBMSZ_INVALIDSTART,
 };
 
 /* Definitions for subfields in STA Info field of Per-STA Profile subelement
@@ -2870,18 +3010,39 @@ struct wlan_ml_rv_linfo_perstaprof_stainfo_opparams {
  * the IEEE802.11be standard.
  */
 
-/* Max value in octets of STA Info Length in STA Info field of Per-STA Profile
- * subelement in Reconfiguration variant Multi-Link element Link Info field.
+/* Max size in octets of the NSTR Indication Bitmap subfield in STA info field
+ * of Per-STA Profile subelement in Reconfiguration variant Multi-Link element
+ * Link Info field.
+ */
+#define WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_NSTRINDBM_MAXSIZE       2
+
+/* Max recognized value in octets of STA Info Length in STA Info field of
+ * Per-STA Profile subelement in Reconfiguration variant Multi-Link element Link
+ * Info field.
  */
 #define WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_LENGTH_MAX \
 	(WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_LENGTH_SIZE + \
 	 QDF_MAC_ADDR_SIZE + \
 	 WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_APREMOVALTIMER_SIZE + \
-	 sizeof(struct wlan_ml_rv_linfo_perstaprof_stainfo_opparams))
+	 sizeof(struct wlan_ml_rv_linfo_perstaprof_stainfo_opparams) + \
+	 WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_NSTRINDBM_MAXSIZE)
 
 /* End of definitions related to Reconfiguration variant Multi-Link element Link
  * Info field.
  */
+
+/* Max length of element info and common info in Reconfiguration variant
+ * Multi-Link IE
+ */
+#define WLAN_ML_RV_ELEM_COMMON_MAX_LEN \
+	(sizeof(struct wlan_ie_multilink) + \
+	 WLAN_ML_RV_CINFO_LENGTH_MAX)
+
+/* Max link info length of Reconfiguration variant Multi-Link IE */
+#define WLAN_ML_RV_LINK_INFO_MAX_LEN \
+	(sizeof(struct wlan_ml_rv_linfo_perstaprof) + \
+	  WLAN_ML_RV_LINFO_PERSTAPROF_STAINFO_LENGTH_MAX + \
+	  WLAN_STA_PROFILE_MAX_LEN)
 
 /* End of definitions related to Reconfiguration variant Multi-Link element. */
 
@@ -3087,6 +3248,7 @@ struct wlan_action_frame_args {
  * @primary_channel: HE 6GHz Primary channel number
  * @width: HE 6GHz BSS Channel Width
  * @duplicate_beacon: HE 6GHz Duplicate beacon field
+ * @reg_info: Power mode
  * @reserved: Reserved bits
  * @chan_freq_seg0: HE 6GHz Channel Centre Frequency Segment 0
  * @chan_freq_seg1: HE 6GHz Channel Centre Frequency Segment 1
@@ -3096,7 +3258,8 @@ struct he_oper_6g_param {
 	uint8_t primary_channel;
 	uint8_t width:2,
 		duplicate_beacon:1,
-		reserved:5;
+		reg_info:4,
+		reserved:1;
 	uint8_t chan_freq_seg0;
 	uint8_t chan_freq_seg1;
 	uint8_t minimum_rate;
@@ -3993,6 +4156,27 @@ is_qcn_oui(uint8_t *frm)
 {
 	return ((frm[1] > 4) && (LE_READ_4(frm + 2) ==
 		((QCN_OUI_TYPE_CMN << 24) | QCA_OUI)));
+}
+
+static inline bool
+is_vendor_wifi6_rsno_oui(uint8_t *frm)
+{
+	return (frm[1] > 4) && (LE_READ_4(frm + 2) ==
+		((RSNO_SUBTYPE_WIFI6_RSN << OUI_TYPE_BITS) | RSN_OVERRIDE_OUI));
+}
+
+static inline bool
+is_vendor_rsnxo_oui(uint8_t *frm)
+{
+	return (frm[1] > 4) && (LE_READ_4(frm + 2) ==
+		((RSNO_SUBTYPE_RSNXE << OUI_TYPE_BITS) | RSN_OVERRIDE_OUI));
+}
+
+static inline bool
+is_vendor_wifi7_rsno_oui(uint8_t *frm)
+{
+	return (frm[1] > 4) && (LE_READ_4(frm + 2) ==
+		((RSNO_SUBTYPE_WIFI7_RSN << OUI_TYPE_BITS) | RSN_OVERRIDE_OUI));
 }
 
 #define WLAN_VENDOR_WME_IE_LEN 24

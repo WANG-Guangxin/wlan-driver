@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -360,7 +360,6 @@
  * </ioctl>
  */
 #define WE_SET_CHWIDTH       17
-#define WE_SET_ANI_EN_DIS    18
 #define WE_SET_ANI_POLL_PERIOD    19
 #define WE_SET_ANI_LISTEN_PERIOD  20
 #define WE_SET_ANI_OFDM_LEVEL     21
@@ -1730,14 +1729,14 @@
 #define WE_GET_GTX_STEP                 52
 /*
  * <ioctl>
- * get_gtxMinTpc - Get the tx miminum tpc
+ * get_gtxMinTpc - Get the tx minimum tpc
  *
  * @INPUT: None
  *
  * @OUTPUT: TPC
  * wlan0     get_gtxMinTpc:0
  *
- * This IOCTL is used to get tx miminum tpc
+ * This IOCTL is used to get tx minimum tpc
  *
  * @E.g: iwpriv wlan0 get_gtxMinTpc
  *
@@ -1965,32 +1964,6 @@
  * </ioctl>
  */
 #define WE_GET_SUSPEND_RESUME_STATS 7
-#ifdef FEATURE_WLAN_TDLS
-/*
- * <ioctl>
- * getTdlsPeers - Get all TDLS peers.
- *
- * @INPUT: None
- *
- * @OUTPUT: Returns the MAC address of all the TDLS peers
- * wlan0     getTdlsPeers:
- * MAC               Id cap up RSSI
- * ---------------------------------
- * 00:0a:f5:0e:bd:18  2   Y  Y  -44
- * 00:0a:f5:bf:0e:12  0   N  N    0
- *
- * This IOCTL is used to get all TDLS peers.
- *
- * @E.g: iwpriv wlan0 getTdlsPeers
- *
- * Supported Feature: TDLS
- *
- * Usage: Internal/External
- *
- * </ioctl>
- */
-#define WE_GET_TDLS_PEERS    8
-#endif
 /*
  * <ioctl>
  * getPMFInfo - get the PMF info of the connected session
@@ -2293,19 +2266,6 @@
  */
 #define WE_SET_TXRX_STATS    24
 
-
-#ifdef FEATURE_WLAN_TDLS
-#undef  MAX_VAR_ARGS
-#define MAX_VAR_ARGS         11
-#else
-#undef  MAX_VAR_ARGS
-#define MAX_VAR_ARGS         9
-#endif
-
-#ifdef WLAN_FEATURE_MOTION_DETECTION
-#undef  MAX_VAR_ARGS
-#define MAX_VAR_ARGS                              15
-#endif /* WLAN_FEATURE_MOTION_DETECTION */
 #define WE_MOTION_DET_CONFIG_PARAM                25
 #define WE_MOTION_DET_BASE_LINE_CONFIG_PARAM      26
 
@@ -3053,7 +3013,7 @@ static void wlan_get_wlm_stats_cb(void *cookie, const char *data)
 		return;
 	}
 	priv = osif_request_priv(request);
-	strlcpy(priv, data, WE_MAX_STR_LEN);
+	strscpy(priv, data, WE_MAX_STR_LEN);
 	osif_request_complete(request);
 	osif_request_put(request);
 }
@@ -3093,7 +3053,7 @@ static int wlan_get_wlm_stats(struct hdd_adapter *adapter, uint32_t bitmask,
 		goto cleanup;
 	}
 	priv = osif_request_priv(request);
-	strlcpy(response, priv, params.priv_size);
+	strscpy(response, priv, params.priv_size);
 
 cleanup:
 	osif_request_put(request);
@@ -4177,14 +4137,6 @@ static int hdd_we_set_pdev(struct hdd_adapter *adapter,
 #define hdd_we_set_pdev(adapter, id, value) \
 			hdd_we_set_pdev(adapter, id, #id, value)
 
-static int hdd_we_set_ani_en_dis(struct wlan_hdd_link_info *link_info,
-				 int value)
-{
-	return hdd_we_set_pdev(link_info->adapter,
-			       wmi_pdev_param_ani_enable,
-			       value);
-}
-
 static int hdd_we_set_ani_poll_period(struct wlan_hdd_link_info *link_info,
 				      int value)
 {
@@ -4810,7 +4762,6 @@ static const setint_getnone_fn setint_getnone_cb[] = {
 	[WE_SET_SHORT_GI] = hdd_we_set_short_gi,
 	[WE_SET_RTSCTS] = hdd_we_set_rtscts,
 	[WE_SET_CHWIDTH] = hdd_we_set_ch_width,
-	[WE_SET_ANI_EN_DIS] = hdd_we_set_ani_en_dis,
 	[WE_SET_ANI_POLL_PERIOD] = hdd_we_set_ani_poll_period,
 	[WE_SET_ANI_LISTEN_PERIOD] = hdd_we_set_ani_listen_period,
 	[WE_SET_ANI_OFDM_LEVEL] = hdd_we_set_ani_ofdm_level,
@@ -6254,15 +6205,7 @@ static int __iw_get_char_setnone(struct net_device *dev,
 			return -EINVAL;
 		break;
 	}
-#ifdef FEATURE_WLAN_TDLS
-	case WE_GET_TDLS_PEERS:
-	{
-		wrqu->data.length =
-			wlan_hdd_tdls_get_all_peers(adapter, extra,
-						    WE_MAX_STR_LEN) + 1;
-		break;
-	}
-#endif
+
 	case WE_GET_11W_INFO:
 	{
 		struct qdf_mac_addr connected_bssid;
@@ -6925,7 +6868,8 @@ static int __iw_set_var_ints_getnone(struct net_device *dev,
 			return -EINVAL;
 		}
 
-		if (apps_args[0] == CDP_TXRX_STATS_28) {
+		if (apps_args[0] == CDP_TXRX_STATS_28 ||
+		    apps_args[0] == CDP_TXRX_STATS_11) {
 			if (sta_ctx->conn_info.is_authenticated) {
 				hdd_debug("ap mac addr: "QDF_MAC_ADDR_FMT,
 					  QDF_MAC_ADDR_REF(sta_ctx->conn_info.bssid.bytes));
@@ -8542,7 +8486,9 @@ static int __iw_set_two_ints_getnone(struct net_device *dev,
 	int ret;
 	uint8_t dual_mac_feature = DISABLE_DBS_CXN_AND_SCAN;
 	struct hdd_context *hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	struct hdd_monitor_ctx mon_ctx[MAX_MAC] = { 0 };
 	QDF_STATUS status;
+	uint8_t index = 0;
 
 	hdd_enter_dev(dev);
 
@@ -8602,14 +8548,17 @@ static int __iw_set_two_ints_getnone(struct net_device *dev,
 		break;
 	case WE_SET_MON_MODE_CHAN:
 		if (value[1] > 256)
-			ret = wlan_hdd_set_mon_chan(adapter, value[1],
-						    value[2]);
+			mon_ctx[index].freq = value[1];
 		else
-			ret = wlan_hdd_set_mon_chan(
-						adapter,
-						wlan_reg_legacy_chan_to_freq(
-						hdd_ctx->pdev, value[1]),
-						value[2]);
+			mon_ctx[index].freq = wlan_reg_legacy_chan_to_freq(
+						hdd_ctx->pdev, value[1]);
+		mon_ctx[index].bandwidth = value[2];
+
+		ret = wlan_hdd_validate_mon_params(adapter, mon_ctx, MAX_MAC);
+		if (ret)
+			return ret;
+
+		ret = wlan_hdd_set_mon_chan(adapter);
 		break;
 	case WE_SET_WLAN_SUSPEND:
 		ret = hdd_wlan_fake_apps_suspend(hdd_ctx->wiphy, dev,
@@ -8845,11 +8794,6 @@ static const struct iw_priv_args we_private_args[] = {
 	 IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
 	 0,
 	 "chwidth"},
-
-	{WE_SET_ANI_EN_DIS,
-	 IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
-	 0,
-	 "anienable"},
 
 	{WE_SET_ANI_POLL_PERIOD,
 	 IW_PRIV_TYPE_INT | IW_PRIV_SIZE_FIXED | 1,
@@ -9541,12 +9485,7 @@ static const struct iw_priv_args we_private_args[] = {
 	 0,
 	 IW_PRIV_TYPE_CHAR | WE_MAX_STR_LEN,
 	 "getChannelList"},
-#ifdef FEATURE_WLAN_TDLS
-	{WE_GET_TDLS_PEERS,
-	 0,
-	 IW_PRIV_TYPE_CHAR | WE_MAX_STR_LEN,
-	 "getTdlsPeers"},
-#endif
+
 	{WE_GET_11W_INFO,
 	 0,
 	 IW_PRIV_TYPE_CHAR | WE_MAX_STR_LEN,
@@ -9857,4 +9796,3 @@ void hdd_wext_unregister(struct net_device *dev,
 	if (!rtnl_held)
 		rtnl_unlock();
 }
-

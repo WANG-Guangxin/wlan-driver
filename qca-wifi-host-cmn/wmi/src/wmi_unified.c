@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -741,9 +741,10 @@ wmi_print_cmd_log_buffer(struct wmi_log_buf_t *log_buffer, uint32_t count,
 
 		qdf_log_timestamp_to_secs(cmd_log->time, &secs, &usecs);
 		len += scnprintf(str + len, sizeof(str) - len,
-				 "% 8lld.%06lld    %6u (0x%06x)    ",
+				 "% 8lld.%06lld    %6u (%s)    ",
 				 secs, usecs,
-				 cmd_log->command, cmd_log->command);
+				 cmd_log->command,
+				 wmi_id_to_name(cmd_log->command));
 		for (i = 0; i < data_len; ++i) {
 			len += scnprintf(str + len, sizeof(str) - len,
 					 "0x%08x ", cmd_log->data[i]);
@@ -842,9 +843,10 @@ wmi_print_cmd_cmp_log_buffer(struct wmi_log_buf_t *log_buffer, uint32_t count,
 
 		qdf_log_timestamp_to_secs(cmd_log->time, &secs, &usecs);
 		len += scnprintf(str + len, sizeof(str) - len,
-				 "% 8lld.%06lld    %6u (0x%06x)    ",
+				 "% 8lld.%06lld    %6u (%s)    ",
 				 secs, usecs,
-				 cmd_log->command, cmd_log->command);
+				 cmd_log->command,
+				 wmi_id_to_name(cmd_log->command));
 		for (i = 0; i < data_len; ++i) {
 			len += scnprintf(str + len, sizeof(str) - len,
 					 "0x%08x ", cmd_log->data[i]);
@@ -2511,7 +2513,8 @@ uint32_t wmi_critical_events_in_flight(struct wmi_unified *wmi)
 static bool
 wmi_is_event_critical(struct wmi_unified *wmi_handle, uint32_t event_id)
 {
-	if (wmi_handle->wmi_events[wmi_roam_synch_event_id] == event_id)
+	if (wmi_handle->wmi_events[wmi_roam_synch_event_id] == event_id ||
+	    wmi_handle->wmi_events[wmi_csa_handling_event_id] == event_id)
 		return true;
 
 	return false;
@@ -2889,6 +2892,34 @@ void wmi_process_fw_event(struct wmi_unified *wmi_handle, wmi_buf_t evt_buf)
 	__wmi_control_rx(wmi_handle, evt_buf);
 }
 
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+static void
+wmi_dump_event(wmi_buf_t evt_buf)
+{
+	uint32_t id;
+
+	id = WMI_GET_FIELD(qdf_nbuf_data(evt_buf), WMI_CMD_HDR, COMMANDID);
+	if (id != WMI_ROAM_STATS_EVENTID)
+		return;
+
+	/*
+	 * Dump of event for debugging connectivity logging issues.
+	 * The format of the prints below is based on WHUNT hexdump
+	 * expected format.
+	 */
+	wmi_debug("EVENT: 0x%x", id);
+	wmi_debug("Time: 0x%llx", qdf_get_log_timestamp());
+	wmi_debug("Length:%d\n", (int)qdf_nbuf_len(evt_buf));
+	qdf_trace_hex_dump(QDF_MODULE_ID_WMI, QDF_TRACE_LEVEL_DEBUG,
+			   qdf_nbuf_data(evt_buf),
+			   (int)qdf_nbuf_len(evt_buf));
+}
+#else
+static void
+wmi_dump_event(wmi_buf_t evt_buf)
+{}
+#endif
+
 void __wmi_control_rx(struct wmi_unified *wmi_handle, wmi_buf_t evt_buf)
 {
 	uint32_t id;
@@ -2904,6 +2935,7 @@ void __wmi_control_rx(struct wmi_unified *wmi_handle, wmi_buf_t evt_buf)
 
 	id = WMI_GET_FIELD(qdf_nbuf_data(evt_buf), WMI_CMD_HDR, COMMANDID);
 
+	wmi_dump_event(evt_buf);
 	wmi_ext_dbg_msg_event_record(wmi_handle, qdf_nbuf_data(evt_buf),
 				     qdf_nbuf_len(evt_buf));
 
@@ -3237,6 +3269,8 @@ void *wmi_unified_get_pdev_handle(struct wmi_soc *soc, uint32_t pdev_idx)
 		wmi_handle->evt_phy_id_map = soc->evt_phy_id_map;
 		wmi_interface_logging_init(wmi_handle, pdev_idx);
 		qdf_atomic_init(&wmi_handle->is_target_suspended);
+		qdf_atomic_init(&wmi_handle->is_target_suspend_acked);
+		qdf_atomic_init(&wmi_handle->is_init_cmd_sent);
 		qdf_atomic_init(&wmi_handle->is_wow_enable_ack_failed);
 		wmi_handle->target_type = soc->target_type;
 		wmi_handle->wmi_max_cmds = soc->wmi_max_cmds;
@@ -3376,6 +3410,7 @@ void *wmi_unified_attach(void *scn_handle,
 	qdf_atomic_init(&wmi_handle->pending_cmds);
 	qdf_atomic_init(&wmi_handle->is_target_suspended);
 	qdf_atomic_init(&wmi_handle->is_target_suspend_acked);
+	qdf_atomic_init(&wmi_handle->is_init_cmd_sent);
 	qdf_atomic_init(&wmi_handle->num_stats_over_qmi);
 	qdf_atomic_init(&wmi_handle->is_wow_enable_ack_failed);
 	wmi_runtime_pm_init(wmi_handle);
@@ -3566,9 +3601,11 @@ static void wmi_htc_tx_complete(void *ctx, HTC_PACKET *htc_pkt)
 			WMI_MGMT_COMMAND_TX_CMP_RECORD(wmi_handle, cmd_id,
 						       offset_ptr);
 		} else {
-			if (wmi_handle->ops->is_force_fw_hang_cmd(cmd_id)) {
-				wmi_info("Tx completion received for WMI_FORCE_FW_HANG_CMDID, current_time:%ld",
-					 qdf_mc_timer_get_system_time());
+			if (wmi_handle->ops->is_force_fw_hang_cmd) {
+				if (wmi_handle->ops->is_force_fw_hang_cmd(cmd_id)) {
+					wmi_info("Tx completion received for WMI_FORCE_FW_HANG_CMDID, current_time:%ld",
+						 qdf_mc_timer_get_system_time());
+				}
 			}
 
 			WMI_COMMAND_TX_CMP_RECORD(wmi_handle, cmd_id,
@@ -3652,8 +3689,14 @@ static QDF_STATUS wmi_connect_pdev_htc_service(struct wmi_soc *soc,
 	status = htc_connect_service(soc->htc_handle, &connect, &response);
 
 	if (QDF_IS_STATUS_ERROR(status)) {
-		wmi_err("Failed to connect to WMI CONTROL service status:%d",
-			 status);
+		if (connect.service_id !=
+				WMI_CONTROL_SVC_WMAC1 &&
+				connect.service_id !=
+				WMI_CONTROL_SVC_WMAC2) {
+			wmi_err(
+				"Failed to connect to WMI CONTROL service status:%d",
+				status);
+		}
 		return status;
 	}
 
@@ -3805,6 +3848,18 @@ bool wmi_is_target_suspend_acked(struct wmi_unified *wmi_handle)
 }
 qdf_export_symbol(wmi_is_target_suspend_acked);
 
+void wmi_set_init_cmd_sent(struct wmi_unified *wmi_handle)
+{
+	qdf_atomic_set(&wmi_handle->is_init_cmd_sent, 1);
+}
+qdf_export_symbol(wmi_set_init_cmd_sent);
+
+bool wmi_is_init_cmd_sent(struct wmi_unified *wmi_handle)
+{
+	return !!qdf_atomic_read(&wmi_handle->is_init_cmd_sent);
+}
+qdf_export_symbol(wmi_is_init_cmd_sent);
+
 #ifdef WLAN_FEATURE_WMI_SEND_RECV_QMI
 void wmi_set_qmi_stats(wmi_unified_t wmi_handle, bool val)
 {
@@ -3888,3 +3943,10 @@ int __wmi_validate_handle(wmi_unified_t wmi_handle, const char *func)
 
         return 0;
 }
+
+#ifdef FEATURE_MGMT_RX_OVER_SRNG
+void wmi_rx_buf_srng(wmi_unified_t wmi_handle, wmi_buf_t evt_buf)
+{
+	wmi_process_control_rx(wmi_handle, evt_buf);
+}
+#endif

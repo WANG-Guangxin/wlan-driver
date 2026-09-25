@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -237,6 +237,23 @@ static int get_sar_version(wmi_unified_t handle, uint8_t *evt,
 		target_if_err("failed to parse sar capability");
 		return qdf_status_to_os_return(status);
 	}
+
+	return 0;
+}
+
+static int get_sar_flag(wmi_unified_t handle, uint8_t *evt,
+			struct wlan_psoc_host_service_ext2_param *ext2_param)
+{
+	QDF_STATUS status;
+
+	status = wmi_extract_sar_cap_service_ready_ext2(handle,
+							evt, ext2_param);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		target_if_debug("failed to parse sar flag");
+		return qdf_status_to_os_return(status);
+	}
+
+	target_if_debug("sar flag %d", ext2_param->sar_flag);
 
 	return 0;
 }
@@ -556,6 +573,11 @@ int init_deinit_populate_twt_cap_ext2(struct wlan_objmgr_psoc *psoc,
 	psoc_info = wlan_psoc_get_tgt_if_handle(psoc);
 
 	target_psoc_set_twt_ack_cap(psoc_info, param.twt_ack_support_cap);
+	target_psoc_set_twt_wake_dur_and_intvl(psoc_info,
+					       param.min_wake_dur,
+					       param.max_wake_dur,
+					       param.min_wake_intvl,
+					       param.max_wake_intvl);
 
 exit:
 	return qdf_status_to_os_return(status);
@@ -713,6 +735,51 @@ free_and_return:
 
 	return qdf_status_to_os_return(status);
 }
+
+#ifdef FEATURE_WLAN_TX_POWERBOOST
+int init_deinit_populate_power_boost_cap_ext2(wmi_unified_t wmi_handle,
+						uint8_t *event,
+						struct tgt_info *info)
+{
+	bool pb_cap = false;
+	struct wlan_objmgr_psoc *psoc;
+	uint32_t num_phy_reg_cap;
+	uint8_t phy_idx = 0;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+
+	if (!event) {
+		target_if_err("TPB: event buffer is null");
+		return -EINVAL;
+	}
+
+	psoc = target_if_get_psoc_from_scn_hdl(wmi_handle->scn_handle);
+	if (!psoc) {
+		target_if_err("TPB: psoc is null");
+		return -EINVAL;
+	}
+
+	num_phy_reg_cap = info->service_ext_param.num_phy;
+	if (num_phy_reg_cap > PSOC_MAX_PHY_REG_CAP) {
+		target_if_err("TPB: Invalid num_phy_reg_cap %d",
+				num_phy_reg_cap);
+		return -EINVAL;
+	}
+
+	/*
+	 * For each phy_idx, ANN must be enabled, hence only check for
+	 * phy_idx = 0
+	 */
+	status = wmi_extract_power_boost_capability(
+			wmi_handle, event, phy_idx, &pb_cap);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		target_if_err("TPB: failed to parse power_boost cap ext2");
+		return qdf_status_to_os_return(status);
+	}
+
+	info->service_ext2_param.tx_powerboost = pb_cap;
+	return 0;
+}
+#endif
 
 QDF_STATUS init_deinit_dbr_ring_cap_free(
 		struct target_psoc_info *tgt_psoc_info)
@@ -1023,6 +1090,8 @@ int init_deinit_populate_hal_reg_cap_ext2(wmi_unified_t wmi_handle,
 			return qdf_status_to_os_return(status);
 		}
 	}
+
+	status = get_sar_flag(wmi_handle, event, &info->service_ext2_param);
 
 	return 0;
 }

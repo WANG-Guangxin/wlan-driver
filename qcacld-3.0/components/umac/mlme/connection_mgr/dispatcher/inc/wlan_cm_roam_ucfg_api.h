@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -53,6 +53,27 @@ ucfg_user_space_enable_disable_rso(struct wlan_objmgr_pdev *pdev,
 void
 ucfg_clear_user_disabled_roaming(struct wlan_objmgr_psoc *psoc,
 				 uint8_t vdev_id);
+
+/**
+ * ucfg_set_roam_policy() - Set roam policy
+ * @psoc:  Pointer to psoc
+ * @vdev_id: vdev id
+ * @roam_policy: Roam policy. refer enum wlan_roam_policy
+ *
+ * Return: void
+ */
+void ucfg_set_roam_policy(struct wlan_objmgr_psoc *psoc, uint8_t vdev_id,
+			  enum wlan_roam_policy roam_policy);
+
+/**
+ * ucfg_get_roam_policy() - Get roam policy
+ * @psoc: psoc object
+ * @vdev_id: vdev id
+ *
+ * Return: current roam policy
+ */
+enum wlan_roam_policy ucfg_get_roam_policy(struct wlan_objmgr_psoc *psoc,
+					   uint8_t vdev_id);
 
 /**
  * ucfg_is_rso_enabled() - Check if rso is enabled
@@ -301,6 +322,39 @@ ucfg_wlan_cm_roam_invoke(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 			 struct qdf_mac_addr *bssid, qdf_freq_t ch_freq,
 			 enum wlan_cm_source source);
 
+/**
+ * ucfg_cm_roam_get_roam_score_algo() - get value of INI
+ * vendor_roam_score_algorithm
+ * @pdev: Pointer to pdev
+ *
+ * Return: value of vendor_roam_score_algorithm
+ */
+uint32_t ucfg_cm_roam_get_roam_score_algo(struct wlan_objmgr_pdev *pdev);
+
+/**
+ * ucfg_cm_is_bssid_present_on_any_assoc_link() : Check if bssid belongs to any
+ * assoc link
+ * @vdev: Pointer to vdev
+ * @target_bssid: target bssid
+ *
+ * Return: True if bssid belongs to any assoc else return false
+ */
+bool ucfg_cm_is_bssid_present_on_any_assoc_link(struct wlan_objmgr_vdev *vdev,
+				       struct qdf_mac_addr *target_bssid);
+
+/**
+ * ucfg_cm_roam_reject_reassoc_event() - send reassoc reject log event
+ * vendor_roam_score_algorithm
+ * @pdev: Pointer to pdev
+ * @vdev: Pointer to vdev
+ * @connected_bssid: connected BSSID
+ *
+ * Return: none
+ */
+void ucfg_cm_roam_reject_reassoc_event(struct wlan_objmgr_pdev *pdev,
+				       struct wlan_objmgr_vdev *vdev,
+				       struct qdf_mac_addr *connected_bssid);
+
 #ifdef WLAN_FEATURE_FILS_SK
 QDF_STATUS
 ucfg_cm_update_fils_config(struct wlan_objmgr_psoc *psoc,
@@ -515,6 +569,17 @@ ucfg_cm_roam_send_vendor_handoff_param_req(struct wlan_objmgr_psoc *psoc,
 					   void *vendor_handoff_context);
 
 /**
+ * ucfg_cm_roam_reset_vendor_handoff_req() - reset vendor handoff params
+ * command request
+ * @psoc: Pointer to psoc
+ * @vdev_id: vdev id
+ *
+ * Return: none
+ */
+void ucfg_cm_roam_reset_vendor_handoff_req(struct wlan_objmgr_psoc *psoc,
+					   uint8_t vdev_id);
+
+/**
  * ucfg_cm_roam_is_vendor_handoff_control_enable() - check whether vendor
  * handoff control feature is enable or not in driver
  * @psoc: psoc pointer
@@ -572,7 +637,7 @@ ucfg_cm_get_roam_rescan_rssi_diff(struct wlan_objmgr_psoc *psoc, uint8_t *val);
  * get neighbor lookup rssi threshold
  * @psoc: pointer to psoc object
  * @vdev_id: vdev identifier
- * @lookup_threshold: Buffer to fill the neighbor lookup threshold.
+ * @next_rssi_threshold: Buffer to fill the next rssi threshold.
  *			Valid only if the return status is success.
  *
  * Return: QDF_STATUS
@@ -580,7 +645,7 @@ ucfg_cm_get_roam_rescan_rssi_diff(struct wlan_objmgr_psoc *psoc, uint8_t *val);
 QDF_STATUS
 ucfg_cm_get_neighbor_lookup_rssi_threshold(struct wlan_objmgr_psoc *psoc,
 					   uint8_t vdev_id,
-					   uint8_t *lookup_threshold);
+					   uint8_t *next_rssi_threshold);
 
 /**
  * ucfg_cm_get_empty_scan_refresh_period() - get empty scan refresh period
@@ -851,4 +916,20 @@ ucfg_cm_roaming_get_peer_mld_addr(struct wlan_objmgr_vdev *vdev)
 	return NULL;
 }
 #endif
+
+#ifdef WLAN_FEATURE_11BE_MLO
+/**
+ * ucfg_cm_delete_crypto_keys_for_all_links() - This API is wrapper for
+ * "cm_delete_crypto_keys_for_all_links" function
+ * @vdev: pointer to VDEV
+ *
+ * Return: none
+ */
+void ucfg_cm_delete_crypto_keys_for_all_links(struct wlan_objmgr_vdev *vdev);
+#else
+static inline
+void ucfg_cm_delete_crypto_keys_for_all_links(struct wlan_objmgr_vdev *vdev)
+{
+}
+#endif /* WLAN_FEATURE_11BE_MLO */
 #endif /* _WLAN_CM_ROAM_UCFG_API_H_ */

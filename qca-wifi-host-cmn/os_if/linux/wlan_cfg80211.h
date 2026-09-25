@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -33,6 +33,8 @@
 #include <qdf_nbuf.h>
 #include "qal_devcfg.h"
 #include "wlan_osif_features.h"
+#include <qdf_trace.h>
+#include <wlan_cmn.h>
 
 #define osif_alert(params...) \
 	QDF_TRACE_FATAL(QDF_MODULE_ID_OS_IF, params)
@@ -46,7 +48,7 @@
 	QDF_TRACE_INFO(QDF_MODULE_ID_OS_IF, params)
 #define osif_debug(params...) \
 	QDF_TRACE_DEBUG(QDF_MODULE_ID_OS_IF, params)
-#define osif_rl_debug(params...) \
+#define osif_debug_rl(params...) \
 	QDF_TRACE_DEBUG_RL(QDF_MODULE_ID_OS_IF, params)
 #define osif_err_rl(params...) \
 	QDF_TRACE_ERROR_RL(QDF_MODULE_ID_OS_IF, params)
@@ -185,10 +187,27 @@
  * switch event index
  * @QCA_NL80211_VENDOR_SUBCMD_TX_LATENCY_INDEX: event index for transmit
  *	latency stats
- * @QCA_NL80211_VENDOR_SUBCMD_RECONFIG_REMOVE_COMPLETE_EVENT_INDEX: ML Reconfig
- * remove complete event index
+ * @QCA_NL80211_VENDOR_SUBCMD_HIGH_AP_AVAILABILITY_INDEX: High AP availablility
+ * index
+ * @QCA_NL80211_VENDOR_SUBCMD_TTLM_LINK_UPDATE_INDEX: MLO Link
+ * enable/disable event index
  * @QCA_NL80211_VENDOR_SUBCMD_FW_PAGE_FAULT_REPORT_INDEX: Pagefault report
  * event index
+ * @QCA_NL80211_VENDOR_SUBCMD_DISABLE_MU_MODES_INDEX: managed MU probe resp
+ * event index
+ * @QCA_NL80211_VENDOR_SUBCMD_TELEMETRY_STATS_INDEX: Event index for
+ * non-blocking stats request
+ * @QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_COMPLETE_INDEX: Event index for
+ * spectral scan completion
+ * @QCA_NL80211_VENDOR_SUBCMD_FLOW_STATS_INDEX: Event index for flow stats
+ * @QCA_NL80211_VENDOR_SUBCMD_CLASSIFIED_FLOW_REPORT_INDEX: Event index for
+ * the flow report sent for classified flow
+ * @QCA_NL80211_VENDOR_SUBCMD_CLASSIFIED_FLOW_STATUS_INDEX: Event index for
+ * the flow status sent for classified flow
+ * @QCA_NL80211_VENDOR_SUBCMD_ASYNC_GET_STATION_INDEX: Event index for async
+ * get station sent for ucast cmd
+ * @QCA_NL80211_VENDOR_SUBCMD_IDLE_SHUTDOWN_INDEX: Idle shutdown event index
+ * @QCA_NL80211_VENDOR_SUBCMD_TX_POWER_BOOST_INDEX: Power boost event index
  */
 
 enum qca_nl80211_vendor_subcmds_index {
@@ -257,7 +276,7 @@ enum qca_nl80211_vendor_subcmds_index {
 	QCA_NL80211_VENDOR_SUBCMD_SCAN_DONE_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_GW_PARAM_CONFIG_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_INTEROP_ISSUES_AP_INDEX,
-#ifdef WLAN_FEATURE_TSF
+#ifdef WLAN_FEATURE_TSF_PLUS
 	QCA_NL80211_VENDOR_SUBCMD_TSF_INDEX,
 #endif
 	QCA_NL80211_VENDOR_SUBCMD_NDP_INDEX,
@@ -316,16 +335,30 @@ enum qca_nl80211_vendor_subcmds_index {
 	QCA_NL80211_VENDOR_SUBCMD_CONNECTED_CHANNEL_STATS_INDEX,
 #ifdef WLAN_FEATURE_11BE_MLO
 	QCA_NL80211_VENDOR_SUBCMD_TID_TO_LINK_MAP_INDEX,
-#ifdef CONN_MGR_ADV_FEATURE
 	QCA_NL80211_VENDOR_SUBCMD_LINK_RECONFIG_INDEX,
-#endif
 #endif
 	QCA_NL80211_VENDOR_SUBCMD_AUDIO_TRANSPORT_SWITCH_INDEX,
 #ifdef WLAN_FEATURE_TX_LATENCY_STATS
 	QCA_NL80211_VENDOR_SUBCMD_TX_LATENCY_INDEX,
 #endif
-	QCA_NL80211_VENDOR_SUBCMD_RECONFIG_REMOVE_COMPLETE_EVENT_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_HIGH_AP_AVAILABILITY_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_TTLM_LINK_UPDATE_INDEX,
 	QCA_NL80211_VENDOR_SUBCMD_FW_PAGE_FAULT_REPORT_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_DISABLE_MU_MODES_INDEX,
+#ifdef WLAN_SUPPORT_TELEMETRY
+	QCA_NL80211_VENDOR_SUBCMD_TELEMETRY_STATS_INDEX,
+#endif
+	QCA_NL80211_VENDOR_SUBCMD_SPECTRAL_SCAN_COMPLETE_INDEX,
+#ifdef WLAN_DP_FEATURE_STC
+	QCA_NL80211_VENDOR_SUBCMD_FLOW_STATS_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_CLASSIFIED_FLOW_REPORT_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_CLASSIFIED_FLOW_STATUS_INDEX,
+#endif
+	QCA_NL80211_VENDOR_SUBCMD_ASYNC_GET_STATION_INDEX,
+	QCA_NL80211_VENDOR_SUBCMD_IDLE_SHUTDOWN_INDEX,
+#ifdef FEATURE_WLAN_TX_POWERBOOST
+	QCA_NL80211_VENDOR_SUBCMD_TX_POWER_BOOST_INDEX,
+#endif
 };
 
 #if !defined(SUPPORT_WDEV_CFG80211_VENDOR_EVENT_ALLOC) && \
@@ -556,6 +589,44 @@ wlan_cfg80211_nla_put_u64(struct sk_buff *skb, int attrtype, u64 value)
 }
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0)
+static inline void
+osif_wiphy_lock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
+{
+	if (wiphy)
+		wiphy_lock(wiphy);
+	else if (dev_ptr)
+		mutex_lock(&dev_ptr->mtx);
+}
+
+static inline void
+osif_wiphy_unlock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
+{
+	if (wiphy)
+		wiphy_unlock(wiphy);
+	else if (dev_ptr)
+		mutex_unlock(&dev_ptr->mtx);
+}
+#else
+static inline void
+osif_wiphy_lock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
+{
+	if (wiphy)
+		wiphy_lock(wiphy);
+	else if (dev_ptr)
+		mutex_lock(&dev_ptr->wiphy->mtx);
+}
+
+static inline void
+osif_wiphy_unlock(struct wiphy *wiphy, struct wireless_dev *dev_ptr)
+{
+	if (wiphy)
+		wiphy_unlock(wiphy);
+	else if (dev_ptr)
+		mutex_unlock(&dev_ptr->wiphy->mtx);
+}
+#endif
+
 /**
  * wlan_cfg80211_nla_put_u64_64bit() - Add u64 attribute to an skb and align it
  * @skb: SKB to add attribute(s) to
@@ -628,6 +699,29 @@ static inline void wlan_cfg80211_unregister_netdevice(struct net_device *dev)
 }
 #endif
 
+#ifdef CFG80211_RU_PUNC_CHANDEF
+static inline
+void wlan_cfg80211_ch_switch_notify(struct net_device *dev,
+				    struct cfg80211_chan_def *chandef,
+				    unsigned int link_id,
+				    uint16_t puncture_bitmap)
+{
+	chandef->punctured = puncture_bitmap;
+	cfg80211_ch_switch_notify(dev, chandef, link_id);
+}
+
+static inline
+void wlan_cfg80211_ch_switch_started_notify(struct net_device *dev,
+					    struct cfg80211_chan_def *chandef,
+					    unsigned int link_id,
+					    uint8_t count, bool quiet,
+					    uint16_t puncture_bitmap)
+{
+	chandef->punctured = puncture_bitmap;
+	cfg80211_ch_switch_started_notify(dev, chandef, link_id,
+					  count, quiet);
+}
+#else
 #ifdef CFG80211_SINGLE_NETDEV_MULTI_LINK_SUPPORT
 #if defined(CFG80211_RU_PUNCT_NOTIFY) || \
 	defined(CFG80211_PUNCTURING_SINGLE_NETDEV_API)
@@ -640,6 +734,32 @@ void wlan_cfg80211_ch_switch_notify(struct net_device *dev,
 	cfg80211_ch_switch_notify(dev, chandef, link_id,
 				  puncture_bitmap);
 }
+
+/**
+ * wlan_cfg80211_ch_switch_started_notify() - Channel switch started
+ * notification
+ * @dev: pointer to net device
+ * @chandef: pointer to structure cfg80211_chan_def
+ * @link_id: link id
+ * @count: number of TBTT's until the channel switch event.
+ * @quiet: flag attribute specifying that transmission
+ * must be blocked on the current channel (before the channel switch
+ * operation). Also included in the channel switch started event if quiet
+ * was requested by the AP.
+ * @puncture_bitmap: puncture bitmap
+ *
+ * Return: None
+ */
+static inline
+void wlan_cfg80211_ch_switch_started_notify(struct net_device *dev,
+					    struct cfg80211_chan_def *chandef,
+					    unsigned int link_id,
+					    uint8_t count, bool quiet,
+					    uint16_t puncture_bitmap)
+{
+	cfg80211_ch_switch_started_notify(dev, chandef, link_id,
+					  count, quiet, puncture_bitmap);
+}
 #else
 static inline
 void wlan_cfg80211_ch_switch_notify(struct net_device *dev,
@@ -648,6 +768,32 @@ void wlan_cfg80211_ch_switch_notify(struct net_device *dev,
 				    uint16_t puncture_bitmap)
 {
 	cfg80211_ch_switch_notify(dev, chandef, link_id);
+}
+
+/**
+ * wlan_cfg80211_ch_switch_started_notify() - Channel switch started
+ * notification
+ * @dev: pointer to net device
+ * @chandef: pointer to structure cfg80211_chan_def
+ * @link_id: link id
+ * @count: number of TBTT's until the channel switch event.
+ * @quiet: flag attribute specifying that transmission
+ * must be blocked on the current channel (before the channel switch
+ * operation). Also included in the channel switch started event if quiet
+ * was requested by the AP.
+ * @puncture_bitmap: puncture bitmap
+ *
+ * Return: None
+ */
+static inline
+void wlan_cfg80211_ch_switch_started_notify(struct net_device *dev,
+					    struct cfg80211_chan_def *chandef,
+					    unsigned int link_id,
+					    uint8_t count, bool quiet,
+					    uint16_t puncture_bitmap)
+{
+	cfg80211_ch_switch_started_notify(dev, chandef, link_id,
+					  count, quiet);
 }
 #endif
 #else
@@ -659,6 +805,62 @@ void wlan_cfg80211_ch_switch_notify(struct net_device *dev,
 {
 	cfg80211_ch_switch_notify(dev, chandef);
 }
+
+/**
+ * wlan_cfg80211_ch_switch_started_notify() - Channel switch started
+ * notification
+ * @dev: pointer to net device
+ * @chandef: pointer to structure cfg80211_chan_def
+ * @link_id: link id
+ * @count: number of TBTT's until the channel switch event.
+ * @quiet: flag attribute specifying that transmission
+ * must be blocked on the current channel (before the channel switch
+ * operation). Also included in the channel switch started event if quiet
+ * was requested by the AP.
+ * @puncture_bitmap: puncture bitmap
+ *
+ * Return: None
+ */
+static inline
+void wlan_cfg80211_ch_switch_started_notify(struct net_device *dev,
+					    struct cfg80211_chan_def *chandef,
+					    unsigned int link_id,
+					    uint8_t count, bool quiet,
+					    uint16_t puncture_bitmap)
+{
+	cfg80211_ch_switch_started_notify(dev, chandef, count);
+}
+#endif
 #endif
 
+/**
+ * wlan_cfg80211_get_nl80211_chwidth() - API to convert phy_chwidth to
+ * nl80211 chan width.
+ * @phy_chwidth: Driver internal phy chan width.
+ *
+ * Return: enum nl80211_chan_width
+ */
+enum nl80211_chan_width
+wlan_cfg80211_get_nl80211_chwidth(enum phy_ch_width phy_chwidth);
+
+/**
+ * wlan_cfg80211_get_phy_ch_width() - API to convert nl80211 chan width to
+ * phy_chanwidth
+ * @nl_chwidth: NL chan width
+ *
+ * Return: enum phy_ch_width
+ */
+enum phy_ch_width
+wlan_cfg80211_get_phy_ch_width(enum nl80211_chan_width nl_chwidth);
+
+/**
+ * wlan_cfg80211_set_feature() - Set the bitmask for supported features
+ * @feature_flags: pointer to the byte array of features.
+ * @feature: Feature to be turned ON in the byte array.
+ *
+ * Return: None
+ *
+ * This is called to turn ON or SET the feature flag for the requested feature.
+ **/
+void wlan_cfg80211_set_feature(uint8_t *feature_flags, uint8_t feature);
 #endif

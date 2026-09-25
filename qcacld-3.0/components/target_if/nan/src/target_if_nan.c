@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2023,2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -369,6 +369,7 @@ static int target_if_ndp_confirm_handler(ol_scn_t scn, uint8_t *data,
 	struct wmi_unified *wmi_handle;
 	struct scheduler_msg msg = {0};
 	struct nan_datapath_confirm_event *rsp;
+	uint8_t i;
 
 	psoc = target_if_get_psoc_from_scn_hdl(scn);
 	if (!psoc) {
@@ -392,6 +393,10 @@ static int target_if_ndp_confirm_handler(ol_scn_t scn, uint8_t *data,
 		qdf_mem_free(rsp);
 		return -EINVAL;
 	}
+
+	for (i = 0; i < rsp->num_channels; i++)
+		rsp->ch[i].ch_width =
+		  target_if_wmi_chan_width_to_phy_ch_width(rsp->ch[i].ch_width);
 
 	msg.bodyptr = rsp;
 	msg.type = NDP_CONFIRM;
@@ -603,6 +608,39 @@ static int target_if_ndp_end_rsp_handler(ol_scn_t scn, uint8_t *data,
 	return 0;
 }
 
+static QDF_STATUS target_if_nan_ndp_update_config(
+				struct nan_datapath_update_config *config)
+{
+	struct wlan_objmgr_vdev *vdev;
+	struct wmi_unified *wmi_handle;
+	struct wlan_objmgr_psoc *psoc;
+
+	if (!config) {
+		target_if_err("Invalid config.");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	vdev = config->vdev;
+	if (!vdev) {
+		target_if_err("vdev object is NULL!");
+		return QDF_STATUS_E_INVAL;
+	}
+
+	psoc = wlan_vdev_get_psoc(vdev);
+	if (!psoc) {
+		target_if_err("psoc is null.");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	wmi_handle = get_wmi_unified_hdl_from_psoc(psoc);
+	if (!wmi_handle) {
+		target_if_err("wmi_handle is null.");
+		return QDF_STATUS_E_NULL_VALUE;
+	}
+
+	return wmi_unified_ndp_update_config_cmd_send(wmi_handle, config);
+}
+
 static int target_if_ndp_end_ind_handler(ol_scn_t scn, uint8_t *data,
 					 uint32_t data_len)
 {
@@ -662,6 +700,7 @@ static int target_if_ndp_sch_update_handler(ol_scn_t scn, uint8_t *data,
 	struct wmi_unified *wmi_handle;
 	struct scheduler_msg msg = {0};
 	struct nan_datapath_sch_update_event *rsp;
+	uint8_t i;
 
 	psoc = target_if_get_psoc_from_scn_hdl(scn);
 	if (!psoc) {
@@ -685,6 +724,10 @@ static int target_if_ndp_sch_update_handler(ol_scn_t scn, uint8_t *data,
 		qdf_mem_free(rsp);
 		return -EINVAL;
 	}
+
+	for (i = 0; i < rsp->num_channels; i++)
+		rsp->ch[i].ch_width =
+		  target_if_wmi_chan_width_to_phy_ch_width(rsp->ch[i].ch_width);
 
 	msg.bodyptr = rsp;
 	msg.type = NDP_SCHEDULE_UPDATE;
@@ -801,6 +844,9 @@ static QDF_STATUS target_if_nan_datapath_req(void *req, uint32_t req_type)
 		break;
 	case NDP_END_ALL:
 		target_if_nan_end_all_ndps_req(req);
+		break;
+	case NDP_UPDATE_CONFIG:
+		target_if_nan_ndp_update_config(req);
 		break;
 	default:
 		target_if_err("invalid req type");
@@ -928,7 +974,7 @@ int target_if_nan_rsp_handler(ol_scn_t scn, uint8_t *data, uint32_t len)
 	}
 
 	status = wmi_extract_nan_event_rsp(wmi_handle, data, &temp_evt_params,
-					   &buf_ptr);
+					   &buf_ptr, wlan_get_nan_config(psoc));
 	if (QDF_IS_STATUS_ERROR(status)) {
 		target_if_err("parsing of event failed, %d", status);
 		return -EINVAL;

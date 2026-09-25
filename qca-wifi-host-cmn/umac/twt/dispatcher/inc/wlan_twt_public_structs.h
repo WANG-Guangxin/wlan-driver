@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -281,11 +281,11 @@ enum HOST_ADD_TWT_STATUS {
 
 /**
  * struct twt_enable_complete_event_param:
- * @pdev_id: pdev_id for identifying the MAC.
+ * @mac_id: mac_id for identifying the MAC.
  * @status: From enum TWT_ENABLE_STATUS
  */
 struct twt_enable_complete_event_param {
-	uint32_t pdev_id;
+	uint32_t mac_id;
 	uint32_t status;
 };
 
@@ -307,11 +307,11 @@ enum HOST_TWT_DISABLE_STATUS {
 
 /**
  * struct twt_disable_complete_event_param:
- * @pdev_id: pdev_id for identifying the MAC.
+ * @mac_id: mac_id for identifying the MAC.
  * @status: From enum HOST_TWT_DISABLE_STATUS
  */
 struct twt_disable_complete_event_param {
-	uint32_t pdev_id;
+	uint32_t mac_id;
 	uint32_t status;
 };
 
@@ -381,6 +381,8 @@ struct twt_ack_complete_event_param {
  * @sp_offset_us: Time until initial TWT SP occurs
  * @sp_tsf_us_lo: TWT wake time TSF in usecs lower bits - 31:0
  * @sp_tsf_us_hi: TWT wake time TSF in usecs higher bits - 63:32
+ * @curr_tsf_us_lo: Current TSF in usecs lower bits - 31:0
+ * @curr_tsf_us_hi: Current TSF in usecs higher bits - 63:32
  */
 struct twt_session_stats_info {
 	uint32_t vdev_id;
@@ -400,6 +402,8 @@ struct twt_session_stats_info {
 	uint32_t sp_offset_us;
 	uint32_t sp_tsf_us_lo;
 	uint32_t sp_tsf_us_hi;
+	uint32_t curr_tsf_us_lo;
+	uint32_t curr_tsf_us_hi;
 };
 
 /**
@@ -461,6 +465,7 @@ enum HOST_TWT_COMMAND {
  * @flag_reserved: unused bits
  * @b_twt_recommendation: defines types of frames tx during bTWT SP
  * @b_twt_persistence: Countdown VAL frames to param update/teardown
+ * @responder_pm_mode: Responder power management mode
  * @wake_time_tsf: Absolute TSF value to start first TWT service period
  * @announce_timeout_us: Timeout value before sending QoS NULL frame.
  * @link_id_bitmap: MLD links to which R-TWT element applies
@@ -488,7 +493,8 @@ struct twt_add_dialog_param {
 		flag_b_twt_id0:1,
 		flag_reserved:11,
 		b_twt_persistence:8,
-		b_twt_recommendation:3;
+		b_twt_recommendation:3,
+		responder_pm_mode:1;
 	uint64_t wake_time_tsf;
 	uint32_t announce_timeout_us;
 	uint32_t link_id_bitmap;
@@ -573,6 +579,9 @@ enum HOST_TWT_ADD_STATUS {
  *                          0 means responder pm mode field is not valid
  * @pm_responder_bit: 1 means that responder set responder pm mode to 1
  *                    0 means that responder set responder pm mode to 0
+ * @implicit: 1 means implicit twt, 0 means explicit twt
+ * @renegotiate: 1 means renegotiate twt supported,
+ *               0 means renegotiate twt not supported
  * @wake_dur_us: wake duration in us
  * @wake_intvl_us: wake time interval in us
  * @sp_offset_us: Time until initial TWT SP occurs
@@ -588,7 +597,9 @@ struct twt_add_dialog_additional_params {
 		 b_twt_id0:1,
 		 info_frame_disabled:1,
 		 pm_responder_bit_valid:1,
-		 pm_responder_bit:1;
+		 pm_responder_bit:1,
+		 implicit:1,
+		 renegotiate:1;
 	uint32_t wake_dur_us;
 	uint32_t wake_intvl_us;
 	uint32_t sp_offset_us;
@@ -660,6 +671,13 @@ struct twt_del_dialog_param {
  * @HOST_TWT_DEL_STATUS_CHAN_SW_IN_PROGRESS: Channel switch in progress
  * @HOST_TWT_DEL_STATUS_SCAN_IN_PROGRESS: Scan is in progress
  * @HOST_TWT_DEL_STATUS_PS_DISABLE_TEARDOWN: PS disable TWT teardown
+ * @HOST_TWT_DEL_STATUS_MULTIPLE_LINKS_ACTIVE_TERMINATE: TWT Teardown as
+ * multiple links are active
+ * @HOST_DEL_TWT_STATUS_MLO_LINK_INACTIVE: TWT Teardown as link switched to
+ * unsupported link
+ * @HOST_DEL_TWT_STATUS_2G_TWT_NOT_ENABLED: TWT Teardown when current
+ * channel is on 2.4 GHz band
+ * @HOST_DEL_TWT_STATUS_SCAN_STARTED: TWT teardown when the scan has started
  */
 enum HOST_TWT_DEL_STATUS {
 	HOST_TWT_DEL_STATUS_OK,
@@ -675,6 +693,10 @@ enum HOST_TWT_DEL_STATUS {
 	HOST_TWT_DEL_STATUS_CHAN_SW_IN_PROGRESS,
 	HOST_TWT_DEL_STATUS_SCAN_IN_PROGRESS,
 	HOST_TWT_DEL_STATUS_PS_DISABLE_TEARDOWN,
+	HOST_TWT_DEL_STATUS_MULTIPLE_LINKS_ACTIVE_TERMINATE,
+	HOST_DEL_TWT_STATUS_MLO_LINK_INACTIVE,
+	HOST_DEL_TWT_STATUS_2G_TWT_NOT_ENABLED,
+	HOST_DEL_TWT_STATUS_SCAN_STARTED,
 };
 
 /**

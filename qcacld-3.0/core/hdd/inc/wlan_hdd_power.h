@@ -190,7 +190,7 @@ QDF_STATUS hdd_wlan_re_init(void);
 /**
  * hdd_handle_cached_commands() - Handle north bound commands during SSR
  *
- * This api will be invoked afte SSR re-initialization to execute the north
+ * This api will be invoked after SSR re-initialization to execute the north
  * bound commands received during SSR.
  *
  * Return: None
@@ -402,11 +402,11 @@ void hdd_send_ps_config_to_fw(struct hdd_adapter *adapter)
  */
 void hdd_ipv6_notifier_work_queue(struct work_struct *work);
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0))
 /**
  * wlan_hdd_cfg80211_get_txpower() - cfg80211 get power handler function
  * @wiphy: Pointer to wiphy structure.
  * @wdev: Pointer to wireless_dev structure.
+ * @radio_idx: Radio index
  * @link_id: Link index
  * @dbm: dbm
  *
@@ -416,23 +416,18 @@ void hdd_ipv6_notifier_work_queue(struct work_struct *work);
  *
  * Return: 0 for success, error number on failure.
  */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0))
+int wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
+				  struct wireless_dev *wdev,
+				  int radio_idx,
+				  unsigned int link_id,
+				  int *dbm);
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0))
 int wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 				  struct wireless_dev *wdev,
 				  unsigned int link_id,
 				  int *dbm);
 #else
-/**
- * wlan_hdd_cfg80211_get_txpower() - cfg80211 get power handler function
- * @wiphy: Pointer to wiphy structure.
- * @wdev: Pointer to wireless_dev structure.
- * @dbm: dbm
- *
- * This is the cfg80211 get txpower handler function which invokes
- * the internal function @__wlan_hdd_cfg80211_get_txpower with
- * SSR protection.
- *
- * Return: 0 for success, error number on failure.
- */
 int wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
 				  struct wireless_dev *wdev,
 				  int *dbm);
@@ -442,15 +437,24 @@ int wlan_hdd_cfg80211_get_txpower(struct wiphy *wiphy,
  * wlan_hdd_cfg80211_set_txpower() - set TX power
  * @wiphy: Pointer to wiphy
  * @wdev: Pointer to network device
+ * @radio_idx: Radio index
  * @type: TX power setting type
  * @dbm: TX power in dbm
  *
  * Return: 0 for success, non-zero for failure
  */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0))
+int wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
+				  struct wireless_dev *wdev,
+				  int radio_idx,
+				  enum nl80211_tx_power_setting type,
+				  int dbm);
+#else
 int wlan_hdd_cfg80211_set_txpower(struct wiphy *wiphy,
 				  struct wireless_dev *wdev,
 				  enum nl80211_tx_power_setting type,
 				  int dbm);
+#endif
 
 /**
  * wlan_hdd_cfg80211_set_power_mgmt() - set cfg80211 power management config
@@ -507,7 +511,8 @@ int wlan_hdd_pm_qos_notify(struct notifier_block *nb, unsigned long curr_val,
  *	   or an false otherwise
  */
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0) && \
-	defined(__ANDROID_COMMON_KERNEL__))
+	defined(__ANDROID_COMMON_KERNEL__) && \
+	!defined(CONFIG_X86))
 bool wlan_hdd_is_cpu_pm_qos_in_progress(struct hdd_context *hdd_ctx);
 #else
 static inline bool
@@ -549,13 +554,14 @@ int hdd_set_power_config(struct hdd_context *hddctx,
  * @hddctx: HDD context
  * @adapter: HDD adapter
  * @ps_ito: power save inactivitiy duration in ms
+ * @ps_opm_level: power save opm level
  * @spec_wake: power save speculative wake duration in ms
  *
  * Return: 0 on success; Errno on failure
  */
 int hdd_set_power_config_params(struct hdd_context *hddctx,
-				struct hdd_adapter *adapter,
-				uint16_t ps_ito, uint16_t spec_wake);
+				struct hdd_adapter *adapter, uint16_t ps_ito,
+				uint8_t ps_opm_level, uint16_t spec_wake);
 #ifdef FEATURE_WLAN_DIAG_SUPPORT
 /**
  * hdd_wlan_suspend_resume_event()- send suspend/resume state
@@ -581,6 +587,17 @@ void hdd_wlan_suspend_resume_event(uint8_t state) {}
  * Return: 0 on success, non-zero on any error
  */
 int wlan_hdd_set_powersave(struct wlan_hdd_link_info *link_info,
+			   bool allow_power_save, uint32_t timeout);
+
+/**
+ * wlan_hdd_lpc_set_bmps() - Set BMPS power save mode for LPC
+ * @adapter: HDD adapter
+ * @allow_power_save: is wlan allowed to go into power save mode
+ * @timeout: timeout period in ms
+ *
+ * Return: None
+ */
+void wlan_hdd_lpc_set_bmps(struct hdd_adapter *adapter,
 			   bool allow_power_save, uint32_t timeout);
 
 /**

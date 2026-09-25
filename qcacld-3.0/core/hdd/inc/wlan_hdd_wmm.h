@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2012,2016-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -30,7 +30,7 @@
  * QoS (QoS here refers to a TSPEC). The setup QoS comes in two flavors: an
  * explicit application invoked and an internal HDD invoked.  The implicit QoS
  * is for applications that do NOT call the custom QCT WLAN OIDs for QoS but
- * which DO mark their traffic for priortization. It also has logic to start,
+ * which DO mark their traffic for prioritization. It also has logic to start,
  * update and stop the U-APSD trigger frame generation. It also has logic to
  * read WMM related config parameters from the registry.
  *
@@ -92,18 +92,23 @@ enum hdd_wmm_user_mode {
 /**
  * enum hdd_wmm_linuxac: AC/Queue Index values for Linux Qdisc to
  * operate on different traffic.
+ * @HDD_LINUX_AC_HI_PRIO: unclassified high priority
  * @HDD_LINUX_AC_VO: voice priority
  * @HDD_LINUX_AC_VI: video priority
- * @HDD_LINUX_AC_BE: best effort priority
  * @HDD_LINUX_AC_BK: background priority
- * @HDD_LINUX_AC_HI_PRIO: unclassified high priority
+ * @HDD_LINUX_AC_BE: best effort priority
+ * @HDD_LINUX_AC_MAX: max place holder
+ *
+ * Any modification to the order could potentially have impact
+ * on queue selection logic at hdd_get_tx_queue_for_ac.
  */
 enum hdd_wmm_linuxac {
-	HDD_LINUX_AC_VO = 0,
-	HDD_LINUX_AC_VI = 1,
-	HDD_LINUX_AC_BE = 2,
+	HDD_LINUX_AC_HI_PRIO = 0,
+	HDD_LINUX_AC_VO = 1,
+	HDD_LINUX_AC_VI = 2,
 	HDD_LINUX_AC_BK = 3,
-	HDD_LINUX_AC_HI_PRIO = 4,
+	HDD_LINUX_AC_BE = 4,
+	HDD_LINUX_AC_MAX
 };
 
 /**

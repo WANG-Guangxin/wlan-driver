@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2016-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -176,6 +176,14 @@ const struct nla_policy vendor_attr_policy[
 	[QCA_WLAN_VENDOR_ATTR_NDP_GTK_REQUIRED] = {
 						.type = NLA_FLAG,
 	},
+	[QCA_WLAN_VENDOR_ATTR_NDP_MAX_LATENCY_MS] = {
+						.type = NLA_U32,
+						.len = sizeof(uint32_t)
+	},
+	[QCA_WLAN_VENDOR_ATTR_NDP_TPUT] = {
+						.type = NLA_U32,
+						.len = sizeof(uint32_t)
+	},
 };
 
 /**
@@ -278,7 +286,8 @@ static const uint8_t *os_if_ndi_get_if_name(struct wlan_objmgr_vdev *vdev)
 	return osif_priv->wdev->netdev->name;
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) || \
+(defined CFG80211_CHANGE_NETDEV_REGISTRATION_SEMANTICS))
 static int os_if_nan_ndi_open(struct wlan_objmgr_psoc *psoc,
 			      const char *iface_name)
 {
@@ -403,7 +412,8 @@ static int osif_net_dev_from_ifname(struct wlan_objmgr_psoc *psoc,
 	return 0;
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) || \
+(defined CFG80211_CHANGE_NETDEV_REGISTRATION_SEMANTICS))
 static int os_if_nan_process_ndi_create(struct wlan_objmgr_psoc *psoc,
 					struct nlattr **tb,
 					struct wireless_dev *wdev)
@@ -544,7 +554,8 @@ static int __os_if_nan_process_ndi_delete(struct wlan_objmgr_psoc *psoc,
 	return cb_obj.ndi_delete(vdev_id, iface_name, transaction_id);
 }
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0) || \
+(defined CFG80211_CHANGE_NETDEV_REGISTRATION_SEMANTICS))
 static int os_if_nan_process_ndi_delete(struct wlan_objmgr_psoc *psoc,
 					struct nlattr **tb)
 {
@@ -1157,6 +1168,86 @@ static int os_if_nan_process_ndp_end_req(struct wlan_objmgr_psoc *psoc,
 	return errno;
 }
 
+static int __os_if_nan_process_ndp_update_config(struct wlan_objmgr_psoc *psoc,
+						 struct nlattr **tb)
+{
+	int ret = 0;
+	QDF_STATUS status;
+	struct wlan_objmgr_vdev *ndi_vdev;
+	struct nan_datapath_update_config config = {0};
+
+	if (!tb[QCA_WLAN_VENDOR_NDP_SUB_CMD_UPDATE_CONFIG]) {
+		osif_err("ndp update config is unavailable");
+		return -EINVAL;
+	}
+
+	if (!tb[QCA_WLAN_VENDOR_ATTR_NDP_INSTANCE_ID]) {
+		osif_err("Instance ID is unavailable");
+		return -EINVAL;
+	}
+	config.ndp_instance_id =
+		nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_NDP_INSTANCE_ID]);
+
+	if (!tb[QCA_WLAN_VENDOR_ATTR_NDP_MAX_LATENCY_MS] &&
+	    !tb[QCA_WLAN_VENDOR_ATTR_NDP_TPUT]) {
+		osif_err("Max latency and throughput are unavailable");
+		return -EINVAL;
+	}
+	if (tb[QCA_WLAN_VENDOR_ATTR_NDP_MAX_LATENCY_MS])
+		config.latency_ms =
+		nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_NDP_MAX_LATENCY_MS]);
+	if (tb[QCA_WLAN_VENDOR_ATTR_NDP_TPUT])
+		config.tput_mbps =
+			nla_get_u32(tb[QCA_WLAN_VENDOR_ATTR_NDP_TPUT]);
+
+	ndi_vdev = wlan_objmgr_get_vdev_by_opmode_from_psoc(psoc, QDF_NDI_MODE,
+							    WLAN_NAN_ID);
+	if (!ndi_vdev) {
+		osif_err("NAN data interface is not available");
+		return -EINVAL;
+	}
+
+	config.vdev = ndi_vdev;
+
+	status = ucfg_nan_req_processor(ndi_vdev, &config, NDP_UPDATE_CONFIG);
+	ret = qdf_status_to_os_return(status);
+
+	if (ret)
+		wlan_objmgr_vdev_release_ref(ndi_vdev, WLAN_NAN_ID);
+	return ret;
+}
+
+static int os_if_nan_process_ndp_update_config(struct wlan_objmgr_psoc *psoc,
+					       struct nlattr **tb)
+{
+	struct wlan_objmgr_vdev *vdev;
+	struct net_device *net_dev;
+	struct osif_vdev_sync *vdev_sync;
+	int errno;
+
+	vdev = wlan_objmgr_get_vdev_by_opmode_from_psoc(psoc, QDF_NDI_MODE,
+							WLAN_NAN_ID);
+	if (!vdev)
+		return -EINVAL;
+
+	errno = osif_net_dev_from_vdev(vdev, &net_dev);
+
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_NAN_ID);
+
+	if (errno)
+		return errno;
+
+	errno = osif_vdev_sync_op_start(net_dev, &vdev_sync);
+	if (errno)
+		return errno;
+
+	errno = __os_if_nan_process_ndp_update_config(psoc, tb);
+
+	osif_vdev_sync_op_stop(vdev_sync);
+
+	return errno;
+}
+
 int os_if_nan_process_ndp_cmd(struct wlan_objmgr_psoc *psoc,
 			      const void *data, int data_len,
 			      bool is_ndp_allowed,
@@ -1230,6 +1321,8 @@ int os_if_nan_process_ndp_cmd(struct wlan_objmgr_psoc *psoc,
 			return -EOPNOTSUPP;
 		}
 		return os_if_nan_process_ndp_end_req(psoc, tb);
+	case QCA_WLAN_VENDOR_NDP_SUB_CMD_UPDATE_CONFIG:
+		return os_if_nan_process_ndp_update_config(psoc, tb);
 	default:
 		osif_err("Unrecognized NDP vendor cmd %d", ndp_cmd_type);
 		return -EINVAL;
@@ -1704,6 +1797,47 @@ static QDF_STATUS os_if_ndp_confirm_pack_ch_info(struct sk_buff *event,
 	return QDF_STATUS_SUCCESS;
 }
 
+#ifdef NDP_TX_BW_FLOW_CTRL
+static void os_if_ndp_update_peer_bw(struct wlan_objmgr_vdev *vdev,
+				     struct qdf_mac_addr *peer_mac,
+				     struct nan_datapath_channel_info *ch,
+				     uint32_t num_channels)
+{
+	struct wlan_objmgr_psoc *psoc = wlan_vdev_get_psoc(vdev);
+	uint8_t vdev_id = wlan_vdev_get_id(vdev);
+	struct nan_callbacks cb_obj;
+	enum phy_ch_width max_peer_bw;
+	QDF_STATUS status;
+	uint32_t i;
+
+	if (!num_channels)
+		return;
+
+	status = ucfg_nan_get_callbacks(psoc, &cb_obj);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		osif_err("Failed to get NAN callbacks");
+		return;
+	}
+
+	max_peer_bw = ch[0].ch_width;
+	for (i = 1; i < num_channels; i++) {
+		if (ch[i].ch_width > max_peer_bw)
+			max_peer_bw = ch[i].ch_width;
+	}
+
+	if (cb_obj.ndp_update_peer_bw)
+		cb_obj.ndp_update_peer_bw(vdev_id, peer_mac, max_peer_bw);
+}
+#else
+static inline
+void os_if_ndp_update_peer_bw(struct wlan_objmgr_vdev *vdev,
+			      struct qdf_mac_addr *peer_mac,
+			      struct nan_datapath_channel_info *ch,
+			      uint32_t num_channels)
+{
+}
+#endif
+
 /**
  * os_if_ndp_confirm_ind_handler() - NDP confirm indication handler
  * @vdev: pointer to vdev object
@@ -1742,6 +1876,9 @@ os_if_ndp_confirm_ind_handler(struct wlan_objmgr_vdev *vdev,
 		osif_err("Invalid NDP Initiator response");
 		return;
 	}
+
+	os_if_ndp_update_peer_bw(vdev, &ndp_confirm->peer_ndi_mac_addr,
+				 ndp_confirm->ch, ndp_confirm->num_channels);
 
 	ifname = os_if_ndi_get_if_name(vdev);
 	if (!ifname) {
@@ -1824,7 +1961,7 @@ os_if_ndp_confirm_ind_handler(struct wlan_objmgr_vdev *vdev,
 
 	os_if_cstats_log_ndp_confirm_evt(vdev, ndp_confirm);
 
-	osif_debug("NDP confim sent, ndp instance id: %d, peer addr: "QDF_MAC_ADDR_FMT" rsp_code: %d, reason_code: %d",
+	osif_debug("NDP confirm sent, ndp instance id: %d, peer addr: "QDF_MAC_ADDR_FMT" rsp_code: %d, reason_code: %d",
 		   ndp_confirm->ndp_instance_id,
 		   QDF_MAC_ADDR_REF(ndp_confirm->peer_ndi_mac_addr.bytes),
 		   ndp_confirm->rsp_code, ndp_confirm->reason_code);
@@ -2039,6 +2176,7 @@ static void os_if_new_peer_ind_handler(struct wlan_objmgr_vdev *vdev,
 
 	active_peers++;
 	ucfg_nan_set_active_peers(vdev, active_peers);
+	ucfg_nan_cache_ndp_peer_mac_addr(psoc, &peer_ind->peer_mac_addr);
 	osif_debug("num_peers: %d", active_peers);
 }
 
@@ -2378,10 +2516,23 @@ static void os_if_ndp_sch_update_ind_handler(struct wlan_objmgr_vdev *vdev,
 	struct pdev_osif_priv *os_priv = wlan_pdev_get_ospriv(pdev);
 	enum qca_nl80211_vendor_subcmds_index index =
 		QCA_NL80211_VENDOR_SUBCMD_NDP_INDEX;
+	struct qdf_mac_addr peer_ndi_addr;
 
 	if (!sch_update) {
 		osif_err("Invalid sch update params");
 		return;
+	}
+
+	for (idx = 0; idx < sch_update->num_ndp_instances; idx++) {
+		status = ucfg_nan_get_peer_ndi_addr_by_id(vdev,
+						 sch_update->ndp_instances[idx],
+						 &peer_ndi_addr);
+		if (status != QDF_STATUS_SUCCESS)
+			continue;
+
+		os_if_ndp_update_peer_bw(vdev, &peer_ndi_addr,
+					 sch_update->ch,
+					 sch_update->num_channels);
 	}
 
 	ifname = os_if_ndi_get_if_name(vdev);
@@ -2802,17 +2953,32 @@ static int os_if_nan_generic_req(struct wlan_objmgr_psoc *psoc,
 }
 
 static int os_if_process_nan_disable_req(struct wlan_objmgr_psoc *psoc,
-					 struct nlattr **tb)
+					 struct nlattr **tb, uint8_t vdev_id)
 {
 	uint8_t *data;
 	uint32_t data_len;
-	QDF_STATUS status;
+	QDF_STATUS status = QDF_STATUS_SUCCESS;
+	struct wlan_objmgr_vdev *vdev;
 
 	data = nla_data(tb[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA]);
 	data_len = nla_len(tb[QCA_WLAN_VENDOR_ATTR_NAN_CMD_DATA]);
+	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id, WLAN_NAN_ID);
+	if (!vdev) {
+		osif_err("vdev is null for id %d", vdev_id);
+		status = QDF_STATUS_E_NULL_VALUE;
+		goto end;
+	}
 
-	status = ucfg_disable_nan_discovery(psoc, data, data_len);
+	if (QDF_NAN_DISC_MODE == wlan_vdev_mlme_get_opmode(vdev))
+		status = ucfg_nan_cache_disable_req_info(psoc,
+							 NAN_DISABLE_REQ_NB);
+	wlan_objmgr_vdev_release_ref(vdev, WLAN_NAN_ID);
 
+	if (QDF_IS_STATUS_SUCCESS(status))
+		status = ucfg_disable_nan_discovery(psoc, data, data_len,
+						    vdev_id);
+
+end:
 	return qdf_status_to_os_return(status);
 }
 
@@ -2838,7 +3004,9 @@ static int os_if_process_nan_enable_req(struct wlan_objmgr_pdev *pdev,
 			nla_get_u32(tb[
 				QCA_WLAN_VENDOR_ATTR_NAN_DISC_5GHZ_BAND_FREQ]);
 
-	if (!ucfg_is_nan_enable_allowed(psoc, chan_freq_2g, vdev_id)) {
+	if (!wlan_reg_is_24ghz_ch_freq(chan_freq_2g) ||
+	    !wlan_reg_is_freq_enabled(pdev, chan_freq_2g, REG_CURRENT_PWR_MODE) ||
+	    !ucfg_is_nan_enable_allowed(psoc, chan_freq_2g, vdev_id)) {
 		osif_err("NAN Enable not allowed at this moment for channel %d",
 			 chan_freq_2g);
 		return -EINVAL;
@@ -2922,7 +3090,7 @@ int os_if_process_nan_req(struct wlan_objmgr_pdev *pdev, uint8_t vdev_id,
 		return os_if_process_nan_enable_req(pdev, tb, vdev_id);
 	case QCA_WLAN_NAN_EXT_SUBCMD_TYPE_DISABLE_REQ:
 		os_if_cstats_log_disable_nan_disc_evt(pdev, vdev_id);
-		return os_if_process_nan_disable_req(psoc, tb);
+		return os_if_process_nan_disable_req(psoc, tb, vdev_id);
 	default:
 		osif_err("Unrecognized NAN subcmd type(%d)", nan_subcmd);
 		return -EINVAL;
@@ -3211,4 +3379,3 @@ os_if_cstats_log_disable_nan_disc_evt(struct wlan_objmgr_pdev *pdev,
 			       &stat);
 }
 #endif /* WLAN_CHIPSET_STATS */
-

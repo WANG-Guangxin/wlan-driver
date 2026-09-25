@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -97,7 +97,7 @@ struct hdd_adapter_create_param {
 #ifndef WLAN_HDD_MULTI_VDEV_SINGLE_NDEV
 /**
  * struct hdd_mlo_adapter_info - Mlo specific adapter information
- * @is_ml_adapter: Whether this is the main ml adaper attached to netdev
+ * @is_ml_adapter: Whether this is the main ml adapter attached to netdev
  * @is_link_adapter: Whether this a link adapter without netdev
  * @associate_with_ml_adapter: adapter which shares the vdev object with the ml
  * adapter
@@ -160,18 +160,6 @@ QDF_STATUS hdd_wlan_unregister_mlo_interfaces(struct hdd_adapter *adapter,
 void hdd_wlan_register_mlo_interfaces(struct hdd_context *hdd_ctx);
 
 /**
- * hdd_get_assoc_link_adapter() - get assoc link adapter
- * @ml_adapter: ML adapter
- *
- * This function returns assoc link adapter.
- * For single link ML adapter, function returns
- * same adapter pointer.
- *
- * Return: adapter or NULL
- */
-struct hdd_adapter *hdd_get_assoc_link_adapter(struct hdd_adapter *ml_adapter);
-
-/**
  * hdd_adapter_set_sl_ml_adapter() - Set adapter as sl ml adapter
  * @adapter: HDD adapter
  *
@@ -218,12 +206,6 @@ void hdd_register_wdev(struct hdd_adapter *sta_adapter,
 {
 }
 
-static inline
-struct hdd_adapter *hdd_get_assoc_link_adapter(struct hdd_adapter *ml_adapter)
-{
-	return NULL;
-}
-
 static inline void
 hdd_adapter_set_sl_ml_adapter(struct hdd_adapter *adapter)
 {
@@ -242,6 +224,14 @@ struct hdd_adapter *hdd_get_ml_adapter(struct hdd_context *hdd_ctx)
 #endif
 
 #if defined(WLAN_FEATURE_11BE_MLO) && defined(CFG80211_11BE_BASIC)
+/**
+ * hdd_mlo_channel_switch_notify - channel switch notify to HDD
+ * @link_mac_address: standby link mac address
+ *
+ * Return: QDF_STATUS
+ */
+QDF_STATUS hdd_mlo_channel_switch_notify(struct qdf_mac_addr *link_mac_address);
+
 /**
  * hdd_adapter_set_ml_adapter() - set adapter as ml adapter
  * @adapter: HDD adapter
@@ -388,7 +378,7 @@ QDF_STATUS hdd_mlo_mgr_register_osif_ops(void);
  * hdd_mlo_mgr_unregister_osif_ops() - Deregister OSIF ops with
  * global MLO manager
  *
- * Deregister the calbacks registered with global MLO manager for OSIF
+ * Deregister the callbacks registered with global MLO manager for OSIF
  *
  * Return: QDF_STATUS
  */

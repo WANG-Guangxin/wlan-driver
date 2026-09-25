@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2017-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -244,11 +244,15 @@ enum wlan_crypto_vdev_11az_security_capab {
  * @WLAN_CRYPTO_URNM_MFPR: URNM MFP required in RSNXE
  * @WLAN_CRYPTO_MFPC: MFP capable bit from RSN IE
  * @WLAN_CRYPTO_MFPR: MFP required from RSNIE
+ * @WLAN_CRYPTO_URNM_MFPR_X20: URNM_MFPR_X20 in RSNXE
+ * @WLAN_CRYPTO_I2R_LMR_FB: I2R LMR feedback policy in extended capabilities
  */
 enum wlan_crypto_vdev_pasn_caps {
 	WLAN_CRYPTO_URNM_MFPR = BIT(0),
 	WLAN_CRYPTO_MFPC = BIT(1),
 	WLAN_CRYPTO_MFPR = BIT(2),
+	WLAN_CRYPTO_URNM_MFPR_X20 = BIT(3),
+	WLAN_CRYPTO_I2R_LMR_FB = BIT(4),
 };
 
 typedef enum wlan_crypto_key_mgmt {
@@ -281,6 +285,7 @@ typedef enum wlan_crypto_key_mgmt {
 	WLAN_CRYPTO_KEY_MGMT_PSK_SHA384            = 26,
 	WLAN_CRYPTO_KEY_MGMT_SAE_EXT_KEY           = 27,
 	WLAN_CRYPTO_KEY_MGMT_FT_SAE_EXT_KEY        = 28,
+	WLAN_CRYPTO_KEY_MGMT_PASN                  = 29,
 	/** Keep WLAN_CRYPTO_KEY_MGMT_MAX at the end. */
 	WLAN_CRYPTO_KEY_MGMT_MAX,
 } wlan_crypto_key_mgmt;
@@ -436,6 +441,7 @@ struct key_mgmt_list {
  * @rsn_caps:           rsn_capability
  * @rsnx_caps:          rsnx capability
  * @akm_list:           order of AKM present in RSN IE of Beacon/Probe response
+ * @random_pmkid_cnt:   count of random PMKIDs to be added in assoc request
  *
  * This structure holds crypto params for peer or vdev
  */
@@ -452,6 +458,7 @@ struct wlan_crypto_params {
 #ifdef WLAN_ADAPTIVE_11R
 	struct key_mgmt_list akm_list[WLAN_CRYPTO_KEY_MGMT_MAX];
 #endif
+	uint8_t random_pmkid_cnt;
 };
 
 /**
@@ -482,6 +489,7 @@ typedef enum wlan_crypto_param_type {
 	WLAN_CRYPTO_PARAM_RSNX_CAP,
 	WLAN_CRYPTO_PARAM_KEY_MGMT,
 	WLAN_CRYPTO_PARAM_PMKSA,
+	WLAN_CRYPTO_PARAM_RANDOM_PMKID,
 } wlan_crypto_param_type;
 
 /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -42,6 +42,8 @@
 #include "cdp_txrx_host_stats.h"
 #include "wlan_cm_roam_api.h"
 #include "hif_main.h"
+#include "wlan_dp_stc.h"
+#include "wlan_dp_haps.h"
 
 #ifdef FEATURE_BUS_BANDWIDTH_MGR
 /*
@@ -239,6 +241,8 @@ bbm_get_bus_bw_level_vote(struct wlan_dp_intf *dp_intf,
 			return BUS_BW_LEVEL_5;
 		else
 			return (*lkp_table)[QCA_WLAN_802_11_MODE_11AX][tput_level];
+	case QDF_PASSTHRU_MODE:
+		return (*lkp_table)[QCA_WLAN_802_11_MODE_11BE][tput_level];
 	default:
 		break;
 	}
@@ -264,15 +268,13 @@ bbm_apply_tput_policy(struct wlan_dp_psoc_context *dp_ctx,
 	enum bus_bw_level next_vote = BUS_BW_LEVEL_NONE;
 	enum bus_bw_level tmp_vote;
 	struct bbm_context *bbm_ctx = dp_ctx->bbm_ctx;
-	hdd_cb_handle ctx = dp_ctx->dp_ops.callback_ctx;
 
 	if (tput_level == TPUT_LEVEL_NONE) {
 		/*
 		 * This is to handle the scenario where bus bw periodic work
 		 * is force cancelled
 		 */
-		if (dp_ctx->dp_ops.dp_any_adapter_connected(ctx))
-			bbm_ctx->per_policy_vote[BBM_TPUT_POLICY] = next_vote;
+		bbm_ctx->per_policy_vote[BBM_TPUT_POLICY] = next_vote;
 		return;
 	}
 
@@ -534,6 +536,9 @@ void dp_bbm_context_deinit(struct wlan_objmgr_psoc *psoc)
 #endif /* FEATURE_BUS_BANDWIDTH_MGR */
 #ifdef WLAN_FEATURE_DP_BUS_BANDWIDTH
 #ifdef FEATURE_RUNTIME_PM
+
+#define DP_RTPM_POLICY_HIGH_TPUT_THRESH TPUT_LEVEL_MEDIUM
+
 void dp_rtpm_tput_policy_init(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_dp_psoc_context *dp_ctx;
@@ -547,14 +552,11 @@ void dp_rtpm_tput_policy_init(struct wlan_objmgr_psoc *psoc)
 
 	ctx = &dp_ctx->rtpm_tput_policy_ctx;
 	qdf_runtime_lock_init(&ctx->rtpm_lock);
-	ctx->curr_state = DP_RTPM_TPUT_POLICY_STATE_REQUIRED;
-	qdf_atomic_init(&ctx->high_tput_vote);
 }
 
 void dp_rtpm_tput_policy_deinit(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_dp_psoc_context *dp_ctx;
-	struct dp_rtpm_tput_policy_context *ctx;
 
 	dp_ctx = dp_psoc_get_priv(psoc);
 	if (!dp_ctx) {
@@ -562,46 +564,36 @@ void dp_rtpm_tput_policy_deinit(struct wlan_objmgr_psoc *psoc)
 		return;
 	}
 
-	ctx = &dp_ctx->rtpm_tput_policy_ctx;
-	ctx->curr_state = DP_RTPM_TPUT_POLICY_STATE_INVALID;
-	qdf_runtime_lock_deinit(&ctx->rtpm_lock);
+	qdf_runtime_lock_deinit(&dp_ctx->rtpm_tput_policy_ctx.rtpm_lock);
 }
 
-/**
- * dp_rtpm_tput_policy_prevent() - prevent a runtime bus suspend
- * @dp_ctx: DP handle
- *
- * return: None
- */
-static void dp_rtpm_tput_policy_prevent(struct wlan_dp_psoc_context *dp_ctx)
+#ifdef WLAN_DP_FEATURE_STC
+static inline
+void dp_rtpm_tput_spm_policy_update(struct dp_rtpm_tput_policy_context *ctx,
+				    enum tput_level tput_level)
 {
-	struct dp_rtpm_tput_policy_context *ctx;
-
-	ctx = &dp_ctx->rtpm_tput_policy_ctx;
-	qdf_runtime_pm_prevent_suspend(&ctx->rtpm_lock);
+	if ((tput_level >= WLAN_DP_POLICY_SPM_TPUT_THRESH) &&
+	    !qdf_atomic_test_bit(WLAN_DP_POLICY_SPM_DISABLE_BIT,
+				&ctx->high_tput_vote))
+		qdf_atomic_set_bit(WLAN_DP_POLICY_SPM_DISABLE_BIT,
+				   &ctx->high_tput_vote);
+	else if ((tput_level < WLAN_DP_POLICY_SPM_TPUT_THRESH) &&
+		 qdf_atomic_test_bit(WLAN_DP_POLICY_SPM_DISABLE_BIT,
+				     &ctx->high_tput_vote))
+		qdf_atomic_clear_bit(WLAN_DP_POLICY_SPM_DISABLE_BIT,
+				     &ctx->high_tput_vote);
 }
-
-/**
- * dp_rtpm_tput_policy_allow() - allow a runtime bus suspend
- * @dp_ctx: DP handle
- *
- * return: None
- */
-static void dp_rtpm_tput_policy_allow(struct wlan_dp_psoc_context *dp_ctx)
+#else
+static inline
+void dp_rtpm_tput_spm_policy_update(struct dp_rtpm_tput_policy_context *ctx,
+				    enum tput_level tput_level)
 {
-	struct dp_rtpm_tput_policy_context *ctx;
-
-	ctx = &dp_ctx->rtpm_tput_policy_ctx;
-	qdf_runtime_pm_allow_suspend(&ctx->rtpm_lock);
 }
-
-#define DP_RTPM_POLICY_HIGH_TPUT_THRESH TPUT_LEVEL_MEDIUM
+#endif
 
 void dp_rtpm_tput_policy_apply(struct wlan_dp_psoc_context *dp_ctx,
 			       enum tput_level tput_level)
 {
-	int vote;
-	enum dp_rtpm_tput_policy_state temp_state;
 	struct dp_rtpm_tput_policy_context *ctx;
 	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
 
@@ -610,39 +602,25 @@ void dp_rtpm_tput_policy_apply(struct wlan_dp_psoc_context *dp_ctx,
 
 	ctx = &dp_ctx->rtpm_tput_policy_ctx;
 
-	if (tput_level >= DP_RTPM_POLICY_HIGH_TPUT_THRESH)
-		temp_state = DP_RTPM_TPUT_POLICY_STATE_NOT_REQUIRED;
-	else
-		temp_state = DP_RTPM_TPUT_POLICY_STATE_REQUIRED;
-
-	if (ctx->curr_state == temp_state)
-		return;
-
-	if (temp_state == DP_RTPM_TPUT_POLICY_STATE_REQUIRED) {
-		cdp_set_rtpm_tput_policy_requirement(soc, false);
-		qdf_atomic_dec(&ctx->high_tput_vote);
-		dp_rtpm_tput_policy_allow(dp_ctx);
-	} else {
+	if (tput_level >= DP_RTPM_POLICY_HIGH_TPUT_THRESH &&
+	    !qdf_atomic_test_and_set_bit(0, &ctx->high_tput_vote)) {
 		cdp_set_rtpm_tput_policy_requirement(soc, true);
-		qdf_atomic_inc(&ctx->high_tput_vote);
-		dp_rtpm_tput_policy_prevent(dp_ctx);
+		qdf_runtime_pm_prevent_suspend(&ctx->rtpm_lock);
+	} else if (tput_level < DP_RTPM_POLICY_HIGH_TPUT_THRESH &&
+		   qdf_atomic_test_and_clear_bit(0, &ctx->high_tput_vote)) {
+		cdp_set_rtpm_tput_policy_requirement(soc, false);
+		qdf_runtime_pm_allow_suspend(&ctx->rtpm_lock);
 	}
 
-	ctx->curr_state = temp_state;
-	vote = qdf_atomic_read(&ctx->high_tput_vote);
-
-	if (vote < 0 || vote > 1) {
-		dp_alert_rl("Incorrect vote!");
-		QDF_BUG(0);
-	}
+	dp_rtpm_tput_spm_policy_update(ctx, tput_level);
 }
 
-int dp_rtpm_tput_policy_get_vote(struct wlan_dp_psoc_context *dp_ctx)
+unsigned long dp_rtpm_tput_policy_get_vote(struct wlan_dp_psoc_context *dp_ctx)
 {
 	struct dp_rtpm_tput_policy_context *ctx;
 
 	ctx = &dp_ctx->rtpm_tput_policy_ctx;
-	return qdf_atomic_read(&ctx->high_tput_vote);
+	return ctx->high_tput_vote;
 }
 #endif /* FEATURE_RUNTIME_PM */
 
@@ -693,10 +671,66 @@ static void dp_reset_tcp_adv_win_scale(struct wlan_dp_psoc_context *dp_ctx)
 	wlan_dp_update_tcp_rx_param(dp_ctx, &rx_tp_data);
 }
 
+#ifdef DP_TCP_MEM_PARAM_CTRL
+static inline bool
+wlan_cfg_tcp_mem_param_ctrl_enabled(struct wlan_objmgr_psoc *psoc)
+{
+	return !!cfg_get(psoc, CFG_DP_TCP_MEM_PARAM_CTRL);
+}
+
+static void
+wlan_dp_update_tcp_mem_params(struct wlan_objmgr_psoc *psoc,
+			      struct wlan_dp_psoc_context *dp_ctx,
+			      struct wlan_tcp_mem_param *data)
+{
+	struct wlan_dp_psoc_callbacks *dp_ops;
+	int radio;
+
+	if (!dp_ctx) {
+		dp_err("dp_ctx is null");
+		return;
+	}
+
+	if (!data) {
+		dp_err("Data is null");
+		return;
+	}
+
+	if (!wlan_cfg_tcp_mem_param_ctrl_enabled(psoc)) {
+		dp_debug("TCP param control is disabled");
+		return;
+	}
+
+	dp_ops = &dp_ctx->dp_ops;
+	radio = cds_get_radio_index();
+	if (radio == -EINVAL) {
+		dp_err("Invalid radio index");
+		return;
+	}
+
+	dp_ops->dp_send_svc_nlink_msg(radio, WLAN_SVC_SET_TCP_MEM_PARAM,
+				     (void *)data,
+				     sizeof(struct wlan_tcp_mem_param));
+}
+#else
+static void
+wlan_dp_update_tcp_mem_params(struct wlan_objmgr_psoc *psoc,
+			      struct wlan_dp_psoc_context *dp_ctx,
+			      struct wlan_tcp_mem_param *data)
+{
+}
+
+static inline bool
+wlan_cfg_tcp_mem_param_ctrl_enabled(struct wlan_objmgr_psoc *psoc)
+{
+	return false;
+}
+#endif
 void wlan_dp_update_tcp_rx_param(struct wlan_dp_psoc_context *dp_ctx,
 				 struct wlan_rx_tp_data *data)
 {
 	struct wlan_dp_psoc_callbacks *dp_ops = &dp_ctx->dp_ops;
+	int radio;
 
 	if (!dp_ctx) {
 		dp_err("psoc is null");
@@ -708,15 +742,21 @@ void wlan_dp_update_tcp_rx_param(struct wlan_dp_psoc_context *dp_ctx,
 		return;
 	}
 
-	if (dp_ctx->dp_cfg.enable_tcp_param_update)
+	if (dp_ctx->dp_cfg.enable_tcp_param_update) {
 		dp_ops->osif_dp_send_tcp_param_update_event(dp_ctx->psoc,
 							    (union wlan_tp_data *)data,
 							    1);
-	else
-		dp_ops->dp_send_svc_nlink_msg(cds_get_radio_index(),
-					      WLAN_SVC_WLAN_TP_IND,
-					      (void *)data,
-					      sizeof(struct wlan_rx_tp_data));
+		return;
+	}
+
+	radio = cds_get_radio_index();
+	if (radio == -EINVAL) {
+		dp_err("Invalid radio index");
+		return;
+	}
+
+	dp_ops->dp_send_svc_nlink_msg(radio, WLAN_SVC_WLAN_TP_IND, (void *)data,
+				      sizeof(struct wlan_rx_tp_data));
 }
 
 /**
@@ -729,6 +769,7 @@ void wlan_dp_update_tcp_rx_param(struct wlan_dp_psoc_context *dp_ctx,
 static void wlan_dp_update_tcp_tx_param(struct wlan_dp_psoc_context *dp_ctx,
 					struct wlan_tx_tp_data *data)
 {
+	int radio;
 	enum wlan_tp_level next_tx_level;
 	struct wlan_tx_tp_data *tx_tp_data;
 	struct wlan_dp_psoc_callbacks *dp_ops = &dp_ctx->dp_ops;
@@ -746,15 +787,21 @@ static void wlan_dp_update_tcp_tx_param(struct wlan_dp_psoc_context *dp_ctx,
 	tx_tp_data = (struct wlan_tx_tp_data *)data;
 	next_tx_level = tx_tp_data->level;
 
-	if (dp_ctx->dp_cfg.enable_tcp_param_update)
+	if (dp_ctx->dp_cfg.enable_tcp_param_update) {
 		dp_ops->osif_dp_send_tcp_param_update_event(dp_ctx->psoc,
 							    (union wlan_tp_data *)data,
 							    0);
-	else
-		dp_ops->dp_send_svc_nlink_msg(cds_get_radio_index(),
-					      WLAN_SVC_WLAN_TP_TX_IND,
-					      &next_tx_level,
-					      sizeof(next_tx_level));
+		return;
+	}
+
+	radio = cds_get_radio_index();
+	if (radio == -EINVAL) {
+		dp_err("Invalid radio index");
+		return;
+	}
+
+	dp_ops->dp_send_svc_nlink_msg(radio, WLAN_SVC_WLAN_TP_TX_IND,
+				      &next_tx_level, sizeof(next_tx_level));
 }
 
 /**
@@ -820,7 +867,7 @@ static void dp_ipa_set_perf_level(struct wlan_dp_psoc_context *dp_ctx,
 				  uint64_t *tx_pkts, uint64_t *rx_pkts,
 				  uint32_t *ipa_tx_pkts, uint32_t *ipa_rx_pkts)
 {
-	if (ucfg_ipa_is_fw_wdi_activated(dp_ctx->pdev)) {
+	if (ucfg_ipa_is_fw_wdi_activated(dp_ctx->psoc)) {
 		ucfg_ipa_uc_stat_query(dp_ctx->pdev, ipa_tx_pkts,
 				       ipa_rx_pkts);
 		*tx_pkts += *ipa_tx_pkts;
@@ -1207,6 +1254,9 @@ static void dp_display_periodic_stats(struct wlan_dp_psoc_context *dp_ctx,
 				(ctx, QDF_STATS_VERBOSITY_LEVEL_LOW);
 			cdp_display_txrx_hw_info(soc);
 			qdf_dp_trace_dump_stats();
+			wlan_dp_stc_dump_periodic_stats(dp_ctx);
+			ucfg_ipa_dump_logging_stats();
+			dp_print_haps_stats(dp_ctx->psoc);
 		}
 		counter = 0;
 		data_in_time_period = false;
@@ -1321,7 +1371,8 @@ bool dp_bus_bandwidth_work_tune_rx(struct wlan_dp_psoc_context *dp_ctx,
 	 * 2)when rx_ol is disabled in cases like concurrency etc
 	 * 3)For UDP cases
 	 */
-	if (cds_sched_handle_throughput_req(rxthread_high_tput_req))
+	if (!dp_ctx->dp_cfg.dp_rx_thread_affinity_mask &&
+	    cds_sched_handle_throughput_req(rxthread_high_tput_req))
 		dp_warn("Rx thread high_tput(%d) affinity request failed",
 			rxthread_high_tput_req);
 
@@ -1478,6 +1529,68 @@ bool dp_sap_p2p_update_mid_high_tput(struct wlan_dp_psoc_context *dp_ctx,
 	return false;
 }
 
+static inline
+void dp_set_rx_thread_affinity(struct wlan_dp_psoc_context *dp_ctx,
+			       enum tput_level tput_level,
+			       enum tput_level prev_tput_level)
+{
+	bool try_cpu_affinity;
+	qdf_cpu_mask new_cpu_mask;
+	unsigned int cpus;
+
+	if (!dp_ctx->dp_cfg.dp_rx_thread_affinity_mask)
+		return;
+
+	try_cpu_affinity = false;
+	qdf_cpumask_clear(&new_cpu_mask);
+	if (tput_level >= TPUT_LEVEL_VERY_HIGH &&
+	    prev_tput_level < TPUT_LEVEL_VERY_HIGH) {
+		qdf_for_each_online_cpu(cpus) {
+			if (BIT(cpus) &
+			    dp_ctx->dp_cfg.dp_rx_thread_affinity_mask)
+				qdf_cpumask_set_cpu(cpus, &new_cpu_mask);
+		}
+		try_cpu_affinity = true;
+	} else if (tput_level < TPUT_LEVEL_VERY_HIGH &&
+		   prev_tput_level >= TPUT_LEVEL_VERY_HIGH) {
+		qdf_cpumask_setall(&new_cpu_mask);
+		try_cpu_affinity = true;
+	}
+
+	if (try_cpu_affinity &&
+	    !qdf_cpumask_equal(&dp_ctx->rx_thread_cpu_mask, &new_cpu_mask)) {
+		qdf_cpumask_copy(&dp_ctx->rx_thread_cpu_mask, &new_cpu_mask);
+		dp_txrx_set_cpu_mask(dp_ctx->cdp_soc, &new_cpu_mask);
+	}
+}
+
+static inline void dp_set_tx_irq_affinity(struct wlan_dp_psoc_context *dp_ctx,
+					  enum tput_level tput_level,
+					  enum tput_level prev_tput_level)
+{
+	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
+	void *hif_ctx = cds_get_context(QDF_MODULE_ID_HIF);
+	struct device *dev = dp_ctx->qdf_dev->dev;
+	uint32_t cpumask = 0;
+
+	if (tput_level >= TPUT_LEVEL_VERY_HIGH &&
+	    prev_tput_level < TPUT_LEVEL_VERY_HIGH) {
+		if (qdf_unlikely(dp_ctx->dp_cfg.dp_irq_affinity_mask))
+			cpumask = dp_ctx->dp_cfg.dp_irq_affinity_mask;
+		else
+			pld_get_cpumask_for_wlan_tx_comp_interrupts(dev,
+								    &cpumask);
+		hif_set_grp_intr_affinity(hif_ctx,
+					  cdp_get_tx_rings_grp_bitmap(soc),
+					  cpumask, true);
+	} else if (tput_level < TPUT_LEVEL_VERY_HIGH &&
+		   prev_tput_level >= TPUT_LEVEL_VERY_HIGH) {
+		hif_set_grp_intr_affinity(hif_ctx,
+					  cdp_get_tx_rings_grp_bitmap(soc),
+					  cpumask, false);
+	}
+}
+
 /**
  * dp_pld_request_bus_bandwidth() - Function to control bus bandwidth
  * @dp_ctx: handle to DP context
@@ -1557,7 +1670,7 @@ static void dp_pld_request_bus_bandwidth(struct wlan_dp_psoc_context *dp_ctx,
 	 * only when TPUT can reach VHT80 KPI and IPA is disabled,
 	 * for other cases, follow general voting logic
 	 */
-	if (!ucfg_ipa_is_fw_wdi_activated(dp_ctx->pdev) &&
+	if (!ucfg_ipa_is_fw_wdi_activated(dp_ctx->psoc) &&
 	    policy_mgr_is_current_hwmode_dbs(dp_ctx->psoc) &&
 	    (total_pkts > dp_ctx->dp_cfg.bus_bw_dbs_threshold) &&
 	    (tput_level < TPUT_LEVEL_SUPER_HIGH)) {
@@ -1582,16 +1695,8 @@ static void dp_pld_request_bus_bandwidth(struct wlan_dp_psoc_context *dp_ctx,
 
 	if (dp_ctx->cur_vote_level != next_vote_level) {
 		/* Set affinity for tx completion grp interrupts */
-		if (tput_level >= TPUT_LEVEL_VERY_HIGH &&
-		    prev_tput_level < TPUT_LEVEL_VERY_HIGH)
-			hif_set_grp_intr_affinity(hif_ctx,
-				cdp_get_tx_rings_grp_bitmap(soc), true);
-		else if (tput_level < TPUT_LEVEL_VERY_HIGH &&
-			 prev_tput_level >= TPUT_LEVEL_VERY_HIGH)
-			hif_set_grp_intr_affinity(hif_ctx,
-				cdp_get_tx_rings_grp_bitmap(soc),
-				false);
-
+		dp_set_tx_irq_affinity(dp_ctx, tput_level, prev_tput_level);
+		dp_set_rx_thread_affinity(dp_ctx, tput_level, prev_tput_level);
 		prev_tput_level = tput_level;
 		dp_ctx->cur_vote_level = next_vote_level;
 		vote_level_change = true;
@@ -1690,7 +1795,7 @@ static void dp_pld_request_bus_bandwidth(struct wlan_dp_psoc_context *dp_ctx,
 	}
 
 	if (vote_level_change || tx_level_change || rx_level_change) {
-		dp_info("tx:%llu[%llu(off)+%llu(no-off)] rx:%llu[%llu(off)+%llu(no-off)] next_level(vote %u rx %u tx %u rtpm %d) pm_qos(rx:%u,%*pb tx:%u,%*pb on_low_tput:%u)",
+		dp_info("tx:%llu[%llu(off)+%llu(no-off)] rx:%llu[%llu(off)+%llu(no-off)] next_level(vote %u rx %u tx %u rtpm %lu) pm_qos(rx:%u,%*pb tx:%u,%*pb on_low_tput:%u)",
 			tx_packets,
 			dp_ctx->prev_tx_offload_pkts,
 			dp_ctx->prev_no_tx_offload_pkts,
@@ -1734,9 +1839,39 @@ static void dp_pld_request_bus_bandwidth(struct wlan_dp_psoc_context *dp_ctx,
 	}
 
 	hif_affinity_mgr_set_affinity(hif_ctx);
+	wlan_dp_lb_compute_stats_average(dp_ctx, tput_level);
+
 }
 
 #ifdef WLAN_FEATURE_DYNAMIC_RX_AGGREGATION
+/**
+ * wlan_dp_dynamic_rx_aggregation_ctrl() - Control Rx aggregation Enable/Disable
+ * @dp_intf: pointer to DP interface context
+ *
+ * Return: None
+ */
+static void
+wlan_dp_dynamic_rx_aggregation_ctrl(struct wlan_dp_intf *dp_intf)
+{
+	int id;
+
+	for (id = 0; id < CTRL_RX_AGGR_ID_MAX; id++) {
+		if (dp_intf->disable_rx_aggr[id]) {
+			if (qdf_atomic_read(&dp_intf->gro_disallowed))
+				return;
+
+			dp_info("disable Rx aggregation");
+			qdf_atomic_set(&dp_intf->gro_disallowed, 1);
+			return;
+		}
+	}
+
+	if (qdf_atomic_read(&dp_intf->gro_disallowed)) {
+		dp_info("enable Rx aggregation");
+		qdf_atomic_set(&dp_intf->gro_disallowed, 0);
+	}
+}
+
 /**
  * dp_rx_check_qdisc_for_intf() - Check if any ingress qdisc is configured
  *  for given adapter
@@ -1757,22 +1892,19 @@ dp_rx_check_qdisc_for_intf(struct wlan_dp_intf *dp_intf)
 	status = dp_ops->dp_rx_check_qdisc_configured(dp_intf->dev,
 				 dp_intf->dp_ctx->dp_agg_param.tc_ingress_prio);
 	if (QDF_IS_STATUS_SUCCESS(status)) {
-		if (qdf_likely(qdf_atomic_read(&dp_intf->gro_disallowed)))
-			return;
-
-		dp_debug("ingress qdisc/filter configured disable GRO");
-		qdf_atomic_set(&dp_intf->gro_disallowed, 1);
-
-		return;
+		wlan_dp_rx_aggr_dis_req(dp_intf, CTRL_RX_AGGR_ID_QDISK, true);
 	} else if (status == QDF_STATUS_E_NOSUPPORT) {
-		if (qdf_unlikely(qdf_atomic_read(&dp_intf->gro_disallowed))) {
-			dp_debug("ingress qdisc/filter removed enable GRO");
-			qdf_atomic_set(&dp_intf->gro_disallowed, 0);
-		}
+		wlan_dp_rx_aggr_dis_req(dp_intf, CTRL_RX_AGGR_ID_QDISK, false);
 	}
 }
 #else
-static void
+static inline void
+wlan_dp_dynamic_rx_aggregation_ctrl(struct wlan_dp_intf *dp_intf)
+
+{
+}
+
+static inline void
 dp_rx_check_qdisc_for_intf(struct wlan_dp_intf *dp_intf)
 {
 }
@@ -1879,6 +2011,28 @@ dp_link_monitoring(struct wlan_dp_psoc_context *dp_ctx,
 	qdf_mem_free(peer_stats);
 }
 
+#ifdef WLAN_FEATURE_TSF_UPLINK_DELAY
+static inline void
+dp_dump_periodic_stats(struct wlan_dp_intf *dp_intf,
+		       struct wlan_dp_psoc_context *dp_ctx)
+{
+	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
+	struct wlan_dp_psoc_callbacks *dp_ops = &dp_ctx->dp_ops;
+	hdd_cb_handle ctx = dp_ctx->dp_ops.callback_ctx;
+
+	if (dp_intf->dump_periodic_custom_stats &&
+	    !dp_ops->dp_is_roaming_in_progress(ctx))
+		cdp_dump_custom_stats(soc, dp_intf->def_link->link_id);
+}
+#else
+
+static inline void
+dp_dump_periodic_stats(struct wlan_dp_intf *dp_intf,
+		       struct wlan_dp_psoc_context *dp_ctx)
+{
+}
+#endif
+
 /**
  * __dp_bus_bw_work_handler() - Bus bandwidth work handler
  * @dp_ctx: handle to DP context
@@ -1907,6 +2061,7 @@ static void __dp_bus_bw_work_handler(struct wlan_dp_psoc_context *dp_ctx)
 	uint64_t curr_time_us;
 	uint32_t bw_interval_us;
 	hdd_cb_handle ctx = dp_ctx->dp_ops.callback_ctx;
+	ol_txrx_soc_handle soc = cds_get_context(QDF_MODULE_ID_SOC);
 
 	if (wlan_dp_validate_context(dp_ctx))
 		goto stop_work;
@@ -1919,6 +2074,11 @@ static void __dp_bus_bw_work_handler(struct wlan_dp_psoc_context *dp_ctx)
 	curr_time_us = qdf_get_log_timestamp();
 	diff_us = qdf_log_timestamp_to_usecs(
 			curr_time_us - dp_ctx->bw_vote_time);
+	if (!diff_us) {
+		dp_err_rl("diff_us can't be 0 which will be used as divisor");
+		return;
+	}
+
 	dp_ctx->bw_vote_time = curr_time_us;
 
 	dp_for_each_intf_held_safe(dp_ctx, dp_intf, dp_intf_next) {
@@ -1945,6 +2105,8 @@ static void __dp_bus_bw_work_handler(struct wlan_dp_psoc_context *dp_ctx)
 		if (dp_ctx->dp_agg_param.tc_based_dyn_gro)
 			dp_rx_check_qdisc_for_intf(dp_intf);
 
+		wlan_dp_dynamic_rx_aggregation_ctrl(dp_intf);
+
 		tx_packets += DP_BW_GET_DIFF(
 			qdf_net_stats_get_tx_pkts(&dp_intf->stats),
 			dp_intf->prev_tx_packets);
@@ -1962,6 +2124,9 @@ static void __dp_bus_bw_work_handler(struct wlan_dp_psoc_context *dp_ctx)
 			if (dp_intf->link_monitoring.enabled)
 				dp_link_monitoring(dp_ctx, dp_intf);
 		}
+
+		cdp_process_ul_delay(soc, dp_intf->def_link->link_id);
+		dp_dump_periodic_stats(dp_intf, dp_ctx);
 
 		ret = A_ERROR;
 		fwd_tx_packets = 0;
@@ -2097,6 +2262,7 @@ int dp_bus_bandwidth_init(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_dp_psoc_context *dp_ctx = dp_psoc_get_priv(psoc);
 	hdd_cb_handle ctx = dp_ctx->dp_ops.callback_ctx;
+	struct wlan_tcp_mem_param tcp_mem_param = {0};
 	QDF_STATUS status;
 
 	if (QDF_GLOBAL_FTM_MODE == cds_get_conparam())
@@ -2107,6 +2273,9 @@ int dp_bus_bandwidth_init(struct wlan_objmgr_psoc *psoc)
 	qdf_spinlock_create(&dp_ctx->bus_bw_lock);
 
 	dp_ctx->dp_ops.dp_pm_qos_add_request(ctx);
+
+	tcp_mem_param.enable = true;
+	wlan_dp_update_tcp_mem_params(psoc, dp_ctx, &tcp_mem_param);
 
 	wlan_dp_init_tx_rx_histogram(dp_ctx);
 	status = qdf_periodic_work_create(&dp_ctx->bus_bw_work,
@@ -2121,6 +2290,7 @@ int dp_bus_bandwidth_init(struct wlan_objmgr_psoc *psoc)
 void dp_bus_bandwidth_deinit(struct wlan_objmgr_psoc *psoc)
 {
 	struct wlan_dp_psoc_context *dp_ctx = dp_psoc_get_priv(psoc);
+	struct wlan_tcp_mem_param tcp_mem_param = {0};
 	hdd_cb_handle ctx;
 
 	if (!dp_ctx) {
@@ -2143,6 +2313,8 @@ void dp_bus_bandwidth_deinit(struct wlan_objmgr_psoc *psoc)
 	qdf_periodic_work_destroy(&dp_ctx->bus_bw_work);
 	qdf_spinlock_destroy(&dp_ctx->bus_bw_lock);
 	wlan_dp_deinit_tx_rx_histogram(dp_ctx);
+	tcp_mem_param.enable = false;
+	wlan_dp_update_tcp_mem_params(psoc, dp_ctx, &tcp_mem_param);
 	dp_ctx->dp_ops.dp_pm_qos_remove_request(ctx);
 
 	dp_exit();
@@ -2164,6 +2336,9 @@ static void __dp_bus_bw_compute_timer_start(struct wlan_objmgr_psoc *psoc)
 	}
 
 	if (QDF_GLOBAL_FTM_MODE == cds_get_conparam())
+		return;
+
+	if (QDF_GLOBAL_EPPING_MODE == cds_get_conparam())
 		return;
 
 	qdf_periodic_work_start(&dp_ctx->bus_bw_work,
@@ -2216,6 +2391,9 @@ static void __dp_bus_bw_compute_timer_stop(struct wlan_objmgr_psoc *psoc)
 	bool is_any_adapter_conn;
 
 	if (QDF_GLOBAL_FTM_MODE == cds_get_conparam())
+		return;
+
+	if (QDF_GLOBAL_EPPING_MODE == cds_get_conparam())
 		return;
 
 	if (!dp_ctx || !soc)

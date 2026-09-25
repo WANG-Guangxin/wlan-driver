@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2019-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -59,6 +59,7 @@ struct wlan_6ghz_rnr_global_cache {
  * @bw_above_20_5ghz: BW greater than 20Mhz supported for 5Ghz
  * @bw_above_20_24ghz: BW greater than 20Mhz supported for 2.4Ghz
  * @max_chan_switch_ie: If max channel switch IE is supported
+ * @early_rx: extra sleep time for adaptive early rx
  */
 struct psoc_phy_config {
 	uint8_t vdev_nss_24g;
@@ -72,14 +73,24 @@ struct psoc_phy_config {
 		 bw_above_20_5ghz:1,
 		 bw_above_20_24ghz:1,
 		 max_chan_switch_ie:1;
+	uint8_t early_rx;
 };
+
+/* Maximum number of allowed BSSIDs that is configured through userspace */
+#define WLAN_MAX_NUM_ALLOWED_BSSIDS 8
 
 /**
  * struct psoc_mlo_config - psoc mlo config
  * @reconfig_reassoc_en: If reassoc on ML reconfig AP addition is enabled
+ * @num_links: Number of links
+ * @allowed_bss_link_addr: Allowed BSS link mac addresses
  */
 struct psoc_mlo_config {
 	uint8_t reconfig_reassoc_en;
+#ifdef WLAN_FEATURE_11BE_MLO
+	uint8_t num_links;
+	struct qdf_mac_addr allowed_bss_link_addr[WLAN_MAX_NUM_ALLOWED_BSSIDS];
+#endif
 };
 
 /**
@@ -151,6 +162,7 @@ struct wlan_peer_tbl_trans_entry {
  * @psoc:                  PSoC object
  * @ext_psoc_ptr:          PSoC legacy pointer
  * @psoc_vdev_rt:          PSoC Vdev response timer
+ * @vdev_rsp_timer_mutex:  vdev rsp timer mutex to avoid race condition issue
  * @psoc_mlme_wakelock:    Wakelock to prevent system going to suspend
  * @rnr_6ghz_cache:        Cache of 6Ghz vap in RNR ie format
  * @rnr_6ghz_cache_legacy: Legacy (13TBTT) cache of 6Ghz vap in RNR ie format
@@ -161,6 +173,7 @@ struct psoc_mlme_obj {
 	struct wlan_objmgr_psoc *psoc;
 	mlme_psoc_ext_t *ext_psoc_ptr;
 	struct vdev_response_timer psoc_vdev_rt[WLAN_UMAC_PSOC_MAX_VDEVS];
+	qdf_mutex_t vdev_rsp_timer_mutex;
 #ifdef FEATURE_VDEV_OPS_WAKELOCK
 	struct psoc_mlme_wakelock psoc_mlme_wakelock;
 #endif

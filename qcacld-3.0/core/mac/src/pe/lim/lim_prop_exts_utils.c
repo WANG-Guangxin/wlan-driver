@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2011-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -46,6 +46,7 @@
 #include "lim_session.h"
 #include "wma.h"
 #include "wlan_utility.h"
+#include "wlan_mlo_mgr_sta.h"
 
 #ifdef FEATURE_WLAN_ESE
 /**
@@ -101,12 +102,14 @@ static inline void get_ese_version_ie_probe_response(struct mac_context *mac_ctx
 #endif
 
 #ifdef WLAN_FEATURE_11AX
-static void lim_extract_he_op(struct pe_session *session,
-		tSirProbeRespBeacon *beacon_struct)
+static void lim_extract_he_op(struct mac_context *mac,
+			      struct pe_session *session,
+			      tSirProbeRespBeacon *beacon_struct)
 {
 	uint8_t fw_vht_ch_wd;
 	uint8_t ap_bcon_ch_width;
 	uint8_t center_freq_diff;
+	uint32_t self_cb_mode;
 
 	if (!session->he_capable)
 		return;
@@ -117,6 +120,12 @@ static void lim_extract_he_op(struct pe_session *session,
 			sizeof(session->he_op));
 	if (!session->he_6ghz_band)
 		return;
+
+	self_cb_mode = lim_get_cb_mode_for_freq(mac, session,
+						session->curr_op_freq);
+	if (self_cb_mode == WNI_CFG_CHANNEL_BONDING_MODE_DISABLE)
+		return;
+
 	if (!session->he_op.oper_info_6g_present) {
 		session->ap_defined_power_type_6g = REG_CURRENT_MAX_AP_TYPE;
 		return;
@@ -128,8 +137,7 @@ static void lim_extract_he_op(struct pe_session *session,
 		session->he_op.oper_info_6g.info.center_freq_seg1;
 	session->ap_defined_power_type_6g =
 		session->he_op.oper_info_6g.info.reg_info;
-	if (session->ap_defined_power_type_6g < REG_INDOOR_AP ||
-	    session->ap_defined_power_type_6g > REG_MAX_SUPP_AP_TYPE) {
+	if (lim_is_ap_power_type_6g_invalid(session)) {
 		session->ap_defined_power_type_6g = REG_CURRENT_MAX_AP_TYPE;
 		pe_debug("AP power type invalid, defaulting to MAX_AP_TYPE");
 	}
@@ -182,15 +190,8 @@ static bool lim_validate_he160_mcs_map(struct mac_context *mac_ctx,
 				rx_he_mcs_map_160);
 	tx_he_mcs_map = HE_INTERSECT_MCS(peer_tx, he_mcs_map);
 
-	if (nss == NSS_1x1_MODE) {
-		rx_he_mcs_map |= HE_MCS_INV_MSK_4_NSS(1);
-		tx_he_mcs_map |= HE_MCS_INV_MSK_4_NSS(1);
-	} else if (nss == NSS_2x2_MODE) {
-		rx_he_mcs_map |= (HE_MCS_INV_MSK_4_NSS(1) &
-				HE_MCS_INV_MSK_4_NSS(2));
-		tx_he_mcs_map |= (HE_MCS_INV_MSK_4_NSS(1) &
-				HE_MCS_INV_MSK_4_NSS(2));
-	}
+	rx_he_mcs_map |= HE_DISABLE_MCS_OVER_NSS(nss);
+	tx_he_mcs_map |= HE_DISABLE_MCS_OVER_NSS(nss);
 
 	return ((rx_he_mcs_map != HE_MCS_ALL_DISABLED) &&
 		(tx_he_mcs_map != HE_MCS_ALL_DISABLED));
@@ -215,7 +216,7 @@ static void lim_check_is_he_mcs_valid(struct pe_session *session,
 		session->dot11mode = MLME_DOT11_MODE_11AC;
 	else
 		session->dot11mode = MLME_DOT11_MODE_11N;
-	pe_err("vdev %d: Invalid LT80 MCS map 0x%x with NSS %d, falback to dot11mode %d",
+	pe_err("vdev %d: Invalid LT80 MCS map 0x%x with NSS %d, fallback to dot11mode %d",
 	       session->vdev_id, mcs_map, session->nss, session->dot11mode);
 }
 
@@ -305,6 +306,12 @@ void lim_update_he_bw_cap_mcs(struct pe_session *session,
 		*(uint16_t *)session->he_config.tx_he_mcs_map_80_80 =
 							HE_MCS_ALL_DISABLED;
 	}
+
+	if (beacon)
+		pe_debug("Session width %d, AP: he_cap %d wd_2 %d is_80 %d",
+			 session->ch_width, beacon->he_cap.present,
+			 beacon->he_cap.chan_width_2, is_80mhz);
+	lim_print_he_channel_widths(&session->he_config);
 }
 
 void lim_update_he_mcs_12_13_map(struct wlan_objmgr_psoc *psoc,
@@ -324,8 +331,9 @@ void lim_update_he_mcs_12_13_map(struct wlan_objmgr_psoc *psoc,
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_MAC_ID);
 }
 #else
-static inline void lim_extract_he_op(struct pe_session *session,
-		tSirProbeRespBeacon *beacon_struct)
+static inline void lim_extract_he_op(struct mac_context *mac,
+				     struct pe_session *session,
+				     tSirProbeRespBeacon *beacon_struct)
 {}
 static void lim_check_is_he_mcs_valid(struct pe_session *session,
 				      tSirProbeRespBeacon *beacon_struct)
@@ -339,10 +347,12 @@ void lim_update_he_mcs_12_13_map(struct wlan_objmgr_psoc *psoc,
 #endif
 
 #ifdef WLAN_FEATURE_11BE
-void lim_extract_eht_op(struct pe_session *session,
+void lim_extract_eht_op(struct mac_context *mac,
+			struct pe_session *session,
 			tSirProbeRespBeacon *beacon_struct)
 {
 	uint32_t max_eht_bw;
+	uint32_t self_cb_mode;
 
 	if (!session->eht_capable)
 		return;
@@ -355,6 +365,11 @@ void lim_extract_eht_op(struct pe_session *session,
 
 	qdf_mem_copy(&session->eht_op, &beacon_struct->eht_op,
 		     sizeof(session->eht_op));
+
+	self_cb_mode = lim_get_cb_mode_for_freq(mac, session,
+						session->curr_op_freq);
+	if (self_cb_mode == WNI_CFG_CHANNEL_BONDING_MODE_DISABLE)
+		return;
 
 	max_eht_bw = wma_get_eht_ch_width();
 
@@ -413,6 +428,7 @@ void lim_objmgr_update_emlsr_caps(struct wlan_objmgr_psoc *psoc,
 {
 	struct wlan_objmgr_vdev *vdev;
 	bool ap_emlsr_cap = false;
+	struct wlan_objmgr_vdev *assoc_vdev;
 
 	vdev = wlan_objmgr_get_vdev_by_id_from_psoc(psoc, vdev_id,
 						    WLAN_LEGACY_MAC_ID);
@@ -440,9 +456,28 @@ void lim_objmgr_update_emlsr_caps(struct wlan_objmgr_psoc *psoc,
 			pe_debug("EML caps present in assoc rsp");
 		}
 	} else {
-		pe_debug("no change required for link vdev");
+		if (wlan_cm_is_vdev_active(vdev) ||
+		    wlan_vdev_mlme_is_mlo_link_switch_in_progress(vdev)) {
+			pe_debug("no change required for link vdev");
+			goto rel_ref;
+		}
+
+		assoc_vdev = wlan_mlo_get_assoc_link_vdev(vdev);
+		if (assoc_vdev) {
+			if (!wlan_vdev_mlme_cap_get(
+					assoc_vdev, WLAN_VDEV_C_EMLSR_CAP)) {
+				wlan_vdev_obj_lock(vdev);
+				wlan_vdev_mlme_cap_clear(
+						vdev, WLAN_VDEV_C_EMLSR_CAP);
+				wlan_vdev_obj_unlock(vdev);
+				pe_debug("Cleared link vdev EML caps.");
+			} else {
+				pe_debug("no change required for link vdev");
+			}
+		}
 	}
 
+rel_ref:
 	wlan_objmgr_vdev_release_ref(vdev, WLAN_LEGACY_MAC_ID);
 }
 #endif
@@ -574,11 +609,12 @@ void lim_update_ch_width_for_p2p_client(struct mac_context *mac,
 		 session->ch_center_freq_seg0, session->ch_center_freq_seg1);
 }
 
-void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
-			       uint16_t ie_len, uint8_t *qos_cap,
-			       uint8_t *uapsd, int8_t *local_constraint,
-			       struct pe_session *session,
-			       bool *is_pwr_constraint)
+QDF_STATUS
+lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
+			  uint16_t ie_len, uint8_t *qos_cap,
+			  uint8_t *uapsd, int8_t *local_constraint,
+			  struct pe_session *session,
+			  bool *is_pwr_constraint)
 {
 	tSirProbeRespBeacon *beacon_struct;
 	uint8_t ap_bcon_ch_width;
@@ -597,7 +633,7 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 
 	beacon_struct = qdf_mem_malloc(sizeof(tSirProbeRespBeacon));
 	if (!beacon_struct)
-		return;
+		return QDF_STATUS_E_NOMEM;
 
 	*qos_cap = 0;
 	*uapsd = 0;
@@ -609,7 +645,7 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 	if (QDF_IS_STATUS_ERROR(status)) {
 		pe_err("sir_parse_beacon_ie failed to parse beacon");
 		qdf_mem_free(beacon_struct);
-		return;
+		return status;
 	}
 
 	mlme_vht_cap = &mac_ctx->mlme_cfg->vht_caps.vht_cap_info;
@@ -643,6 +679,9 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 	} else {
 		session->vhtCapabilityPresentInBeacon = 0;
 	}
+
+	if (beacon_struct->qcn_ie.present)
+		session->qcn_ie_present_in_beacon = true;
 
 	if (session->vhtCapabilityPresentInBeacon == 1 &&
 	    !session->htSupportedChannelWidthSet) {
@@ -810,8 +849,8 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 
 	lim_check_is_he_mcs_valid(session, beacon_struct);
 	lim_check_peer_ldpc_and_update(session, beacon_struct);
-	lim_extract_he_op(session, beacon_struct);
-	lim_extract_eht_op(session, beacon_struct);
+	lim_extract_he_op(mac_ctx, session, beacon_struct);
+	lim_extract_eht_op(mac_ctx, session, beacon_struct);
 	if (!mac_ctx->usr_eht_testbed_cfg)
 		lim_update_he_bw_cap_mcs(session, beacon_struct);
 	lim_update_eht_bw_cap_mcs(session, beacon_struct);
@@ -862,7 +901,8 @@ void lim_extract_ap_capability(struct mac_context *mac_ctx, uint8_t *p_ie,
 	session->is_adaptive_11r_connection =
 			lim_extract_adaptive_11r_cap(p_ie, ie_len);
 	qdf_mem_free(beacon_struct);
-	return;
+
+	return QDF_STATUS_SUCCESS;
 } /****** end lim_extract_ap_capability() ******/
 
 /**

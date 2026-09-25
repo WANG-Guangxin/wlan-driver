@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -91,7 +91,7 @@ struct driver_version {
  * @driver_version: Host software version
  * @allowed_dwell_time_min: Channel dwell time - allowed minimum
  * @allowed_dwell_time_max: Channel dwell time - allowed maximum
- * @curr_dwell_time_min: Channel dwell time - current minimim
+ * @curr_dwell_time_min: Channel dwell time - current minimum
  * @curr_dwell_time_max: Channel dwell time - current maximum
  * @supported_bands: Supported bands, 2.4G or 5G Hz
  * @num_channels: Num of channels IDs to follow
@@ -292,6 +292,7 @@ void hdd_oem_event_async_cb(const struct oem_data *oem_event_data);
  */
 void hdd_oem_event_handler_cb(const struct oem_data *oem_event_data,
 			      uint8_t vdev_id);
+
 #else
 static inline void hdd_oem_event_handler_cb(void *oem_event_data,
 					    uint8_t vdev_id)
@@ -301,5 +302,24 @@ static inline void hdd_oem_event_handler_cb(void *oem_event_data,
 static inline void hdd_oem_event_async_cb(void *oem_event_data)
 {
 }
+
 #endif
+
+#ifdef FEATURE_SMEM_MAILBOX
+/**
+ * hdd_oem_event_smem_cb() - callback for oem data smem event
+ * @oem_event_data: oem data received in the event from the FW
+ *
+ * Return: None
+ */
+void hdd_oem_event_smem_cb(const struct oem_data *oem_event_data);
+
+#else
+
+static inline void hdd_oem_event_smem_cb(void *oem_event_data)
+{
+}
+
+#endif
+
 #endif /* __WLAN_HDD_OEM_DATA_H__ */

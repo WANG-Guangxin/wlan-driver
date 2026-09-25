@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2015,2020-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -32,7 +32,6 @@
 #endif
 
 #define CM_ID_INVALID 0xFFFFFFFF
-#define CM_ID_LSWITCH_BIT 0x10000000
 
 typedef uint32_t wlan_cm_id;
 
@@ -169,10 +168,12 @@ struct wlan_fils_con_info {
  * @CM_OSIF_CFG_DISCONNECT: Disconnect request initiated due to config change
  * @CM_MLO_LINK_VDEV_DISCONNECT: Disconnect req for ML link
  * @CM_MLO_LINK_VDEV_CONNECT: Connect req for ML link
+ * @CM_MLO_LINK_ADD_CONNECT: Connect req for ML link Add
  * @CM_MLO_ROAM_INTERNAL_DISCONNECT: Disconnect req triggered for mlo roaming
  * @CM_MLO_LINK_SWITCH_CONNECT: Connect req triggered for mlo link switch
  * @CM_MLO_LINK_SWITCH_DISCONNECT: Disconnect req triggered for mlo link switch
  * @CM_ROAMING_USER: Roaming request initiated by user
+ * @CM_ROAMING_STA_SAP_MCC: Roaming request initiated by STA+SAP MCC
  * @CM_SOURCE_MAX: max value of connection manager source
  * @CM_SOURCE_INVALID: Invalid connection manager req source
  */
@@ -192,10 +193,12 @@ enum wlan_cm_source {
 	CM_OSIF_CFG_DISCONNECT,
 	CM_MLO_LINK_VDEV_DISCONNECT,
 	CM_MLO_LINK_VDEV_CONNECT,
+	CM_MLO_LINK_ADD_CONNECT,
 	CM_MLO_ROAM_INTERNAL_DISCONNECT,
 	CM_MLO_LINK_SWITCH_CONNECT,
 	CM_MLO_LINK_SWITCH_DISCONNECT,
 	CM_ROAMING_USER,
+	CM_ROAMING_STA_SAP_MCC,
 	CM_SOURCE_MAX,
 	CM_SOURCE_INVALID = CM_SOURCE_MAX,
 };
@@ -220,7 +223,7 @@ enum wlan_cm_source {
  * for production.
  * @is_wps_connection: if its wps connection
  * @is_osen_connection: if its osen connection
- * @reassoc_in_non_init: if reassoc received in non init state
+ * @is_reassoc_connect: if reassoc received
  * @dot11mode_filter: dot11mode filter used to restrict connection to
  * 11n/11ac/11ax.
  * @sae_pwe: SAE mechanism for PWE derivation
@@ -254,7 +257,7 @@ struct wlan_cm_connect_req {
 	uint8_t force_rsne_override:1,
 		is_wps_connection:1,
 		is_osen_connection:1,
-		reassoc_in_non_init:1;
+		is_reassoc_connect:1;
 	enum dot11_mode_filter dot11mode_filter;
 	uint8_t sae_pwe;
 	uint16_t ht_caps;
@@ -294,6 +297,7 @@ struct wlan_cm_connect_req {
  * @is_non_assoc_link: non assoc link
  * @ml_parnter_info: ml partner link info
  * @owe_trans_ssid: owe trans ssid to be used when scan entry ssid is wildcard
+ * @rsno_gen_used: RSN generation of the candidate
  */
 struct wlan_cm_vdev_connect_req {
 	uint8_t vdev_id;
@@ -316,6 +320,7 @@ struct wlan_cm_vdev_connect_req {
 	struct mlo_partner_info ml_parnter_info;
 #endif
 	struct wlan_ssid owe_trans_ssid;
+	uint8_t rsno_gen_used;
 };
 
 /**
@@ -326,6 +331,7 @@ struct wlan_cm_vdev_connect_req {
  * @bssid: bssid given
  * @prev_bssid: prev AP bssid, given in case supplican want to roam to new BSSID
  * @chan_freq: channel of the AP
+ * @crypto: crypto related info
  */
 struct wlan_cm_roam_req {
 	uint8_t forced_roaming:1;
@@ -334,6 +340,7 @@ struct wlan_cm_roam_req {
 	struct qdf_mac_addr bssid;
 	struct qdf_mac_addr prev_bssid;
 	uint32_t chan_freq;
+	struct wlan_cm_connect_crypto_info crypto;
 };
 
 /**
@@ -710,12 +717,14 @@ enum wlan_cm_active_request_type {
  * @SLO: Non-ML or Single link ML
  * @MLSR: Multi link Single Radio, indicates that both links
  *        have to be on one mac
+ * @EMLSR: Enhanced multi link single radio
  * @MLMR: Multi link Multi Radio, indicates that both links
  *        can be on different macs
  */
 enum MLO_TYPE {
 	SLO,
 	MLSR,
+	EMLSR,
 	MLMR,
 	MLO_TYPE_MAX
 };

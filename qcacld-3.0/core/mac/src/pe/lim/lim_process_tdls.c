@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2012-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  *
  * Permission to use, copy, modify, and/or distribute this software for
  * any purpose with or without fee is hereby granted, provided that the
@@ -66,6 +66,7 @@
 #include "lim_prop_exts_utils.h"
 #include "dph_hash_table.h"
 #include "wma_types.h"
+#include "wma.h"
 #include "cds_regdomain.h"
 #include "cds_utils.h"
 #include "wlan_mlo_mgr_sta.h"
@@ -497,7 +498,7 @@ static uint32_t lim_prepare_tdls_frame_header(struct mac_context *mac, uint8_t *
 	 * prepare 802.11 header
 	 */
 	pMacHdr->fc.protVer = SIR_MAC_PROTOCOL_VERSION;
-	pMacHdr->fc.type = SIR_MAC_DATA_FRAME;
+	pMacHdr->fc.type = WLAN_FC0_TYPE_DATA;
 
 	sta_ds = dph_lookup_hash_entry(mac, peerMac, &aid,
 					&pe_session->dph.dphHashTable);
@@ -508,7 +509,7 @@ static uint32_t lim_prepare_tdls_frame_header(struct mac_context *mac, uint8_t *
 		((IS_QOS_ENABLED(pe_session) &&
 		(tdlsLinkType == TDLS_LINK_AP)) ||
 		((tdlsLinkType == TDLS_LINK_DIRECT) && qos_mode))
-		? SIR_MAC_DATA_QOS_DATA : SIR_MAC_DATA_DATA;
+		? WLAN_FC0_STYPE_DATA : WLAN_FC0_STYPE_QOS_DATA;
 
 	/*
 	 * TL is not setting up below fields, so we are doing it here
@@ -533,7 +534,7 @@ static uint32_t lim_prepare_tdls_frame_header(struct mac_context *mac, uint8_t *
 		QDF_MAC_ADDR_REF(pMacHdr->addr2),
 		QDF_MAC_ADDR_REF(pMacHdr->addr3));
 
-	if (pMacHdr->fc.subType == SIR_MAC_DATA_QOS_DATA) {
+	if (pMacHdr->fc.subType == WLAN_FC0_STYPE_QOS_DATA) {
 		pMacHdr->qosControl.tid = tid;
 		header_offset += sizeof(tSirMacDataHdr3a);
 	} else
@@ -961,14 +962,12 @@ static void populate_dot11f_tdls_ht_vht_cap(struct mac_context *mac,
 				vht_cap_info->rx_supp_data_rate;
 			vhtCap->txMCSMap = vht_cap_info->tx_mcs_map;
 			vhtCap->txSupDataRate = vht_cap_info->tx_supp_data_rate;
-			if (nss == NSS_1x1_MODE) {
-				vhtCap->txMCSMap |= DISABLE_NSS2_MCS;
-				vhtCap->rxMCSMap |= DISABLE_NSS2_MCS;
-				vhtCap->txSupDataRate =
-					VHT_TX_HIGHEST_SUPPORTED_DATA_RATE_1_1;
-				vhtCap->rxHighSupDataRate =
-					VHT_RX_HIGHEST_SUPPORTED_DATA_RATE_1_1;
-			}
+			vhtCap->txMCSMap |= VHT_DISABLE_MCS_OVER_NSS(nss);
+			vhtCap->rxMCSMap |= VHT_DISABLE_MCS_OVER_NSS(nss);
+			vhtCap->txSupDataRate =
+				VHT_GET_DATARATE_FOR_NSS_AND_GI(nss, true);
+			vhtCap->rxHighSupDataRate =
+				VHT_GET_DATARATE_FOR_NSS_AND_GI(nss, true);
 		} else {
 			vhtCap->present = 0;
 		}
@@ -1101,6 +1100,26 @@ static void lim_tdls_set_he_chan_width(struct mac_context *mac,
 		heCap->chan_width_4 = 0;
 		heCap->chan_width_5 = 0;
 		heCap->chan_width_6 = 0;
+	} else if (wlan_reg_is_6ghz_chan_freq(session->curr_op_freq)) {
+		uint32_t fw_vht_ch_wd = wma_get_vht_ch_width();
+
+		/*
+		 * In 6 GHz, check if FW supports 160 MHz. If FW doesn't
+		 * advertise 160 MHz support, cap the TDLS peer HE caps
+		 * bandwidth to 80 MHz to avoid FW downgrading to 20 MHz.
+		 */
+		if (fw_vht_ch_wd < WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ) {
+			pe_debug("FW max BW %d, capping TDLS HE caps to 80 MHz in 6 GHz",
+				 fw_vht_ch_wd);
+			heCap->chan_width_2 = 0;
+			heCap->chan_width_3 = 0;
+		}
+		/*
+		 * chan_width_4 (26-tone RU in 2.4 GHz) and chan_width_5
+		 * (26-tone RU in 5 GHz) are not applicable in 6 GHz band.
+		 */
+		heCap->chan_width_4 = 0;
+		heCap->chan_width_5 = 0;
 	}
 }
 
@@ -1143,7 +1162,8 @@ static void populate_dot11f_set_tdls_he_cap(struct mac_context *mac,
 					    struct pe_session *session)
 {
 	if (IS_DOT11_MODE_HE(selfDot11Mode)) {
-		populate_dot11f_he_caps(mac, NULL, heCap);
+		populate_dot11f_he_caps(mac, NULL, session->opmode,
+					0, CH_WIDTH_20MHZ, heCap);
 		lim_tdls_set_he_chan_width(mac, heCap, session,
 		      wlan_cfg80211_tdls_is_fw_wideband_capable(session->vdev));
 		lim_tdls_populate_ppe_caps(mac, session, heCap);
@@ -1598,7 +1618,7 @@ lim_ieee80211_pack_ehtcap_tdls(struct mac_context *mac,
 					NULL, pe_session);
 
 	lim_ieee80211_pack_ehtcap(eht_cap_ie, pe_session->eht_config,
-				  he_cap, is_band_2g);
+				  he_cap, is_band_2g, true);
 
 	*len = eht_cap_ie[1] + 2;
 	return eht_cap_ie;
@@ -1786,7 +1806,7 @@ static QDF_STATUS lim_send_tdls_dis_rsp_frame(struct mac_context *mac,
 
 	/* Make public Action Frame */
 	lim_tdls_copy_self_mac(pe_session, selfaddr);
-	lim_populate_mac_header(mac, pFrame, SIR_MAC_MGMT_FRAME,
+	lim_populate_mac_header(mac, pFrame, WLAN_FC0_TYPE_MGMT,
 				SIR_MAC_MGMT_ACTION, peer_mac.bytes,
 				selfaddr);
 
@@ -3331,7 +3351,8 @@ lim_tdls_populate_eht_mcs(struct mac_context *mac_ctx, tpDphHashNode stads,
 {
 	lim_populate_eht_mcs_set(mac_ctx, &stads->supportedRates,
 				 &stads->eht_config, session_entry,
-				 session_entry->ch_width);
+				 session_entry->ch_width,
+				 wlan_reg_is_24ghz_ch_freq(session_entry->curr_op_freq));
 }
 #else
 static void
@@ -3622,18 +3643,35 @@ static void lim_tdls_update_hash_node_info(struct mac_context *mac,
 		 * not wide band supported
 		 */
 		if (!wide_band_peer ||
-		    wlan_reg_is_24ghz_ch_freq(pe_session->curr_op_freq)) {
+		    wlan_reg_is_24ghz_ch_freq(pe_session->curr_op_freq) ||
+		    wlan_reg_is_dfs_for_freq(mac->pdev,
+					     pe_session->curr_op_freq)) {
 			lim_tdls_fill_session_vht_width(pe_session, sta);
 		} else {
-			if (pVhtCaps->supportedChannelWidthSet >=
-			    VHT_CAP_NO_160M_SUPP)
-				sta->vhtSupportedChannelWidthSet =
-						WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
+			uint8_t peer_vht_width;
 
-			if (wlan_reg_is_dfs_for_freq(mac->pdev,
-						    pe_session->curr_op_freq)) {
-				lim_tdls_fill_session_vht_width(pe_session,
-								sta);
+			peer_vht_width = pVhtCaps->supportedChannelWidthSet;
+			if (peer_vht_width > VHT_CAP_160_AND_80P80_SUPP) {
+				pe_debug("Invalid peer VHT width: %d, treating as 80MHz",
+					 peer_vht_width);
+				peer_vht_width = VHT_CAP_NO_160M_SUPP;
+			}
+
+			switch (pe_session->ch_width) {
+			case CH_WIDTH_80MHZ:
+			case CH_WIDTH_80P80MHZ:
+				sta->vhtSupportedChannelWidthSet =
+					WNI_CFG_VHT_CHANNEL_WIDTH_80MHZ;
+				break;
+			case CH_WIDTH_160MHZ:
+				if (peer_vht_width >= VHT_CAP_160_SUPP)
+					sta->vhtSupportedChannelWidthSet =
+					WNI_CFG_VHT_CHANNEL_WIDTH_160MHZ;
+				break;
+			default:
+				sta->vhtSupportedChannelWidthSet =
+					WNI_CFG_VHT_CHANNEL_WIDTH_20_40MHZ;
+				break;
 			}
 		}
 
@@ -3726,6 +3764,7 @@ static QDF_STATUS lim_tdls_setup_add_sta(struct mac_context *mac,
 {
 	tpDphHashNode sta = NULL;
 	struct wlan_objmgr_peer *peer;
+	enum wlan_peer_type peer_type;
 	QDF_STATUS status = QDF_STATUS_SUCCESS;
 	uint16_t aid = 0;
 	uint8_t peer_vdev_id;
@@ -3749,13 +3788,14 @@ static QDF_STATUS lim_tdls_setup_add_sta(struct mac_context *mac,
 					   WLAN_TDLS_NB_ID);
 	if (peer) {
 		peer_vdev_id = wlan_vdev_get_id(wlan_peer_get_vdev(peer));
+		peer_type = wlan_peer_get_peer_type(peer);
 		wlan_objmgr_peer_release_ref(peer, WLAN_TDLS_NB_ID);
 
 		if (pAddStaReq->tdls_oper == TDLS_OPER_ADD) {
-			pe_err("vdev:%d peer: " QDF_MAC_ADDR_FMT " already exist on vdev:%d, cannot add new entry",
+			pe_err("vdev:%d peer: " QDF_MAC_ADDR_FMT " peer_type:%d already exist on vdev:%d, cannot add new entry",
 			       pe_session->vdev_id,
 			       QDF_MAC_ADDR_REF(pAddStaReq->peermac.bytes),
-			       peer_vdev_id);
+			       peer_type, peer_vdev_id);
 			return QDF_STATUS_E_EXISTS;
 		}
 	}
@@ -3838,33 +3878,27 @@ static QDF_STATUS lim_tdls_del_sta(struct mac_context *mac,
 	return status;
 }
 
-/*
- * Once Link is setup with PEER, send Add STA ind to SME
- */
-static QDF_STATUS lim_send_sme_tdls_add_sta_rsp(struct mac_context *mac,
-						uint8_t sessionId,
-						tSirMacAddr peerMac,
-						uint8_t updateSta,
-						tDphHashNode *sta, uint8_t status)
+QDF_STATUS lim_send_sme_tdls_add_sta_rsp(struct mac_context *mac,
+					 uint8_t vdev_id, tSirMacAddr peer_mac,
+					 uint8_t update, tDphHashNode *sta,
+					 uint8_t status)
 {
 	struct scheduler_msg msg = { 0 };
 	struct tdls_add_sta_rsp *add_sta_rsp;
 	QDF_STATUS ret;
 
-	msg.type = eWNI_SME_TDLS_ADD_STA_RSP;
-
 	add_sta_rsp = qdf_mem_malloc(sizeof(*add_sta_rsp));
 	if (!add_sta_rsp)
 		return QDF_STATUS_E_NOMEM;
 
-	add_sta_rsp->session_id = sessionId;
+	add_sta_rsp->session_id = vdev_id;
 	add_sta_rsp->status_code = status;
 
-	if (peerMac)
+	if (peer_mac)
 		qdf_mem_copy(add_sta_rsp->peermac.bytes,
-			     (uint8_t *) peerMac, QDF_MAC_ADDR_SIZE);
+			     (uint8_t *)peer_mac, QDF_MAC_ADDR_SIZE);
 
-	if (updateSta)
+	if (update)
 		add_sta_rsp->tdls_oper = TDLS_OPER_UPDATE;
 	else
 		add_sta_rsp->tdls_oper = TDLS_OPER_ADD;
@@ -3921,7 +3955,6 @@ QDF_STATUS lim_process_tdls_add_sta_rsp(struct mac_context *mac, void *msg,
 			pe_err("Unable to delete Hash entry");
 
 		status = QDF_STATUS_E_FAILURE;
-		QDF_ASSERT(0);
 		goto add_sta_error;
 	}
 
@@ -3943,7 +3976,6 @@ add_sta_error:
 /**
  * lim_send_tdls_comp_mgmt_rsp() - Send Response to upper layers
  * @mac_ctx:          Pointer to Global MAC structure
- * @msg_type:         Indicates message type
  * @result_code:       Indicates the result of previously issued
  *                    eWNI_SME_msg_type_REQ message
  * @vdev_id: vdev id
@@ -3957,15 +3989,15 @@ add_sta_error:
  */
 
 static void
-lim_send_tdls_comp_mgmt_rsp(struct mac_context *mac_ctx, uint16_t msg_type,
-	 tSirResultCodes result_code, uint8_t vdev_id)
+lim_send_tdls_comp_mgmt_rsp(struct mac_context *mac_ctx,
+			    tSirResultCodes result_code, uint8_t vdev_id)
 {
 	struct scheduler_msg msg = {0};
 	struct tdls_send_mgmt_rsp *sme_rsp;
 	QDF_STATUS status;
 
-	pe_debug("vdev:%d Sending message %s with reasonCode %s", vdev_id,
-		 lim_msg_str(msg_type), lim_result_code_str(result_code));
+	pe_debug("vdev:%d TDLS_SEND_MGMT_RSP reasonCode %s", vdev_id,
+		 lim_result_code_str(result_code));
 
 	sme_rsp = qdf_mem_malloc(sizeof(*sme_rsp));
 	if (!sme_rsp)
@@ -3975,14 +4007,13 @@ lim_send_tdls_comp_mgmt_rsp(struct mac_context *mac_ctx, uint16_t msg_type,
 	sme_rsp->vdev_id = vdev_id;
 	sme_rsp->psoc = mac_ctx->psoc;
 
-	msg.type = msg_type;
 	msg.bodyptr = sme_rsp;
 	msg.callback = tgt_tdls_send_mgmt_rsp;
 	status = scheduler_post_message(QDF_MODULE_ID_PE,
 					QDF_MODULE_ID_TDLS,
 					QDF_MODULE_ID_TARGET_IF, &msg);
 	if (QDF_IS_STATUS_ERROR(status)) {
-		pe_err("post msg fail, %d", status);
+		pe_err("vdev_id %d post msg fail, %d", vdev_id, status);
 		qdf_mem_free(sme_rsp);
 	}
 }
@@ -3996,7 +4027,6 @@ QDF_STATUS lim_process_sme_tdls_mgmt_send_req(struct mac_context *mac_ctx,
 	uint16_t ie_len;
 	tSirResultCodes result_code = eSIR_SME_INVALID_PARAMETERS;
 
-	pe_debug("Send Mgmt Received");
 	session_entry = pe_find_session_by_bssid(mac_ctx,
 						 send_req->bssid.bytes,
 						 &session_id);
@@ -4109,8 +4139,7 @@ QDF_STATUS lim_process_sme_tdls_mgmt_send_req(struct mac_context *mac_ctx,
 	}
 
 lim_tdls_send_mgmt_error:
-	lim_send_tdls_comp_mgmt_rsp(mac_ctx, eWNI_SME_TDLS_SEND_MGMT_RSP,
-				    result_code, send_req->session_id);
+	lim_send_tdls_comp_mgmt_rsp(mac_ctx, result_code, send_req->session_id);
 
 	return QDF_STATUS_SUCCESS;
 }
@@ -4126,8 +4155,6 @@ static QDF_STATUS lim_send_sme_tdls_del_sta_rsp(struct mac_context *mac,
 	struct scheduler_msg msg = { 0 };
 	struct tdls_del_sta_rsp *del_sta_rsp;
 	QDF_STATUS ret;
-
-	msg.type = eWNI_SME_TDLS_DEL_STA_RSP;
 
 	del_sta_rsp = qdf_mem_malloc(sizeof(*del_sta_rsp));
 	if (!del_sta_rsp)
@@ -4158,6 +4185,7 @@ QDF_STATUS lim_process_sme_tdls_add_sta_req(struct mac_context *mac,
 	struct tdls_add_sta_req *add_sta_req = msg;
 	struct pe_session *pe_session;
 	uint8_t session_id;
+	QDF_STATUS status;
 
 	pe_debug("vdev:%d TDLS Add STA Request Received",
 		 add_sta_req->session_id);
@@ -4196,11 +4224,15 @@ QDF_STATUS lim_process_sme_tdls_add_sta_req(struct mac_context *mac,
 
 
 	/* To start with, send add STA request to HAL */
-	if (QDF_STATUS_E_FAILURE == lim_tdls_setup_add_sta(mac, add_sta_req, pe_session)) {
-		pe_err("Add TDLS Station request failed");
+	status = lim_tdls_setup_add_sta(mac, add_sta_req, pe_session);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		pe_err("vdev:%d Add TDLS Station request failed",
+		       pe_session->vdev_id);
 		goto lim_tdls_add_sta_error;
 	}
+
 	return QDF_STATUS_SUCCESS;
+
 lim_tdls_add_sta_error:
 	lim_send_sme_tdls_add_sta_rsp(mac,
 				      add_sta_req->session_id,
@@ -4218,7 +4250,7 @@ QDF_STATUS lim_process_sme_tdls_del_sta_req(struct mac_context *mac,
 	struct pe_session *pe_session;
 	uint8_t session_id;
 	QDF_STATUS status = QDF_STATUS_E_FAILURE;
-	tSirMacAddr peer;
+	struct tdls_vdev_priv_obj *vdev_obj;
 
 	pe_debug("TDLS Delete STA Request Received");
 	pe_session =
@@ -4230,6 +4262,12 @@ QDF_STATUS lim_process_sme_tdls_del_sta_req(struct mac_context *mac,
 		lim_send_sme_tdls_del_sta_rsp(mac, del_sta_req->session_id,
 					      del_sta_req->peermac, NULL,
 					      QDF_STATUS_E_FAILURE);
+		return QDF_STATUS_E_FAILURE;
+	}
+
+	vdev_obj = wlan_vdev_get_tdls_vdev_obj(pe_session->vdev);
+	if (!vdev_obj) {
+		pe_err("vdev_obj: %pK is null", vdev_obj);
 		return QDF_STATUS_E_FAILURE;
 	}
 
@@ -4261,9 +4299,6 @@ QDF_STATUS lim_process_sme_tdls_del_sta_req(struct mac_context *mac,
 		goto lim_tdls_del_sta_error;
 	}
 
-	qdf_mem_copy(peer, del_sta_req->peermac.bytes, sizeof(tSirMacAddr));
-	lim_send_deauth_mgmt_frame(mac, REASON_DEAUTH_NETWORK_LEAVING,
-				   peer, pe_session, false);
 	status = lim_tdls_del_sta(mac, del_sta_req->peermac,
 				  pe_session, true);
 	if (status == QDF_STATUS_SUCCESS)
@@ -4378,7 +4413,8 @@ void lim_update_tdls_2g_bw(struct pe_session *session)
  * Return: QDF_STATUS_SUCCESS on success, error code otherwise
  */
 QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
-				 struct pe_session *session_entry)
+				 struct pe_session *session_entry,
+				 enum wlan_tdls_peer_delete_reason reason)
 {
 
 	if (!session_entry) {
@@ -4403,6 +4439,13 @@ QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
 		return QDF_STATUS_SUCCESS;
 
 	/*
+	 * For link switch on non-dbs target avoid sending TDLS disable to
+	 * firmware
+	 */
+	if (reason == TDLS_PEER_DEL_REASON_LINK_STATE_SWITCH)
+		return QDF_STATUS_SUCCESS;
+
+	/*
 	 * In case of CSA, Only peers in lim and TDLS component
 	 * needs to be removed and set state disable command
 	 * should not be sent to fw as there is no way to enable
@@ -4418,7 +4461,8 @@ QDF_STATUS lim_delete_tdls_peers(struct mac_context *mac_ctx,
 	return QDF_STATUS_SUCCESS;
 }
 
-QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev)
+QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev,
+				     enum wlan_tdls_peer_delete_reason reason)
 {
 	struct mac_context *mac = cds_get_context(QDF_MODULE_ID_PE);
 	struct pe_session *session;
@@ -4433,7 +4477,7 @@ QDF_STATUS lim_delete_all_tdls_peers(struct wlan_objmgr_vdev *vdev)
 		return QDF_STATUS_E_FAILURE;
 	}
 
-	return lim_delete_tdls_peers(mac, session);
+	return lim_delete_tdls_peers(mac, session, reason);
 }
 
 QDF_STATUS
